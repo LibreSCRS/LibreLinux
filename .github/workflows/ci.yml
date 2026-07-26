@@ -1,0 +1,174 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
+name: CI
+
+# LibreLinux is currently unpublished — this workflow activates on the first
+# push to GitHub (the agent/prompter repos have no remote yet). The job that
+# builds LibreLinux first acquires LibreMiddleware exactly as LibreCelik's CI
+# expects it: built from source against the public org repo and installed to a
+# prefix, because LibreLinux consumes it via
+# `find_package(LibreMiddleware 4.2 REQUIRED CONFIG)` (CMakeLists.txt) — there
+# is no FetchContent fallback here, so the package must exist on disk first.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  format-check:
+    # Self-contained: the format gate needs neither LibreMiddleware nor the
+    # KF6/sdbus-c++ runtime deps, so it runs on ubuntu-latest with the exact
+    # clang-format-21 the rest of the org pins (apt.llvm.org). The build/test
+    # job below runs in an Arch container instead, because Arch's rolling
+    # `clang` package is ahead of 21 and would reformat against a different
+    # major — the project standard is clang-format 21, not the distro default.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install clang-format-21
+        run: |
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo gpg --dearmor -o /usr/share/keyrings/llvm.gpg
+          echo "deb [signed-by=/usr/share/keyrings/llvm.gpg] http://apt.llvm.org/noble/ llvm-toolchain-noble-21 main" | sudo tee /etc/apt/sources.list.d/llvm-21.list
+          sudo apt-get update
+          sudo apt-get install -y clang-format-21
+
+      - name: Check clang-format
+        run: |
+          find agent prompter common pkcs11-module -name "*.cpp" -o -name "*.h" \
+            | xargs clang-format-21 --dry-run --Werror
+
+  build-linux:
+    # Arch container: LibreLinux's runtime deps (sdbus-c++ >= 2.0, libsystemd)
+    # are not reliably packaged on ubuntu apt, and the owner's dev/target env
+    # is Arch/Manjaro. pacman provides sdbus-cpp 2.x, libsystemd, pcsclite,
+    # OpenSC (for LibreMiddleware), gtest, qt6/kf6 (for the prompter), and
+    # dbus-run-session for the agent/prompter integration tests.
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    env:
+      # Where LibreMiddleware is installed and where LibreLinux finds it.
+      LM_PREFIX: /opt/libremiddleware
+      # Git ref of LibreMiddleware to build against. Track its trunk during the
+      # development cycle (LibreCelik does the same); pin to a release tag once
+      # LibreMiddleware tags releases. find_package(LibreMiddleware 4.2) in
+      # CMakeLists.txt enforces the required version independently of this ref.
+      MIDDLEWARE_REF: main
+    steps:
+      - name: Install system dependencies
+        run: |
+          pacman -Syu --noconfirm
+          pacman -S --noconfirm --needed \
+            base-devel cmake ninja git pkgconf \
+            sdbus-cpp systemd-libs \
+            openssl pcsclite opensc \
+            gtest dbus \
+            python-jsonschema \
+            qt6-base kcoreaddons ki18n
+
+      - name: Generate a UTF-8 locale
+        # The bare Arch container ships only the C / C.UTF-8 locales, under which
+        # the C library's gettext (which ki18n uses to read .mo catalogs)
+        # suppresses translation entirely. PromptCatalogResolutionTest proves the
+        # sr Cyrillic-primary prompter catalog resolves end-to-end and therefore
+        # needs a real UTF-8 locale present; generate en_US.UTF-8 (the test's own
+        # CTest properties set LANG=en_US.UTF-8 + LANGUAGE=sr). Without this a
+        # broken/empty sr msgstr would ship green (the documented ki18n/gettext
+        # C-locale pitfall).
+        run: |
+          echo 'en_US.UTF-8 UTF-8' >> /etc/locale.gen
+          locale-gen
+
+      - uses: actions/checkout@v4
+        with:
+          path: LibreLinux
+
+      # --- LibreMiddleware: build from source + install to a prefix ---------
+      # Mirrors LibreCelik's CI, which builds LibreMiddleware (it FetchContent's
+      # it transitively). LibreLinux requires the installed CONFIG package, so
+      # we build + `cmake --install` it explicitly. SHARED + plugins ON because
+      # the agent dlopen's the card plugins at runtime; native signing backend
+      # (the CI default) — DSS is only a test oracle.
+      - name: Checkout LibreMiddleware
+        uses: actions/checkout@v4
+        with:
+          repository: LibreSCRS/LibreMiddleware
+          ref: ${{ env.MIDDLEWARE_REF }}
+          path: LibreMiddleware
+          fetch-depth: 0
+          submodules: recursive   # LM vendors OpenSC as a git submodule (thirdparty/opensc-source)
+
+      - name: Build & install LibreMiddleware (Release, SHARED)
+        working-directory: LibreMiddleware
+        run: |
+          cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$LM_PREFIX" \
+            -DLIBREMIDDLEWARE_BUILD_SHARED=ON
+          cmake --build build -j4
+          cmake --install build
+
+      # --- LibreLinux: configure / build (default system mode) --------------
+      # NOT LIBRELINUX_USER_INSTALL — that mode targets per-user XDG dirs for
+      # dogfooding. CI builds the packaging layout (system prefix), which is
+      # what distro packages ship.
+      - name: Configure (Release)
+        working-directory: LibreLinux
+        run: |
+          cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_PREFIX_PATH="$LM_PREFIX"
+
+      - name: Build (agent + prompter)
+        working-directory: LibreLinux
+        run: cmake --build build -j4
+
+      # --- Qt-free gate (project invariant) ---------------------------------
+      # The librescrs-agent daemon MUST stay Qt-free (DE-agnostic: sdbus-c++ +
+      # libsystemd only). The prompter MAY link Qt — it is the Qt-OK boundary —
+      # so the gate checks only the agent binary. A Qt symbol leaking into the
+      # daemon fails the build here.
+      - name: Assert agent is Qt-free
+        working-directory: LibreLinux
+        run: |
+          if ldd build/agent/librescrs-agent | grep -qi 'libqt'; then
+            echo "::error::Qt linked into the librescrs-agent daemon — it MUST stay Qt-free"
+            ldd build/agent/librescrs-agent | grep -i 'libqt'
+            exit 1
+          fi
+          echo "OK: librescrs-agent does not link Qt"
+
+      # --- Tests ------------------------------------------------------------
+      # offscreen for the prompter widget tests; dbus-run-session provides a
+      # private session bus the agent/prompter integration tests connect to
+      # (mirrors the PKGBUILD check()). No LIBRESCRS_TEST_PIN: PIN/live-card
+      # suites self-skip without a reader.
+      - name: Test
+        working-directory: LibreLinux
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: dbus-run-session -- ctest --test-dir build --output-on-failure
+
+      # --- Thread-sanitizer gate for the agent concurrency invariants -------
+      # The reader-map / ReaderObject-field locking (BusExporter::m_readersMutex
+      # + ReaderObject::m_mutex) is a data-race guard: a regression that drops a
+      # lock still passes the plain RelWithDebInfo Test step green but races
+      # under TSan. Build + run only the concurrency suite under
+      # -fsanitize=thread (KDE prompter OFF so no Qt; the installed LM is
+      # uninstrumented, which is fine — the guarded state is LL-owned).
+      - name: TSan (agent concurrency)
+        working-directory: LibreLinux
+        env:
+          QT_QPA_PLATFORM: offscreen
+          TSAN_OPTIONS: halt_on_error=1
+        run: |
+          cmake -B build-tsan -G Ninja \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_PREFIX_PATH="$LM_PREFIX" \
+            -DLIBRELINUX_BUILD_PROMPTER_KDE=OFF \
+            -DLIBRELINUX_WERROR=OFF \
+            -DCMAKE_CXX_FLAGS="-fsanitize=thread -g" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=thread"
+          cmake --build build-tsan --target BusExporterReaderRaceTest ReaderRemoveDrainTest AgentShutdownUnderLoadTest TypedChannelWedgeDrainTest SignSeamWedgeDrainTest TransportCaptureGuardTest -j4
+          dbus-run-session -- ctest --test-dir build-tsan -R "BusExporterReaderRace|ReaderRemoveDrain|AgentShutdownUnderLoad|TypedChannelWedgeDrain|SignSeamWedgeDrain|TransportCaptureGuard" --output-on-failure

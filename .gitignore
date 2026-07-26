@@ -1,0 +1,10 @@
+build*/
+install*/
+.cache/
+.vscode/
+.idea/
+.qtcreator/
+*.user
+*.user.*
+compile_commands.json
+.clangd/

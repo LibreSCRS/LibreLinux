@@ -1,0 +1,166 @@
+# Maintainer: hirashix0 <hirashix0@proton.me>
+#
+# LibreLinux — Linux platform-native integration for the LibreSCRS stack.
+# Split into two packages because the agent is DE-agnostic (and MUST stay
+# Qt-free) while the KDE pinentry prompter pulls Qt6/KF6:
+#
+#   librescrs-agent        — headless, Qt-free D-Bus session service
+#   librescrs-pinentry-kde — KDE-styled secure-input helper for the agent
+#
+# Dependency chain: librescrs-middleware <= librelinux <= librekde
+#
+# Versioning: LibreLinux uses INDEPENDENT SemVer (0.x until the D-Bus wire
+# surface freezes), distinct from LibreMiddleware's version.
+
+pkgbase=librelinux
+pkgname=('librescrs-agent' 'librescrs-pinentry-kde')
+pkgver=0.1.0
+pkgrel=1
+arch=('x86_64' 'aarch64')
+url="https://github.com/LibreSCRS/LibreLinux"
+license=('LGPL-2.1-or-later')
+makedepends=(
+    'cmake'
+    'ninja'
+    'git'                       # GitVersion.cmake
+    'pkgconf'
+    'sdbus-cpp'                 # >=2.0 (agent + prompter D-Bus)
+    'systemd-libs'              # libsystemd (event loop / sd_notify)
+    'librescrs-middleware>=4.2' # LibreMiddleware::* CMake config package
+    'openssl'                   # agent: find_package(OpenSSL COMPONENTS Crypto)
+    'pcsclite'
+    'p11-kit'                   # pkcs11-module: p11-kit-1.pc resolves module + .module config dirs
+    # Prompter (Qt-OK boundary) build deps:
+    'qt6-base'                  # Core/Gui/Widgets/DBus/Test
+    'kcoreaddons'               # KF6::CoreAddons
+    'ki18n'                     # KF6::I18n
+    # Test-time only:
+    'dbus'                      # dbus-run-session (prompter + agent integration tests)
+)
+source=(
+    "$pkgbase-$pkgver.tar.gz::https://github.com/LibreSCRS/LibreLinux/archive/refs/tags/v$pkgver.tar.gz"
+)
+# Placeholder — real sum filled at tag time with `updpkgsums`. The v0.1.0 tag
+# does not exist yet (repo unpublished); see README.md for the local-dogfood
+# build that needs no remote.
+sha256sums=('SKIP')
+
+build() {
+    cd "$srcdir/LibreLinux-$pkgver"
+    # Default (system) install layout: systemd user unit dir, D-Bus session
+    # service/policy dirs, and the polkit action all resolve to their absolute
+    # FHS locations via pkg-config. This is exactly what packaging wants — do
+    # NOT pass LIBRELINUX_USER_INSTALL (that is the dogfood-into-$HOME mode).
+    # The prompter is ON by default (LIBRELINUX_BUILD_PROMPTER_KDE) so a single
+    # build produces both split-package payloads.
+    cmake -S . -B build -G Ninja \
+        -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+        -DCMAKE_INSTALL_PREFIX=/usr
+    cmake --build build -j4
+}
+
+check() {
+    cd "$srcdir/LibreLinux-$pkgver"
+    # Prompter widget tests need offscreen Qt; the prompter+agent integration
+    # tests spin a private bus via dbus-run-session (dbus is a makedepend).
+    # Live-card/PIN suites self-skip without a reader + LIBRESCRS_TEST_* env.
+    QT_QPA_PLATFORM=offscreen ctest --test-dir build --output-on-failure -j4
+}
+
+# --- librescrs-agent: headless, Qt-free D-Bus session service -----------------
+package_librescrs-agent() {
+    pkgdesc="Headless Qt-free D-Bus session agent that owns smart-card access for the LibreSCRS stack"
+    depends=(
+        'librescrs-middleware>=4.2'
+        'sdbus-cpp'
+        'systemd-libs'
+        'pcsclite'
+        'openssl'       # OpenSSL::Crypto — CardFingerprint SHA-256(ATR); the daemon links libcrypto directly
+        'p11-kit'       # loads the shipped .module for app auto-discovery + provides `p11-kit server`
+    )
+    optdepends=(
+        'librescrs-pinentry-kde: KDE secure PIN/CAN entry prompter'
+        'pcsclite: the pcscd daemon must be running for card access'
+        'polkit: client authorization for Sign and trust-config (PolkitAuthorizer)'
+    )
+    cd "$srcdir/LibreLinux-$pkgver"
+
+    # Install the full tree to a private staging dir, then move the agent's
+    # files into this subpackage. The prompter's files go to the other one.
+    local stage="$srcdir/stage"
+    rm -rf "$stage"
+    DESTDIR="$stage" cmake --install build
+
+    # Agent payload:
+    #   libexec/librescrs-agent
+    #   systemd user unit + D-Bus activation service (agent)
+    #   the shared interface XMLs (all of them — they describe the agent's API)
+    #   the session-bus policy (agent) + the polkit action (system dir)
+    install -Dm755 "$stage/usr/libexec/librescrs-agent" \
+        "$pkgdir/usr/libexec/librescrs-agent"
+
+    install -Dm644 "$stage/usr/lib/systemd/user/librescrs-agent.service" \
+        "$pkgdir/usr/lib/systemd/user/librescrs-agent.service"
+    install -Dm644 "$stage/usr/share/dbus-1/services/org.librescrs.Agent.service" \
+        "$pkgdir/usr/share/dbus-1/services/org.librescrs.Agent.service"
+
+    # All interface XMLs ship with the agent (it implements them).
+    install -d "$pkgdir/usr/share/dbus-1/interfaces"
+    cp -a "$stage/usr/share/dbus-1/interfaces/." \
+        "$pkgdir/usr/share/dbus-1/interfaces/"
+
+    install -Dm644 "$stage/usr/share/dbus-1/session.d/org.librescrs.Agent1.conf" \
+        "$pkgdir/usr/share/dbus-1/session.d/org.librescrs.Agent1.conf"
+    install -Dm644 "$stage/usr/share/polkit-1/actions/org.librescrs.agent.configure.policy" \
+        "$pkgdir/usr/share/polkit-1/actions/org.librescrs.agent.configure.policy"
+
+    # PKCS#11 agent-proxy module (Qt-free, libcrypto-free): the .so brokers the
+    # C_* ABI to this agent over D-Bus, the .module registers it with p11-kit so
+    # ssh/NSS/Firefox auto-discover it, and the user unit runs `p11-kit server`
+    # for out-of-process isolation. p11-kit-1.pc resolves the dirs (build()),
+    # falling back to /usr/lib/pkcs11 and /usr/share/p11-kit/modules.
+    install -Dm755 "$stage/usr/lib/pkcs11/librescrs-pkcs11-agent.so" \
+        "$pkgdir/usr/lib/pkcs11/librescrs-pkcs11-agent.so"
+    install -Dm644 "$stage/usr/share/p11-kit/modules/librescrs-agent.module" \
+        "$pkgdir/usr/share/p11-kit/modules/librescrs-agent.module"
+    install -Dm644 "$stage/usr/lib/systemd/user/librescrs-p11-server.service" \
+        "$pkgdir/usr/lib/systemd/user/librescrs-p11-server.service"
+
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}
+
+# --- librescrs-pinentry-kde: KDE secure-input prompter ------------------------
+package_librescrs-pinentry-kde() {
+    pkgdesc="KDE-styled secure PIN/CAN entry prompter for the LibreSCRS agent"
+    depends=(
+        'librescrs-agent'
+        'librescrs-middleware>=4.2' # links LibreMiddleware::Secure (libLibreSCRS_Auth.so)
+        'sdbus-cpp'                 # prompter links SDBusCpp::sdbus-c++ -> libsdbus-c++.so.2 directly
+        'qt6-base'
+        'kcoreaddons'
+        'ki18n'
+    )
+    cd "$srcdir/LibreLinux-$pkgver"
+
+    local stage="$srcdir/stage"
+    if [ ! -d "$stage" ]; then
+        rm -rf "$stage"
+        DESTDIR="$stage" cmake --install build
+    fi
+
+    # Prompter payload:
+    #   libexec/librescrs-pinentry-kde
+    #   systemd user unit + D-Bus activation service (prompter)
+    #   the prompter session-bus policy
+    install -Dm755 "$stage/usr/libexec/librescrs-pinentry-kde" \
+        "$pkgdir/usr/libexec/librescrs-pinentry-kde"
+
+    install -Dm644 "$stage/usr/lib/systemd/user/librescrs-pinentry-kde.service" \
+        "$pkgdir/usr/lib/systemd/user/librescrs-pinentry-kde.service"
+    install -Dm644 "$stage/usr/share/dbus-1/services/org.librescrs.Prompter.service" \
+        "$pkgdir/usr/share/dbus-1/services/org.librescrs.Prompter.service"
+    install -Dm644 "$stage/usr/share/dbus-1/session.d/org.librescrs.Prompter1.conf" \
+        "$pkgdir/usr/share/dbus-1/session.d/org.librescrs.Prompter1.conf"
+
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

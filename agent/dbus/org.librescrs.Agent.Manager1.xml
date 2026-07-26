@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN"
+ "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
+<node>
+  <interface name="org.librescrs.Agent.Manager1">
+    <!-- Agent version string. No client reader yet; reserved for a future
+         handshake / diagnostics surface. Producer-only on the wire today. -->
+    <property name="Version" type="s" access="read"/>
+
+    <!-- Optional request/property families this agent understands, single-
+         sourced from LibreAgent's LibreSCRS::Agent::kAgentFeatures
+         (FeatureTokens.h) and served verbatim on the socket transport's
+         mirrored HelloAck.features. Fixed for the agent process's lifetime —
+         it never changes without a restart — so it carries the
+         EmitsChangedSignal=const annotation instead of a PropertiesChanged
+         watch. A client that predates this property (or connects to an
+         older agent lacking it) reads nothing back and MUST degrade to an
+         empty feature set gracefully, never treat the absence as an error. -->
+    <property name="Features" type="as" access="read">
+      <annotation name="org.freedesktop.DBus.Property.EmitsChangedSignal" value="const"/>
+    </property>
+
+    <!-- Card-independent, synchronous visible-signature layout preview.
+         No card, no Operation1 object — unlike every other method exported
+         from this daemon, this one answers immediately with the computed
+         layout (pure CPU: LibreMiddleware's own word-wrap/clipping
+         algorithm). x/y/width/height are PDF user units; a box too small to
+         fit even the floor font size is still a VALID call — `clipped`
+         becomes true, telling the caller to install the same clip path the
+         PAdES emitter installs when it actually stamps the signature (pixel
+         parity — see LmSeams.h's Operations::layoutVisualSignature doc
+         comment). Rejects a non-finite or non-positive box at method entry
+         (Error.InvalidRequest analog: an sdbus::Error, not a silent
+         narrowing). -->
+    <method name="LayoutVisualSignature">
+      <arg name="text" type="s" direction="in"/>
+      <arg name="x" type="d" direction="in"/>
+      <arg name="y" type="d" direction="in"/>
+      <arg name="width" type="d" direction="in"/>
+      <arg name="height" type="d" direction="in"/>
+      <arg name="fontSize" type="d" direction="out"/>
+      <arg name="lineHeight" type="d" direction="out"/>
+      <arg name="lines" type="as" direction="out"/>
+      <arg name="clipped" type="b" direction="out"/>
+    </method>
+
+    <!-- The embedded appearance font (Liberation Sans Regular TTF) every
+         agent-rendered visible signature uses, sealed into a memfd. A
+         preview renderer loads this SAME font so its glyph metrics agree
+         with LayoutVisualSignature's line breaks and with the font PAdES
+         actually embeds. -->
+    <method name="GetAppearanceFont">
+      <arg name="fd" type="h" direction="out"/>
+    </method>
+  </interface>
+</node>

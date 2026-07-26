@@ -1,0 +1,59 @@
+# This file registers the LibreSCRS agent-proxy PKCS#11 module with p11-kit.
+# See man pkcs11.conf(5) and man p11-kit(8).
+#
+# DEFAULT (in-process, deployment a): apps load librescrs-pkcs11-agent.so
+# directly; it maps the PKCS#11 C_* ABI to D-Bus calls into the per-user
+# librescrs-agent (the single card owner + prompter + policy + lease). The
+# module itself holds NO card secret and does NO crypto. PIN/CAN are collected
+# by the agent prompter (the token advertises CKF_PROTECTED_AUTHENTICATION_PATH),
+# so they never reach the application — an app that passes a PIN to C_Login has
+# it ignored.
+#
+# A RELATIVE module path is loaded from the p11-kit default module dir
+# (pkg-config p11-kit-1 --variable p11_module_path; @LIBRESCRS_P11_MODULE_DIR@
+# on this build). Packagers building 32/64-bit parallel installs keep it
+# relative for the same reason opensc.module does.
+module: librescrs-pkcs11-agent.so
+
+# Never abort other modules if this one fails to load (e.g. agent not running).
+critical: no
+
+# ---------------------------------------------------------------------------
+# OPT-IN OUT-OF-PROCESS ISOLATION (deployment b). The SAME .so, config-only:
+# comment out the `module:` line above and enable ONE of the two forms below.
+# (p11-kit's server side is CLI-only — `p11-kit server` / `p11-kit remote`; it
+# exposes no embeddable RPC library, so we ship the backend .so and let p11-kit
+# host it out-of-process. man p11-kit(8), SERVER / REMOTE.)
+#
+#   1) Per-client pipe (no daemon — p11-kit spawns one `p11-kit remote` child
+#      per consumer; nothing to start/stop, simplest isolation):
+# remote: |p11-kit remote @LIBRESCRS_P11_MODULE_DIR@/librescrs-pkcs11-agent.so
+#
+#   2) Long-lived shared server (start librescrs-p11-server.service, which runs
+#      `p11-kit server`), then point apps at the stock p11-kit-client.so via a
+#      fixed per-user socket. The server creates the socket srw------- (0600,
+#      owner-only — empirically verified) under $XDG_RUNTIME_DIR/p11-kit/.
+#      Override at runtime with the P11_KIT_SERVER_ADDRESS env var.
+# server-address: unix:path=${XDG_RUNTIME_DIR}/p11-kit/librescrs
+#
+# ---------------------------------------------------------------------------
+# DISCOVERY WHERE p11-kit-proxy IS NOT WIRED INTO THE CONSUMER (no README per
+# project policy — the notes live here):
+#
+#   NSS (Firefox/Thunderbird/Chrome) fallback registration:
+#     modutil -dbdir sql:$HOME/.pki/nssdb -add librescrs \
+#         -libfile @LIBRESCRS_P11_MODULE_DIR@/librescrs-pkcs11-agent.so
+#     (or Settings -> Privacy & Security -> Security Devices -> Load.)
+#
+#   OpenSSH:
+#     ssh -I @LIBRESCRS_P11_MODULE_DIR@/librescrs-pkcs11-agent.so user@host
+#     (or PKCS11Provider in ~/.ssh/config.)
+#
+#   Standalone smoke / enumeration:
+#     pkcs11-tool --module @LIBRESCRS_P11_MODULE_DIR@/librescrs-pkcs11-agent.so -T
+#     p11-kit list-modules | grep -A5 librescrs
+#   The token must list "protected authentication path".
+#
+#   PKCS#11 URI selection across all p11-kit modules (e.g. pkcs11:token=...,
+#   or the p11-kit: scheme for module-scoped objects) works once this .module
+#   is installed and the agent is running.

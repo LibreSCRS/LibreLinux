@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN"
+ "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
+<!--
+  Typed-result sub-interface for a Card1.SignBatch Operation1. Exported on the
+  same object path as the parent Operation1. The Result signal fires once,
+  before Operation1.Finished, whenever at least one row was attempted — i.e.
+  on BOTH Finished(Ok) (>= 1 row signed) and Finished(Error) with >= 1 row
+  attempted (a batch where every document independently failed, or halted
+  from the first document onward); it is NOT emitted when the operation
+  never attempted a single document (Cancelled before the first document,
+  or a document-count entry rejection — the latter never even reaches an
+  Operation, see Card1.SignBatch's own doc block).
+
+  Result payload: a(sha{sv}u) rows, one row per input document IN THE SAME
+  ORDER as the request's `documents`:
+
+    s     displayName    the client-supplied per-document name from the
+                          request (untrusted chrome, unchanged from the
+                          consent prompt's enumerated list).
+    h     artifact       sealed memfd (FILE_SEAL_SHRINK | FILE_SEAL_GROW |
+                          FILE_SEAL_WRITE). A SUCCESSFUL row's fd holds the
+                          signed AdES bytes. A FAILED row's fd is a
+                          ZERO-LENGTH sealed memfd — the frozen convention
+                          for this interface: `h` is a non-nullable D-Bus
+                          type, so a failed row still resolves a real
+                          descriptor, just an empty one. The recipient MUST
+                          mmap-read (or accept a zero-length read) and close
+                          immediately — the agent does not retain a copy.
+    a{sv} meta           SAME shape as Sign1.meta: { "format": s resolved,
+                          "level": s resolved, "tsaUsed": b,
+                          "chainComplete": b }. Meaningless (zero/empty
+                          defaults) on a failed row.
+    u     errorCode      the SAME numeric ErrorCode taxonomy as
+                          Operation1.ErrorCode / Finished's errorCode
+                          argument. 0 (None) on a successfully signed row.
+                          A wrong or blocked signing credential HALTS the
+                          batch: every row from the halt point onward
+                          (inclusive of the row that triggered it) carries
+                          the SAME halt code and an empty (zero-length)
+                          artifact — the remaining documents are never
+                          attempted. Tolerance (client decode): raw u32
+                          pass-through, exactly like every other errorCode
+                          field on this wire — an unrecognised value decodes
+                          through rather than failing the row.
+
+  Late-subscriber recovery — GetResult():
+    A signature is non-reproducible (PIN-authorized, possibly timestamped),
+    so — mirroring Sign1's own GetResult — a client that learns the op path
+    only from the SignBatch() return, and so may subscribe to Result/Finished
+    too late, calls GetResult() to re-seal EVERY row fresh (including a
+    failed row's zero-length fd) while the operation is still within the
+    cleanup-grace window AND at least one row was delivered on the signal
+    above. Returns org.librescrs.Agent.Error.NoResult once the grace window
+    has elapsed or when the operation never attempted a document. This is
+    the frozen SignBatch recovery contract; the agent retains only the raw
+    (possibly empty) row bytes in RAM until the operation is evicted
+    (cleanup-grace GC, card removal, owner disconnect) — never persisted,
+    same retention policy as the Sign1 artifact.
+-->
+<node>
+  <interface name="org.librescrs.Agent.Operation.SignBatch1">
+    <signal name="Result">
+      <arg name="rows" type="a(sha{sv}u)"/>
+    </signal>
+
+    <method name="GetResult">
+      <arg name="rows" type="a(sha{sv}u)" direction="out"/>
+    </method>
+  </interface>
+</node>

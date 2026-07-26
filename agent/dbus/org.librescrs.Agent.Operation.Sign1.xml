@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN"
+ "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
+<!--
+  Typed-result sub-interface for a Sign Operation1. Exported on the same
+  object path as the parent Operation1. The Result signal fires once, before
+  Operation1.Finished, only when status == Ok.
+
+  Result payload:
+    signedArtifact  h    sealed memfd (FILE_SEAL_SHRINK | FILE_SEAL_GROW |
+                         FILE_SEAL_WRITE) of the finished AdES document /
+                         container. The recipient MUST mmap-read and close
+                         immediately — the agent does not retain a copy.
+    meta            a{sv} { "format": s resolved, "level": s resolved,
+                            "tsaUsed": b, "chainComplete": b }
+
+      chainComplete is RESERVED this release and is ALWAYS false: the agent has
+      no chain verdict to report yet (the signing backend exposes none on its
+      result). Clients MUST NOT treat false as "chain incomplete"; once a chain
+      verdict becomes available the agent will set this from it. The key is
+      emitted now so the wire shape is frozen and forward-compatible.
+
+  Late-subscriber recovery — GetResult():
+    A signature is non-reproducible (PIN-authorized, possibly timestamped), so
+    unlike the other typed results it offers an explicit recovery method. A
+    client that learns the op path only from the Sign() return — and so may
+    subscribe to Result/Finished too late — calls GetResult() to re-dup the
+    sealed artifact while the operation is still within the cleanup-grace
+    window AND finished Ok. Returns org.librescrs.Agent.Error.NoResult once the
+    grace window has elapsed or when the operation did not finish Ok. This is
+    the frozen Sign recovery contract (the generic Operation1 terminal triple
+    recovers only status/errorCode, never a payload).
+-->
+<node>
+  <interface name="org.librescrs.Agent.Operation.Sign1">
+    <signal name="Result">
+      <arg name="signedArtifact" type="h"/>
+      <arg name="meta"           type="a{sv}"/>
+    </signal>
+
+    <method name="GetResult">
+      <arg name="signedArtifact" type="h"     direction="out"/>
+      <arg name="meta"           type="a{sv}" direction="out"/>
+    </method>
+  </interface>
+</node>

@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN"
+ "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
+<!--
+  Agent-owned signing configuration (the single source of truth). Hosted on the
+  root object /org/librescrs/Agent alongside Manager1. All settings are
+  NON-secret; PIN/CAN/MRZ are never configuration.
+
+  Properties are read-only over org.freedesktop.DBus.Properties; mutation goes
+  through SetValue so each change is gated per-key:
+    DefaultLevel / DefaultReason / DefaultLocation  -> polkit org.librescrs.agent.configure (default allow)
+    TsaUrls / TslSources                            -> polkit org.librescrs.agent.configure.trust (auth_self)
+    TslCacheDir / AiaCacheDir / PluginDir           -> config-file-only (NOT settable over D-Bus; a
+                                                       D-Bus-settable PluginDir is a dlopen code-exec vector)
+    LastTsaUrl                                      -> read-only agent-internal state
+
+  SetValue(key, value) rejects with:
+    org.librescrs.Agent.Error.UnknownConfigKey    — no such key
+    org.librescrs.Agent.Error.ReadOnlyConfig      — file-only / read-only key
+    org.librescrs.Agent.Error.NotAuthorized       — polkit denied
+    org.librescrs.Agent.Error.InvalidConfigValue  — wrong variant type or invalid value
+  Changed(key) fires after any successful mutation (from D-Bus or agent-internal).
+-->
+<node>
+  <interface name="org.librescrs.Agent.Config1">
+    <property name="DefaultLevel"    type="s"      access="read"/>
+    <property name="TsaUrls"         type="as"     access="read"/>
+    <property name="LastTsaUrl"      type="s"      access="read"/>
+    <property name="TslSources"      type="a(sbb)" access="read"/>
+    <property name="TslCacheDir"     type="s"      access="read"/>
+    <property name="AiaCacheDir"     type="s"      access="read"/>
+    <property name="DefaultReason"   type="s"      access="read"/>
+    <property name="DefaultLocation" type="s"      access="read"/>
+    <property name="PluginDir"       type="s"      access="read"/>
+
+    <method name="SetValue">
+      <arg name="key"   type="s" direction="in"/>
+      <arg name="value" type="v" direction="in"/>
+    </method>
+    <method name="Reset">
+      <arg name="key" type="s" direction="in"/>
+    </method>
+
+    <signal name="Changed">
+      <arg name="key" type="s"/>
+    </signal>
+  </interface>
+</node>

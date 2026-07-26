@@ -1,0 +1,42 @@
+[Unit]
+Description=LibreSCRS KDE Pinentry Prompter
+Documentation=https://librescrs.github.io
+PartOf=graphical-session.target
+
+[Service]
+# Type=dbus — systemd waits for the well-known name to appear on the bus
+# before considering the unit started. BusName must match the well-known
+# name claimed in main.cpp.
+Type=dbus
+BusName=org.librescrs.Prompter1
+ExecStart=@CMAKE_INSTALL_FULL_LIBEXECDIR@/librescrs-pinentry-kde
+
+# This binary briefly holds the user's plaintext PIN, so it gets the subset of
+# the agent's hardening that does NOT interfere with a Qt/KF6 GUI:
+#   - LimitCORE=0          no core dump can spill the PIN to disk (in-process
+#                          PR_SET_DUMPABLE 0 in main() is the runtime complement).
+#   - NoNewPrivileges=yes  no setuid/setgid/fscaps escalation; cheap and safe.
+#   - RestrictSUIDSGID=yes the prompter creates no privileged files.
+#   - LockPersonality=yes  pins the execution domain; no GUI impact.
+#   - RestrictRealtime=yes the prompter has no realtime-scheduling need.
+#   - RemoveIPC / KeyringMode=private / UMask=0077  reduce cross-process leak
+#                          surface for any IPC objects or keyring entries.
+LimitCORE=0
+NoNewPrivileges=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictRealtime=yes
+RemoveIPC=yes
+KeyringMode=private
+UMask=0077
+
+# Deliberately omitted: the prompter needs the user's display server, KDE
+# platform plugin, fontconfig caches, locale data, and the desktop session bus
+# to show a modal dialog. The heavier agent sandboxing (ProtectHome,
+# RestrictAddressFamilies=AF_UNIX, ProtectKernel*, ProtectSystem=strict,
+# SystemCallFilter, MemoryDenyWriteExecute) interferes with Qt/KF6 platform-
+# plugin discovery and JIT/codegen and would block the GUI from rendering —
+# exactly the reason this binary is split out from the headless daemon.
+
+[Install]
+WantedBy=graphical-session.target

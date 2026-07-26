@@ -1,0 +1,149 @@
+# Serbian translation for the LibreSCRS pinentry prompter.
+# SPDX-FileCopyrightText: 2026 hirashix0
+# SPDX-License-Identifier: LGPL-2.1-or-later
+msgid ""
+msgstr ""
+"Project-Id-Version: librescrs-pinentry-kde\n"
+"Report-Msgid-Bugs-To: https://librescrs.github.io/\n"
+"POT-Creation-Date: 2026-07-26 02:31+0200\n"
+"PO-Revision-Date: 2026-07-19\n"
+"Last-Translator: hirashix0\n"
+"Language-Team: Serbian\n"
+"Language: sr\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=3; plural=(n%10==1 && n%100!=11 ? 0 : n%10>=2 && "
+"n%10<=4 && (n%100<10 || n%100>=20) ? 1 : 2);\n"
+
+#: prompter/src/CanInputWidget.cpp:31
+#, kde-format
+msgctxt "@label:textbox CAN — Card Access Number"
+msgid "CAN:"
+msgstr "CAN:"
+
+#: prompter/src/ChangePinInputWidget.cpp:54
+#, kde-format
+msgctxt "@item generic PIN role name"
+msgid "PIN"
+msgstr "PIN"
+
+#: prompter/src/ChangePinInputWidget.cpp:57
+#, kde-format
+msgctxt "@label:textbox current PIN entry field"
+msgid "Current %1:"
+msgstr "Тренутни %1:"
+
+#: prompter/src/ChangePinInputWidget.cpp:59
+#, kde-format
+msgctxt "@label:textbox new PIN entry field"
+msgid "New %1:"
+msgstr "Нови %1:"
+
+#: prompter/src/ChangePinInputWidget.cpp:60
+#, kde-format
+msgctxt "@label:textbox new PIN confirmation field"
+msgid "Confirm new %1:"
+msgstr "Потврди нови %1:"
+
+#: prompter/src/ChangePinInputWidget.cpp:67
+#, kde-format
+msgctxt "@info:status inline error under the confirmation field"
+msgid "The confirmation does not match the new %1."
+msgstr "Потврда се не поклапа са новим %1."
+
+#: prompter/src/main.cpp:53
+#, kde-format
+msgctxt "@title application name"
+msgid "LibreSCRS Pinentry"
+msgstr "LibreSCRS унос PIN-а"
+
+#: prompter/src/main.cpp:55
+#, kde-format
+msgctxt "@info:tooltip short description"
+msgid "Secure-input prompter for the LibreSCRS smart-card agent."
+msgstr "Безбедан унос за LibreSCRS агента паметних картица."
+
+#: prompter/src/MrzInputWidget.cpp:75
+#, kde-format
+msgctxt "@label:textbox MRZ document number incl. check digit"
+msgid "Document number (incl. check digit):"
+msgstr "Број документа (укљ. контролну цифру):"
+
+#: prompter/src/MrzInputWidget.cpp:79
+#, kde-format
+msgctxt "@label:textbox MRZ date of birth YYMMDD + check digit"
+msgid "Date of birth (YYMMDD + check digit):"
+msgstr "Датум рођења (ГГММДД + контролна цифра):"
+
+#: prompter/src/MrzInputWidget.cpp:83
+#, kde-format
+msgctxt "@label:textbox MRZ date of expiry YYMMDD + check digit"
+msgid "Date of expiry (YYMMDD + check digit):"
+msgstr "Датум истека (ГГММДД + контролна цифра):"
+
+#: prompter/src/PinInputWidget.cpp:30
+#, kde-format
+msgctxt "@label:textbox PIN entry field"
+msgid "PIN:"
+msgstr "PIN:"
+
+#: prompter/src/PromptDialog.cpp:55
+#, kde-format
+msgctxt "@title:window PIN entry dialog"
+msgid "Enter PIN"
+msgstr "Унесите PIN"
+
+#: prompter/src/PromptDialog.cpp:57
+#, kde-format
+msgctxt "@title:window CAN entry dialog"
+msgid "Enter Card Access Number"
+msgstr "Унесите број за приступ картици"
+
+#: prompter/src/PromptDialog.cpp:59
+#, kde-format
+msgctxt "@title:window MRZ entry dialog"
+msgid "Enter Machine-Readable Zone"
+msgstr "Унесите машински читљиву зону"
+
+#: prompter/src/PromptDialog.cpp:61
+#, kde-format
+msgctxt "@title:window PIN change dialog"
+msgid "Change PIN"
+msgstr "Промени PIN"
+
+#: prompter/src/PromptDialog.cpp:63
+#, kde-format
+msgctxt "@title:window generic credential entry"
+msgid "Enter Credentials"
+msgstr "Унесите приступне податке"
+
+#: prompter/src/PromptDialog.cpp:137
+#, kde-format
+msgctxt "@info list of documents included in a batch signing request"
+msgid "Documents: %1"
+msgstr "Документи: %1"
+
+#: prompter/src/PromptDialog.cpp:147
+#, kde-format
+msgctxt "@info card identity label"
+msgid "Card: %1"
+msgstr "Картица: %1"
+
+#: prompter/src/PromptDialog.cpp:162
+#, kde-format
+msgctxt "@title:group framed area for application-supplied request details"
+msgid "Requested by an application"
+msgstr "Захтевала апликација"
+
+#: prompter/src/PromptDialog.cpp:169
+#, kde-format
+msgctxt "@info requester identity label"
+msgid "Requested by: %1"
+msgstr "Подносилац захтева: %1"
+
+#: prompter/src/PromptDialog.cpp:172
+#, kde-format
+msgctxt "@info artifact label"
+msgid "Artifact: %1"
+msgstr "Предмет: %1"

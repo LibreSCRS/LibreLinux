@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN"
+ "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
+<!--
+  Typed-result sub-interface for a ReadIdentity Operation1. Exported on the
+  same object path as the parent Operation1. The Result signal fires once,
+  before Operation1.Finished, and only when the operation completed
+  successfully (status == Ok).
+
+  Payload shape: a{s a{s(sssv)}}
+    outer key  group key       (e.g. "personal", "address", "document")
+    inner key  field key       (e.g. "given_name", "date_of_birth")
+    tuple      label_key       (localised-text key for the field label)
+               label_fallback  (English fallback text)
+               type            "text" | "date" | "binary"
+               value           "s" for text/date, "ay" for binary
+    Photo fields are OMITTED from this payload — clients call GetPhoto for
+    the bytes, which arrive on the Photo1.Result signal as sealed memfds.
+
+  Late-subscriber recovery — GetResult():
+    The Result signal is a one-shot: a client that learns the op path only
+    from the ReadIdentity() return may subscribe too late (a hot card session
+    finishes the read faster than the client's match rules install) and would
+    lose the payload forever. GetResult() re-serves the retained field map —
+    the exact Result payload — while the operation is still within the
+    cleanup-grace window AND finished Ok. Returns
+    org.librescrs.Agent.Error.NoResult once the grace window has elapsed or
+    when the operation did not finish Ok. Same recovery contract as
+    Sign1.GetResult (the generic Operation1 terminal triple recovers only
+    status/errorCode, never a payload). The retained identity fields live
+    only in agent RAM until the operation is evicted (cleanup-grace GC, card
+    removal, owner disconnect) — never persisted; same retention policy as
+    the Sign1 artifact.
+
+  Progressive delivery — Group(groupKey, fields):
+    Fires zero or more times, in read order, strictly BEFORE Result above —
+    one signal per field group as the card plugin produces it, ahead of the
+    complete grouped Result this interface has always sent. `fields` is the
+    SAME (sssv) tuple shape as one entry of Result's own outer map — one
+    group's worth, not the whole grouped dict. This is a progressive HINT
+    only: Result stays the complete, authoritative set regardless of what
+    (if anything) streamed here, and a client that never subscribes to this
+    signal at all loses nothing — it simply renders once Result arrives, the
+    same as before this signal existed. There is no recovery pull for a
+    missed Group signal (unlike GetResult above): a late subscriber that
+    missed some or all of them still converges on the correct, complete
+    result via Result/GetResult. Emitted only when the agent serves the
+    "identity-stream" feature token (see Manager1.Features) — an agent
+    predating it never sends this signal, so an older client build (which
+    does not know this signal name at all) is simply never addressed by it.
+-->
+<node>
+  <interface name="org.librescrs.Agent.Operation.Identity1">
+    <signal name="Result">
+      <arg name="fields" type="a{sa{s(sssv)}}"/>
+    </signal>
+
+    <signal name="Group">
+      <arg name="groupKey" type="s"/>
+      <arg name="fields" type="a{s(sssv)}"/>
+    </signal>
+
+    <method name="GetResult">
+      <arg name="fields" type="a{sa{s(sssv)}}" direction="out"/>
+    </method>
+  </interface>
+</node>

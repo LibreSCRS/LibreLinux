@@ -1,0 +1,5 @@
+# Compiled e2e helper binaries (built locally from the *.cpp sources here).
+# Ignore the binaries only; the .cpp/.sh sources are intentionally not ignored.
+/auto-prompter
+/nam-sign-proof
+/validate-prompter

@@ -1,0 +1,122 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC
+ "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<!--
+  SPDX-License-Identifier: LGPL-2.1-or-later
+  SPDX-FileCopyrightText: 2026 hirashix0
+
+  polkit actions for org.librescrs.Agent.Config1 mutation. The agent OWNS its
+  signing configuration; these gate which clients may CHANGE it. PIN is
+  not involved (config is non-secret) — this is purely authorization-of-the-
+  client. The agent resolves the caller via the in-flight D-Bus message creds.
+
+  The agent routes the allow/deny decision through polkit CheckAuthorization
+  whenever polkitd is reachable (the normal desktop case), so the defaults
+  below are authoritative. Because polkit denies any action id it does not
+  know, this file MUST be installed into the system actions dir
+  (/usr/share/polkit-1/actions) for signing and trust-config to be authorized;
+  polkit has no per-user actions location. Only when no system bus / polkit is
+  present does the agent fall back to a degraded gate (sign + low-tier configure
+  allowed, the trust/timestamping tier fail-closed). PluginDir / TslCacheDir /
+  AiaCacheDir are NOT exposed over D-Bus at all (config-file-only) and so have
+  no action.
+-->
+<policyconfig>
+  <vendor>LibreSCRS</vendor>
+  <vendor_url>https://librescrs.github.io</vendor_url>
+
+  <action id="org.librescrs.agent.configure">
+    <description>Change LibreSCRS agent signing settings</description>
+    <description xml:lang="sr">Измена подешавања потписивања LibreSCRS агента</description>
+    <description xml:lang="sr@latin">Izmena podešavanja potpisivanja LibreSCRS agenta</description>
+    <message>Authentication is required to change LibreSCRS signing settings</message>
+    <message xml:lang="sr">Потребна је потврда идентитета за измену подешавања потписивања</message>
+    <message xml:lang="sr@latin">Potrebna je potvrda identiteta za izmenu podešavanja potpisivanja</message>
+    <defaults>
+      <allow_any>yes</allow_any>
+      <allow_inactive>yes</allow_inactive>
+      <allow_active>yes</allow_active>
+    </defaults>
+  </action>
+
+  <action id="org.librescrs.agent.configure.trust">
+    <description>Change LibreSCRS agent trust and timestamping settings</description>
+    <description xml:lang="sr">Измена подешавања поверења и временског жига LibreSCRS агента</description>
+    <description xml:lang="sr@latin">Izmena podešavanja poverenja i vremenskog žiga LibreSCRS agenta</description>
+    <message>Authentication is required to change LibreSCRS trust/timestamping settings</message>
+    <message xml:lang="sr">Потребна је потврда идентитета за измену подешавања поверења/временског жига</message>
+    <message xml:lang="sr@latin">Potrebna je potvrda identiteta za izmenu podešavanja poverenja/vremenskog žiga</message>
+    <defaults>
+      <allow_any>auth_self</allow_any>
+      <allow_inactive>auth_self</allow_inactive>
+      <allow_active>auth_self</allow_active>
+    </defaults>
+  </action>
+
+  <!--
+    Card1.Sign authorization. DEFAULT-ALLOW, NOT auth_self: the signing PIN
+    collected during the operation is the human-presence proof, so polkit
+    re-authentication here would be redundant. The action exists so a site
+    policy CAN restrict which clients may request a signature; the agent's
+    rate-limiter caps abuse under the default-allow posture.
+  -->
+  <action id="org.librescrs.agent.sign">
+    <description>Produce a digital signature with a LibreSCRS smart card</description>
+    <description xml:lang="sr">Израда дигиталног потписа LibreSCRS паметном картицом</description>
+    <description xml:lang="sr@latin">Izrada digitalnog potpisa LibreSCRS pametnom karticom</description>
+    <message>Authentication is required to sign with a LibreSCRS smart card</message>
+    <message xml:lang="sr">Потребна је потврда идентитета за потписивање LibreSCRS паметном картицом</message>
+    <message xml:lang="sr@latin">Potrebna je potvrda identiteta za potpisivanje LibreSCRS pametnom karticom</message>
+    <defaults>
+      <allow_any>yes</allow_any>
+      <allow_inactive>yes</allow_inactive>
+      <allow_active>yes</allow_active>
+    </defaults>
+  </action>
+
+  <!--
+    PKCS#11 login (Pkcs11_1.Login). DEFAULT-ALLOW, NOT auth_self: same posture
+    as Card1.Sign — the PIN/CAN collected by the agent prompter during the
+    operation is the human-presence proof, so polkit re-authentication here
+    would be redundant. The action exists so a site policy CAN restrict which
+    PKCS#11 applications may use a card; the lease + rate-limiter cap abuse
+    under the default-allow posture. SignRaw/Decrypt within an active lease are
+    not re-authorized (the lease IS the grant) but are audited.
+  -->
+  <action id="org.librescrs.agent.pkcs11.login">
+    <description>Use a LibreSCRS smart card from a PKCS#11 application</description>
+    <description xml:lang="sr">Коришћење LibreSCRS паметне картице из PKCS#11 апликације</description>
+    <description xml:lang="sr@latin">Korišćenje LibreSCRS pametne kartice iz PKCS#11 aplikacije</description>
+    <message>Authentication is required for an application to use your LibreSCRS smart card</message>
+    <message xml:lang="sr">Потребна је потврда идентитета да би апликација користила вашу LibreSCRS паметну картицу</message>
+    <message xml:lang="sr@latin">Potrebna je potvrda identiteta da bi aplikacija koristila vašu LibreSCRS pametnu karticu</message>
+    <defaults>
+      <allow_any>yes</allow_any>
+      <allow_inactive>yes</allow_inactive>
+      <allow_active>yes</allow_active>
+    </defaults>
+  </action>
+
+  <!--
+    Credentials1 mutation (ManagePin / ActivateSigningKey). DEFAULT-ALLOW, NOT
+    auth_self: the PIN(s) collected during the operation are the human-presence
+    proof, so polkit re-authentication here would be redundant. The action exists
+    so a site policy CAN restrict which clients may change a card PIN or activate a
+    signing key; the agent's rate-limiter caps abuse under the default-allow
+    posture. ListCredentials is a read and is not gated by this action.
+  -->
+  <action id="org.librescrs.agent.credentials.manage">
+    <description>Manage a LibreSCRS smart card PIN or signing key</description>
+    <description xml:lang="sr">Управљање ПИН-ом или кључем за потписивање LibreSCRS паметне картице</description>
+    <description xml:lang="sr@latin">Upravljanje PIN-om ili ključem za potpisivanje LibreSCRS pametne kartice</description>
+    <message>Authentication is required to manage a LibreSCRS smart card PIN or signing key</message>
+    <message xml:lang="sr">Потребна је потврда идентитета за управљање ПИН-ом или кључем за потписивање LibreSCRS паметне картице</message>
+    <message xml:lang="sr@latin">Potrebna je potvrda identiteta za upravljanje PIN-om ili ključem za potpisivanje LibreSCRS pametne kartice</message>
+    <defaults>
+      <allow_any>yes</allow_any>
+      <allow_inactive>yes</allow_inactive>
+      <allow_active>yes</allow_active>
+    </defaults>
+  </action>
+</policyconfig>

@@ -1,0 +1,75 @@
+[Unit]
+Description=LibreSCRS Smart Card Agent
+Documentation=https://librescrs.github.io
+PartOf=graphical-session.target
+
+[Service]
+Type=notify
+ExecStart=@CMAKE_INSTALL_FULL_LIBEXECDIR@/librescrs-agent
+
+# PKCS#11 module for the native AdES signing path. libresign dlopens the LM
+# module `librescrs-pkcs11.so`; SigningService::resolvePkcs11Module() finds it
+# exe-relative in a system (FHS) install (agent in libexec, module in the
+# sibling lib/pkcs11), so this line is EMPTY for packaged installs. A dogfood
+# user install puts LM under its own prefix (~/.local/librescrs) that is NOT
+# exe-relative to the agent, so the user build fills this in with the resolved
+# absolute path — without it every Card1.Sign fails "cannot open shared object
+# file". Substituted by agent/CMakeLists.txt.
+@LIBRESCRS_PKCS11_MODULE_ENV@
+
+# Hardening. The daemon is Qt-free, headless, has no GUI-toolkit attack
+# surface, and talks PC/SC (Unix domain via /run/pcscd) + D-Bus (session
+# bus, also Unix domain) plus outbound HTTPS to timestamp authorities,
+# trusted-list / AIA endpoints, and OCSP/CRL responders for long-term
+# signature material. The inet address families below are therefore
+# required; the egress allowlist that follows keeps the network surface
+# limited to non-private (public) destinations as defence-in-depth behind
+# the in-code SSRF guard, so a tricked URL cannot reach loopback or the
+# local network.
+LimitCORE=0
+NoNewPrivileges=yes
+MemoryDenyWriteExecute=yes
+PrivateTmp=yes
+ProtectHome=read-only
+ProtectSystem=strict
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+# Egress filter (best-effort defence-in-depth only). The in-code SSRF guard
+# (isSafeTslUrl) is the primary, authoritative egress control; these
+# directives merely add a kernel-level backstop where it happens to be
+# active. IPAddress{Allow,Deny} is enforced by eBPF on the unit's cgroup, so
+# for a --user unit it only takes effect when the user manager has IP
+# accounting/filtering cgroup controllers delegated to it — on many stock
+# setups that delegation is absent and these lines are a silent no-op. They
+# cost nothing where inactive, so we keep them. Where active: permit any
+# destination, then deny loopback, link-local, multicast, and the RFC 1918 /
+# RFC 4193 private ranges (the named link-local token already covers
+# 169.254.0.0/16 and fe80::/10). systemd applies the most specific match, so
+# public addresses stay reachable while private and local ones are blocked.
+IPAddressAllow=any
+IPAddressDeny=localhost link-local multicast 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 fc00::/7
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+CapabilityBoundingSet=
+AmbientCapabilities=
+KeyringMode=private
+RemoveIPC=yes
+UMask=0077
+# Per-user writable cache mount under ProtectHome=read-only. For a --user
+# unit systemd creates this under $XDG_CACHE_HOME (e.g.
+# ~/.cache/librescrs) and exports $CACHE_DIRECTORY, which the agent's
+# cache-root resolver consumes for the TSL/AIA caches.
+CacheDirectory=librescrs
+
+[Install]
+WantedBy=graphical-session.target

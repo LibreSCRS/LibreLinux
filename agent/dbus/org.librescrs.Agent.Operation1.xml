@@ -1,0 +1,107 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN"
+ "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
+<!--
+  Long-running cancellable operation, à la PackageKit transactions. The
+  agent exports one Operation1 object per in-flight call (ReadIdentity,
+  GetPhoto, future Sign / PIN management). Clients connect to Finished
+  before reading any properties to avoid lost-update races.
+
+  Stable wire contract:
+    Phase enum (uint32):
+       0 Created          object queued behind another op on this reader
+       1 Connecting       opening LM session
+       2 AwaitingConsent  prompter dialog up
+       3 Authenticating   LM activating authenticated channel
+       4 Reading          LM reading card data
+       5 Signing          LM producing the signature on the card
+       6 Timestamping     LM applying the RFC-3161 timestamp (b-t)
+       7 Done             terminal; matches the moment Finished fired
+
+    Finished.status enum (uint32):
+       0 Ok           operation completed normally
+       1 Cancelled    operation cancelled (by client, by NameOwnerChanged, or by user-cancel in prompter)
+       2 Error        operation failed; errorCode names the category
+
+    Finished.errorCode: stable, append-only taxonomy; never renumber.
+    Always 0 when status == Ok or Cancelled; non-zero only when status ==
+    Error. The enumeration below is the canonical wire contract for the
+    taxonomy: a new code lands here first, the agent-side ErrorCode enum
+    follows, and client mirrors update on this file's diffs. The agent
+    build pins its enum against this list value-for-value
+    (agent/tests/Operation1ErrorCodeXmlGuardTest.cpp), so enum and
+    contract cannot drift apart silently:
+       0  None
+       1  CardRemoved
+       2  CredentialWrong
+       3  CredentialBlocked
+       4  CommunicationError
+       5  ParseError
+       6  UnsupportedCard
+       7  AuthFailed
+       8  PrompterError
+       9  CapabilityMissing
+      10  WatchdogTimeout
+      11  KeyNotFound          chosen cert not resolvable / certId mismatch (Sign)
+      12  KeyAmbiguous         more than one key matched the discriminator (Sign)
+      13  CertExpiredBlocked   expired signer blocked by the per-level policy (Sign)
+      14  ChainIncomplete      chain could not be completed/validated (Sign, LT family)
+      15  TsaUnreachable       timestamp authority unreachable/unconfigured (Sign)
+      16  SigningEngineError   signing engine failure not otherwise classified (Sign)
+      17  RateLimited          too many sign requests from the caller (Sign)
+      18  EngineUnavailable    signing engine/security module could not load — deployment (Sign)
+      19  InvalidDocument      document to sign is invalid/unreadable — client input (Sign)
+
+  Typed results ride on a per-operation sub-interface exported on the
+  SAME object path. Strict ordering: the sub-interface Result signal
+  fires BEFORE Finished.
+
+  Lost-Finished recovery:
+    A fast operation can emit its Result + Finished signals BEFORE a
+    client subscribes — the client learns the op object path only from
+    the originating method's return value, so there is an unavoidable
+    window between that return and its match-rule install. The read-only
+    terminal properties Completed / Status / ErrorCode let such a client
+    recover the outcome race-free: after the method returns, read
+    Completed; if true the op already finished and Status + ErrorCode
+    carry the same values the missed Finished signal would have. They are
+    valid only while Completed == true (the op object survives a short
+    cleanup grace window after Finished precisely so this read succeeds),
+    and Status / ErrorCode use the same enumerations as Finished's status
+    and errorCode arguments.
+
+  Linux-realization-only properties:
+    IsIndeterminate and WatchdogTimeoutSeconds describe this agent's
+    Linux/PC-SC realization and have no macOS-CryptoTokenKit analogue. A
+    cross-platform parity binding need not mirror them; the wire-stable
+    contract for parity purposes is Phase, the Finished signal, and the
+    Completed / Status / ErrorCode terminal triple.
+-->
+<node>
+  <interface name="org.librescrs.Agent.Operation1">
+    <property name="Phase"                  type="u" access="read"/>
+    <property name="Progress"               type="d" access="read"/>
+    <!-- IsIndeterminate: honest spinner flag — true for card-I/O ops that
+         have no meaningful completion percentage. Linux-realization-only
+         (see the doc block above); not part of the macOS parity surface.
+         No client reader yet; reserved for a progress-UI consumer. -->
+    <property name="IsIndeterminate"        type="b" access="read"/>
+    <!-- WatchdogTimeoutSeconds: Linux-realization-only (see doc block).
+         No client reader yet; reserved for diagnostics. -->
+    <property name="WatchdogTimeoutSeconds" type="u" access="read"/>
+    <!-- Terminal triple for lost-Finished recovery (see doc block). Only
+         meaningful while Completed == true. -->
+    <property name="Completed"              type="b" access="read"/>
+    <property name="Status"                 type="u" access="read"/>
+    <property name="ErrorCode"              type="u" access="read"/>
+
+    <method name="Cancel"/>
+
+    <signal name="Finished">
+      <arg name="status"      type="u"/>
+      <arg name="errorCode"   type="u"/>
+      <arg name="msgKey"      type="s"/>
+      <arg name="msgFallback" type="s"/>
+    </signal>
+  </interface>
+</node>

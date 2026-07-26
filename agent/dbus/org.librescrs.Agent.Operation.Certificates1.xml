@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN"
+ "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
+<!--
+  Typed-result sub-interface for a ReadCertificates Operation1. Exported on the
+  same object path as the parent Operation1. The Result signal fires once,
+  before Operation1.Finished, and only when the operation completed
+  successfully (status == Ok).
+
+  NO DER crosses the wire (the agent does all X.509 parsing; clients render
+  strings and link neither LM nor OpenSSL). Each entry:
+
+    s   certId          opaque stable unique id = SHA-256(DER); the handle Sign() takes
+    b   signingCapable  paired on-card private key AND a signing-suitable keyUsage
+                        (digitalSignature/nonRepudiation, or keyUsage absent)
+    a{sa{s(ssv)}} fields   group -> field -> (labelKey, labelFallback, value)
+        Deliberately the (ssv) shape — NOT Identity1's (sssv): no redundant
+        type-string (the frozen field-key namespace carries the semantics).
+        group keys:  subject | issuer | validity | publicKey | cert | ext |
+                     basicConstraints | san | ian | crlDp | aia |
+                     certificatePolicies | security
+        field keys:  subject/issuer: cn,o,ou,dn ; validity: notBefore,notAfter
+                     publicKey: algorithm,sizeBits,curveOid
+                     cert: serial,version,signatureAlgorithm (falls back to the
+                       OID when the description is empty),
+                       subjectKeyIdentifier,authorityKeyIdentifier (colon-hex,
+                       the clean key-id bytes, NOT the raw extnValue dump)
+                     ext: <oid-dotted> (value = uppercase hex of the raw
+                       extension; a critical extension's labelFallback carries
+                       a " (Critical)" suffix; the 10 OIDs served by a typed
+                       group below are never duplicated here)
+                     basicConstraints: isCa ("true"/"false"), pathLen (present
+                       only when the certificate carries a path length constraint)
+                     san / ian: ordinal-keyed fields (<type-token><n>, e.g.
+                       "dns0", "email1") — one per SubjectAltName/IssuerAltName
+                       GeneralName entry; value is the decoded string form, or
+                       uppercase hex of the raw DER for a composite variant
+                       (OtherName/X400Address/DirectoryName/EdiPartyName) the
+                       parser does not decode further
+                     crlDp: url<n> — one field per CRL distribution point URI
+                     aia: ocsp<n> / caIssuers<n> — one field per AIA
+                       OCSP-responder / CA-Issuers URI
+                     certificatePolicies: policy<n> — one field per policy OID
+                       (friendly name, else dotted-decimal; no qualifiers)
+                     security: one field per security-status token (see
+                       trustStatus below), keyed by the token itself, value ==
+                       the token — the lawful dict-key-growth route for
+                       securityStatus (there is no separate wire member for it)
+        values are UTF-8 strings (dates ISO-8601 UTC, serial/ext colon/plain hex).
+    u   keyUsageBits    stable bitmask (bit i per X.509 KeyUsage ordinal); client localizes
+    as  extendedKeyUsageOids
+    as  chainSubjectCns  ordered leaf..root subject CNs (display only). NOTE: until
+                         the Inc 6 chain ladder lands this is just [leaf CN].
+    u   trustStatus     0 Trusted, 1 UntrustedRoot, 2 BrokenChain,
+                        3 InvalidCertificate, 4 Expired, 5 Revoked,
+                        6 OfflineUnverified, 255 Unknown. Computed by the
+                        agent's TrustVerifier seam (LM Trust::TrustStore,
+                        configured from TslSources/TslCacheDir); no TSL source
+                        configured (or the trust store unavailable) yields 6
+                        OfflineUnverified. Revoked (5) is reserved vocabulary —
+                        no revocation (OCSP/CRL) check is wired yet, so the
+                        agent never emits it today. Raw u32 pass-through;
+                        clients must map any value they do not recognise to
+                        Unknown, never fail the decode.
+                        Matching security-status tokens (closed vocabulary:
+                        "trusted", "untrusted-root", "broken-chain", "invalid",
+                        "expired", "revoked", "offline-unverified") ride the
+                        "security" fields group above.
+
+  Late-subscriber recovery — GetResult():
+    The Result signal is a one-shot: a client that learns the op path only
+    from the ReadCertificates() return may subscribe too late (a hot card
+    session finishes the read faster than the client's match rules install)
+    and would lose the payload forever. GetResult() re-serves the retained
+    certificate array — the exact Result payload — while the operation is
+    still within the cleanup-grace window AND finished Ok. Returns
+    org.librescrs.Agent.Error.NoResult once the grace window has elapsed or
+    when the operation did not finish Ok. Same recovery contract as
+    Sign1.GetResult. The retained certificate metadata lives only in agent
+    RAM until the operation is evicted (cleanup-grace GC, card removal,
+    owner disconnect) — never persisted; same retention policy as the Sign1
+    artifact.
+-->
+<node>
+  <interface name="org.librescrs.Agent.Operation.Certificates1">
+    <signal name="Result">
+      <arg name="certificates" type="a(sba{sa{s(ssv)}}uasasu)"/>
+    </signal>
+
+    <method name="GetResult">
+      <arg name="certificates" type="a(sba{sa{s(ssv)}}uasasu)" direction="out"/>
+    </method>
+  </interface>
+</node>

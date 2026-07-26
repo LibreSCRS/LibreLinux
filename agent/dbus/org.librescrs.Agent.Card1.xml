@@ -1,0 +1,187 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN"
+ "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
+<!--
+  Card exposed on /org/librescrs/Agent/card/<n>. Capabilities is a bitset
+  built by PluginCapabilityResolver from the matched plugin's ATR-resolved
+  contract; consumers AND with the documented bit to test support.
+
+  Operation methods (ReadIdentity, GetPhoto, ReadCertificates, ReadTokenInfo)
+  return the object path of a freshly-created Operation1 instance. The Card
+  object refuses the call at entry — throwing
+  org.librescrs.Agent.Error.UnsupportedOnThisCard — when the relevant
+  capability bit is absent; no Operation object is created in that case
+  (polkit-style precondition gate). ReadIdentity/GetPhoto gate on IdentityData;
+  ReadCertificates and ReadTokenInfo gate on PKI (token info is PKI-adjacent).
+  Cert/token-info reading is gated only by the card's own access rules (a
+  CAN/PACE card prompts for the CAN like identity reads); there is no extra
+  application-level consent — no DER crosses the wire, the agent parses
+  everything and the Certificates1/Identity1 results carry field-groups.
+
+  PreReadAuthMethod tells a client which unlock the card will demand before
+  any data-group read, so it can pre-warn the user (e.g. "this will ask for
+  your CAN") before issuing ReadIdentity. Each value names the credential the
+  host must collect, not the protocol run against the card. Stable string
+  vocabulary:
+    "None" — no pre-read unlock required.
+    "Mrz"  — MRZ-derived secret (ICAO 9303 Basic Access Control or PACE).
+    "Can"  — Card Access Number (PACE).
+  Resolved from the matched plugin's profile during capability resolution.
+  An unmatched card reports "None".
+
+  CardType (feature-gated "card-type"): the card's type identifier — the SAME
+  string GUI plugin dispatch keys on (LM's CardData::cardType /
+  CardPlugin::pluginId()). Empty until known: an empty string means either the
+  held-session candidate list resolved to more than one plugin (ambiguous) or
+  has not resolved yet, NOT "no card type exists". Two ways it becomes known:
+    - at card-object creation, when the held-session candidate list resolves
+      to EXACTLY ONE plugin (the same deferred resolution point that yields
+      Capabilities/PreReadAuthMethod above);
+    - authoritatively, from a completed ReadIdentity/GetPhoto read's
+      CardData::cardType — pushed via PropertiesChanged on an
+      already-published card, so a client that discovered the card before its
+      cardType resolved still converges.
+  Atr: the card's full ATR as uppercase hex, no separators. Known from
+  creation onward (unlike CardType, this never needs a live PropertiesChanged
+  push) and never changes for the card's lifetime.
+-->
+<node>
+  <interface name="org.librescrs.Agent.Card1">
+    <property name="Capabilities"      type="u" access="read"/>
+    <property name="Reader"            type="o" access="read"/>
+    <property name="PreReadAuthMethod" type="s" access="read"/>
+    <property name="CardType"          type="s" access="read"/>
+    <property name="Atr"               type="s" access="read"/>
+
+    <method name="ReadIdentity">
+      <arg name="operation" type="o" direction="out"/>
+    </method>
+
+    <method name="GetPhoto">
+      <arg name="operation" type="o" direction="out"/>
+    </method>
+
+    <method name="ReadCertificates">
+      <arg name="operation" type="o" direction="out"/>
+    </method>
+
+    <!--
+      ReadTokenInfo: lightweight token-info read (PKCS#15 TokenInfo or
+      equivalent). Result rides the EXISTING Operation.Identity1.Result shape
+      (a single "token" group: label/serial_number/manufacturer) — no new
+      result interface. Gates on PKI (token info is PKI-adjacent, the same
+      bit ReadCertificates uses); throws UnsupportedOnThisCard when absent
+      (no Operation minted). A plugin that does not implement token info (the
+      LM CardPlugin::readTokenInfo base default) or that found nothing
+      answers a PRESENT "token" group with ZERO fields — a SUCCESS, never an
+      error (the spec's empty-group resilience).
+    -->
+    <method name="ReadTokenInfo">
+      <arg name="operation" type="o" direction="out"/>
+    </method>
+
+    <!--
+      Sign: produce an AdES signature over the document on inputFd using the
+      certificate identified by certId (from a prior ReadCertificates result —
+      auto-select is never performed). Gates on PKI; throws
+      org.librescrs.Agent.Error.UnsupportedOnThisCard when absent (no Operation
+      minted). The PIN collected during the operation IS the human consent.
+
+      certId   REQUIRED, opaque, == a Certificates1 result certId.
+      inputFd  read-only fd/memfd of the document. Max 256 MiB — oversize is
+               rejected at method entry with Error.InputTooLarge; a zero-byte
+               document with Error.UnsupportedSignatureParameter (no Operation).
+      options  a{sv}, all non-secret:
+                 "format"      s  auto|pades|cades|xades|jades|asice  (NO asics)
+                 "level"       s  b-b|b-t|b-lt|b-lta
+                 "packaging"   s  auto|enveloped|detached  (NO enveloping)
+                 "allowExpired" b  B-B only; ignored for the timestamped family
+                 "displayName" s | "reason" s | "location" s   (client chrome,
+                               rendered untrusted; never forged into the prompt)
+                 "tsaUrl"      s  per-request TSA override; https + non-empty
+                               host only, and only meaningful for the
+                               timestamped/long-term family — paired with
+                               level "b-b" it is a method-entry rejection.
+                               Absent uses the agent's configured TsaUrls
+                               default. Requires the "tsa-url" HelloAck-
+                               equivalent feature (Manager1.Features).
+                 "visualSignature" a{sv}  PAdES-only visible-signature
+                               appearance; rejected on any other format.
+                               ALL six keys are required together once this
+                               map is present: "page" u (0-based), "x"/"y"/
+                               "width"/"height" d (PDF user units; width/
+                               height must be positive), "text" s (may
+                               contain "{placeholder}" tokens the engine
+                               resolves at sign time). Requires the
+                               "visual-sign" feature.
+               format=auto / packaging=auto resolve via an agent-side magic-byte
+               sniffer to a concrete value reported back in Sign1.meta.
+               Out-of-vocabulary values -> Error.UnsupportedSignatureParameter.
+
+      Method-entry errors (no Operation minted): UnsupportedOnThisCard,
+      UnsupportedSignatureParameter, InputTooLarge, RateLimited, NotAuthorized.
+      All in-operation failures surface on Operation1.Finished (KeyNotFound,
+      KeyAmbiguous, CertExpiredBlocked, …; see Operation1.xml errorCode table).
+    -->
+    <method name="Sign">
+      <arg name="certId"    type="s"    direction="in"/>
+      <arg name="inputFd"   type="h"    direction="in"/>
+      <arg name="options"   type="a{sv}" direction="in"/>
+      <arg name="operation" type="o"    direction="out"/>
+    </method>
+
+    <!--
+      SignBatch: produce an AdES signature over EACH of `documents` using the
+      SAME certificate (certId) and the SAME options, under ONE consent +
+      credential prompt for the whole batch — never one prompt per document.
+      Gates on PKI; throws org.librescrs.Agent.Error.UnsupportedOnThisCard
+      when absent (no Operation minted).
+
+      documents  a(sh), 1-12 entries (bounded by the bus's per-message fd
+                 budget, shared by this request's document fds and the
+                 Result signal's artifact fds). 0 or more than 12 is a
+                 method-entry Error.InvalidRequest (no Operation minted).
+                 Each entry:
+                   s  displayName  client-supplied chrome — untrusted,
+                                   rendered (sanitized) in the consent
+                                   prompt's enumerated file list AND in the
+                                   matching SignBatch1.Result row.
+                   h  inputFd      read-only fd/memfd of that document.
+                                   Same 256 MiB cap + regular-file-only rule
+                                   as Sign's inputFd, checked per document
+                                   at method entry.
+      certId     REQUIRED, opaque, == a Certificates1 result certId — the
+                 SAME cert signs every document in the batch.
+      options    a{sv}, IDENTICAL vocabulary to Sign's own options (format /
+                 level / packaging / allowExpired / reason / location /
+                 tsaUrl / visualSignature) — the batch shares ONE resolved
+                 format/level/packaging for every document; format=auto
+                 sniffs off the FIRST document only. A "displayName" key (if
+                 sent) is ignored here: each document's OWN displayName
+                 above is what is used.
+
+      One consent, one credential: the PIN is collected once (via the
+      prompter) and held agent-side only for the batch's duration, wiped on
+      every completion path. A wrong or blocked credential HALTS the
+      remaining documents (they are never attempted; their row inherits the
+      SAME halt code) rather than re-prompting per file. Per-row outcomes,
+      including the halt, surface on Operation.SignBatch1.Result — see that
+      interface's doc block for the row shape and the failed-row
+      zero-length-sealed-memfd convention. The rate limiter charges this
+      call as ONE attempt, exactly like a single Sign, regardless of how
+      many documents the batch carries.
+
+      Method-entry errors (no Operation minted): UnsupportedOnThisCard,
+      InvalidRequest (document count outside 1-12), UnsupportedSignatureParameter,
+      InputTooLarge, RateLimited, NotAuthorized. All in-operation failures
+      surface per-row on Operation.SignBatch1.Result / the aggregate
+      Operation1.Finished (see that interface's errorCode table).
+    -->
+    <method name="SignBatch">
+      <arg name="documents" type="a(sh)"  direction="in"/>
+      <arg name="certId"    type="s"     direction="in"/>
+      <arg name="options"   type="a{sv}" direction="in"/>
+      <arg name="operation" type="o"     direction="out"/>
+    </method>
+  </interface>
+</node>

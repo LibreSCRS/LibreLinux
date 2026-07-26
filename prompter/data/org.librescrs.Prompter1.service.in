@@ -1,0 +1,4 @@
+[D-BUS Service]
+Name=org.librescrs.Prompter1
+Exec=@CMAKE_INSTALL_FULL_LIBEXECDIR@/librescrs-pinentry-kde
+SystemdService=librescrs-pinentry-kde.service

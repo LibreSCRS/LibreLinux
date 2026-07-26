@@ -1,0 +1,7 @@
+#!/usr/bin/make -f
+# Initial stub.
+%:
+	dh $@ --buildsystem=cmake --builddirectory=build
+
+override_dh_auto_configure:
+	dh_auto_configure -- -GNinja -DCMAKE_BUILD_TYPE=RelWithDebInfo

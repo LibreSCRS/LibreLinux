@@ -1,0 +1,43 @@
+[Unit]
+Description=LibreSCRS PKCS#11 forwarding server (p11-kit, out-of-process isolation)
+Documentation=https://librescrs.github.io
+Documentation=man:p11-kit(8)
+PartOf=graphical-session.target
+
+[Service]
+# Deployment (b): expose the agent-proxy backend module out-of-process behind a
+# per-user p11-kit server socket, so consumers load the stock p11-kit-client.so
+# (server-address: in librescrs-agent.module) instead of dlopen'ing our .so in
+# their own address space. Deployment (a) — the in-process default — needs NONE
+# of this; install/enable this unit only to opt into isolation.
+#
+# `p11-kit server` runs in the foreground (it has no daemonising option besides
+# the shell-snippet form), so Type=simple. The verified flags on this host are
+# -p/--provider (the backend module) and -n/--name (the socket basename under
+# $XDG_RUNTIME_DIR/p11-kit/); there is no fixed-absolute-path flag, so the
+# stable socket path is $XDG_RUNTIME_DIR/p11-kit/<name>. The trailing token spec
+# `pkcs11:` selects all tokens the backend exposes.
+Type=simple
+ExecStart=/usr/bin/p11-kit server --foreground --name librescrs --provider @LIBRESCRS_P11_MODULE_DIR@/librescrs-pkcs11-agent.so pkcs11:
+
+# The server creates its unix socket srw------- (0600, owner-only) — empirically
+# verified on p11-kit. UMask=0077 forces owner-only even if a future p11-kit
+# loosens that default; harmless where the socket is already 0600.
+UMask=0077
+
+# Lightweight hardening: the forwarding server holds no card secret (the agent
+# does) and only bridges the local D-Bus shim to a local unix socket.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictSUIDSGID=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+RemoveIPC=yes
+
+[Install]
+WantedBy=graphical-session.target

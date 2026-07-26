@@ -1,0 +1,104 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN"
+ "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
+<!--
+  Private interface between the LibreSCRS agent (D-Bus client) and a prompter
+  binary (e.g. librescrs-pinentry-kde). The prompter claims the well-known
+  name on the session bus; the agent's PrompterClient calls RequestSecret.
+  The collected secret is returned as a sealed memfd (passed via SCM_RIGHTS,
+  bypassing the dbus-daemon's message buffer for the secret bytes).
+-->
+<node>
+  <interface name="org.librescrs.Prompter1">
+    <!--
+      RequestSecret: ask the user for a single secret value.
+
+      Inputs:
+        kind     "pin" | "can" | "mrz" — selects widget and validation.
+        options  optional metadata, recognised keys:
+                   "title"       (s) prompt heading
+                   "description" (s) explanatory text
+                   "requester"   (s) human-readable client identity
+                   "artifact"    (s) what the operation acts on (filename / hash)
+                   "artifacts"   (as) UNTRUSTED per-document display names of a
+                                 batch signing request; rendered client-supplied,
+                                 in the description zone's plain-text treatment —
+                                 never inside the trusted "artifact" framing.
+                                 Absent for every prompt that is not a batch sign.
+                   "min_length"  (u) numeric kinds
+                   "max_length"  (u) numeric kinds
+                   "attempt"     (u) retry context: which attempt this
+                                 prompt is (2 = second attempt, ...); absent
+                                 on the first-ever prompt for a card
+                   "last_error"  (s) retry context: msgKey of the failure
+                                 that triggered the retry; absent alongside
+                                 "attempt"
+
+      Outputs:
+        status        "ok" | "cancelled" | "error" | "unauthorized"
+                      ("unauthorized" is the fail-closed rejection of a caller
+                      whose peer credentials are not the agent — a non-agent
+                      process trying to drive the prompter directly; the agent,
+                      the only authorized caller, never receives it.)
+        secret_fd     sealed memfd containing the secret bytes (size() can be 0
+                      on cancellation/error); recipient MUST read, scrub into a
+                      Secure::String, and close immediately
+        user_message  optional localised explanation (empty on ok)
+    -->
+    <method name="RequestSecret">
+      <arg name="kind"         type="s"    direction="in"/>
+      <arg name="options"      type="a{sv}" direction="in"/>
+      <arg name="status"       type="s"    direction="out"/>
+      <arg name="secret_fd"    type="h"    direction="out"/>
+      <arg name="user_message" type="s"    direction="out"/>
+    </method>
+
+    <!--
+      RequestSecrets: ask the user for a related PAIR of secret values in one
+      dialog. The only kind so far is the PIN change prompt.
+
+      Inputs:
+        kind     "change_pin" — current PIN + new PIN + confirmation. The
+                 confirmation is validated inside the prompter and never
+                 crosses this interface.
+        options  optional metadata; recognises the RequestSecret display keys
+                 ("title", "description", "requester", "artifact") plus:
+                   "primary_min_length" (u) bounds of the current-PIN field
+                   "primary_max_length" (u)
+                   "new_min_length"     (u) bounds of the new AND confirm fields
+                   "new_max_length"     (u)
+                   "card_label"         (s) human-readable card name
+                   "pin_label"          (s) human-readable PIN role name
+
+      Outputs:
+        status        same vocabulary as RequestSecret ("ok" | "cancelled" |
+                      "error" | "unauthorized")
+        primary_fd    sealed memfd with the CURRENT secret; zero-length
+                      whenever status is not "ok"
+        secondary_fd  sealed memfd with the NEW secret; zero-length whenever
+                      status is not "ok"
+        user_message  optional localised explanation (empty on ok)
+
+      Both fds follow the RequestSecret rules: always real descriptors,
+      sealed before hand-off; the recipient MUST read, scrub into
+      Secure::Strings, and close immediately.
+    -->
+    <method name="RequestSecrets">
+      <arg name="kind"         type="s"    direction="in"/>
+      <arg name="options"      type="a{sv}" direction="in"/>
+      <arg name="status"       type="s"    direction="out"/>
+      <arg name="primary_fd"   type="h"    direction="out"/>
+      <arg name="secondary_fd" type="h"    direction="out"/>
+      <arg name="user_message" type="s"    direction="out"/>
+    </method>
+
+    <!--
+      Dismiss whatever prompt is currently shown. The in-flight
+      RequestSecret or RequestSecrets call (if any) returns immediately
+      with status = "cancelled", an empty user_message, and — for
+      RequestSecrets — two zero-length sealed fds. Idempotent: calling
+      CancelCurrent when no prompt is active is a no-op.
+    -->
+    <method name="CancelCurrent"/>
+  </interface>
+</node>

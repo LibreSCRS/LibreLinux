@@ -1,0 +1,18 @@
+Source: librelinux
+Section: utils
+Priority: optional
+Maintainer: hirashix0 <noreply@librescrs.example>
+Build-Depends: debhelper-compat (= 13), cmake (>= 3.24), ninja-build,
+ libsdbus-c++-dev (>= 2.0), libsystemd-dev, pkg-config,
+ librescrs-middleware-dev (>= 4.2)
+Standards-Version: 4.6.0
+Homepage: https://librescrs.github.io
+
+Package: librescrs-agent
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends},
+ librescrs-middleware (>= 4.2), libsdbus-c++0 (>= 2.0)
+Description: LibreSCRS smart-card session agent (D-Bus)
+ Per-user, headless, Qt-free D-Bus session service that is the sole owner of
+ smart-card access for the LibreSCRS ecosystem. Desktop-agnostic — works on
+ KDE, GNOME, or any other Linux desktop. (Initial stub — flesh out before tagging.)

@@ -1,0 +1,104 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN"
+ "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
+<!--
+  Low-level PKCS#11 broker surface, hosted ONCE on /org/librescrs/Agent (the
+  manager path). Distinct from the high-level Card1.Sign (AdES) path: this is the
+  raw RSA primitive the PKCS#11 module (librescrs-pkcs11-agent.so) consumes.
+
+  All methods take a 'reader' object path (an exported Reader1) + 'certId' (a
+  Certificates1 certId, == sha256hex of the cert DER) to address the exact card +
+  key. The caller is resolved via pidfd peer creds (CallerIdentity); SignRaw and
+  Decrypt are polkit-gated (org.librescrs.agent.pkcs11.login) and lease-scoped.
+  PIN/CAN are NEVER passed here — they are collected by the agent prompter
+  (CKF_PROTECTED_AUTHENTICATION_PATH on the module side).
+
+  ASYNC HANDOFF: every card-touching method (CertDer, PublicKey, Login, SignRaw,
+  Decrypt) is annotated org.freedesktop.DBus.Method.Async="server". The agent
+  validates on the bus-dispatch thread (cheap: authz / lease / card-resolve),
+  then hands the actual card I/O to the per-reader worker thread and RELEASES the
+  dispatch thread immediately — the worker fulfils the deferred reply on
+  completion. This keeps the single bus event loop responsive to other clients
+  (and to SIGTERM) for the whole duration of an in-flight card op (a ~1 s sign,
+  or a stuck op), instead of parking it on a blocking worker wait. Logout is the
+  only synchronous method here: it is pure lease bookkeeping and touches no card.
+
+  CertDer:   return the cert DER for certId (public data; no consent, no lease).
+  PublicKey: return the RSA public key (modulus + public exponent) for certId,
+             extracted from the cert's SubjectPublicKeyInfo (public data; the
+             crypto-free module serves CKA_MODULUS / CKA_PUBLIC_EXPONENT from
+             these, which ssh-pkcs11 needs to build the public key).
+  SignRaw:   RSA PKCS#1 v1.5 sign over the supplied DigestInfo-or-raw bytes.
+  Decrypt:   RSA PKCS#1 v1.5 decrypt of an RSA block.
+
+  Errors (no result): Error.UnknownCard, Error.KeyNotFound, Error.NotAuthorized,
+  Error.UserNotLoggedIn (lease expired/absent → module maps to
+  CKR_USER_NOT_LOGGED_IN), Error.AuthFailed, Error.RateLimited (SignRaw/Decrypt:
+  the cold-lease first-op PIN-prompt rate limit tripped → module maps to
+  CKR_FUNCTION_REJECTED), Error.CommunicationError.
+-->
+<node>
+  <interface name="org.librescrs.Agent.Pkcs11_1">
+    <!-- Public cert bytes for CKA_VALUE. No consent (public data). -->
+    <method name="CertDer">
+      <annotation name="org.freedesktop.DBus.Method.Async" value="server"/>
+      <arg name="reader" type="o"  direction="in"/>
+      <arg name="certId" type="s"  direction="in"/>
+      <arg name="der"    type="ay" direction="out"/>
+    </method>
+
+    <!-- RSA public key (modulus + public exponent) for certId, extracted from
+         the cert's SubjectPublicKeyInfo. Public data: no consent, no lease. The
+         crypto-free PKCS#11 module serves CKA_MODULUS / CKA_PUBLIC_EXPONENT from
+         these (ssh-pkcs11 builds the pubkey from them). Both are unpadded
+         big-endian (PKCS#11 CKA_* convention: no leading zero byte). Error.
+         KeyNotFound if certId is unknown; Error.NotSupported if the key is not
+         RSA. -->
+    <method name="PublicKey">
+      <annotation name="org.freedesktop.DBus.Method.Async" value="server"/>
+      <arg name="reader"   type="o"  direction="in"/>
+      <arg name="certId"   type="s"  direction="in"/>
+      <arg name="modulus"  type="ay" direction="out"/>
+      <arg name="exponent" type="ay" direction="out"/>
+    </method>
+
+    <!-- Establish/refresh the login lease for (caller, card). Optimistic and
+         NON-prompting: it only opens the card channel — the agent prompter
+         (PIN, and CAN if PACE) is raised on the first SignRaw/Decrypt of a
+         cold lease, not here. Returns the lease's idle-timeout seconds so the
+         module can mirror it. The lease is (caller, card)-scoped, not per-cert
+         (C_Login is per-token), so no certId is taken. -->
+    <method name="Login">
+      <annotation name="org.freedesktop.DBus.Method.Async" value="server"/>
+      <arg name="reader"           type="o" direction="in"/>
+      <arg name="idleTimeoutSecs"  type="u" direction="out"/>
+    </method>
+
+    <!-- Drop the lease for (caller, card). Idempotent. -->
+    <method name="Logout">
+      <arg name="reader" type="o" direction="in"/>
+    </method>
+
+    <!-- Raw RSA PKCS#1 v1.5 sign. 'input' is the already-DigestInfo-prefixed
+         bytes the module built (CKM_RSA_PKCS: caller-supplied block;
+         CKM_SHAxxx_RSA_PKCS: module prepends the DigestInfo). Requires a live
+         lease; else Error.UserNotLoggedIn. -->
+    <method name="SignRaw">
+      <annotation name="org.freedesktop.DBus.Method.Async" value="server"/>
+      <arg name="reader"    type="o"  direction="in"/>
+      <arg name="certId"    type="s"  direction="in"/>
+      <arg name="input"     type="ay" direction="in"/>
+      <arg name="signature" type="ay" direction="out"/>
+    </method>
+
+    <!-- Raw RSA PKCS#1 v1.5 decrypt. 'ciphertext' is the RSA block; returns the
+         recovered plaintext. Requires a live lease. Every call audited. -->
+    <method name="Decrypt">
+      <annotation name="org.freedesktop.DBus.Method.Async" value="server"/>
+      <arg name="reader"     type="o"  direction="in"/>
+      <arg name="certId"     type="s"  direction="in"/>
+      <arg name="ciphertext" type="ay" direction="in"/>
+      <arg name="plaintext"  type="ay" direction="out"/>
+    </method>
+  </interface>
+</node>

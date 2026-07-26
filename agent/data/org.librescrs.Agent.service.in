@@ -1,0 +1,4 @@
+[D-BUS Service]
+Name=org.librescrs.Agent
+Exec=@CMAKE_INSTALL_FULL_LIBEXECDIR@/librescrs-agent
+SystemdService=librescrs-agent.service
