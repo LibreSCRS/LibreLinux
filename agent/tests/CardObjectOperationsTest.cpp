@@ -665,16 +665,18 @@ TEST(CardObjectOperations, SignRejectsANonHttpsTsaUrl)
     serverConn->leaveEventLoop();
 }
 
-TEST(CardObjectOperations, SignRejectsTsaUrlPairedWithTheBaselineLevel)
+TEST(CardObjectOperations, SignRejectsTsaUrlPairedWithAnExplicitBaselineLevel)
 {
     auto serverConn = sdbus::createSessionBusConnection();
     ASSERT_NE(serverConn, nullptr);
     serverConn->requestName(sdbus::ServiceName{"org.librescrs.Agent.Test.SignTsaUrlBb"});
 
     OperationManager mgr(nullptr);
-    // SignFixture's config has no TsaUrls configured, so an absent/defaulted
-    // level resolves to "b-b" (SignatureParams::resolveSignLevel) -- exactly
-    // the case a per-request tsaUrl override can never apply to.
+    // An EXPLICIT b-b is the only way to land here now: a caller who names the
+    // baseline and supplies a timestamp authority has asked for two things that
+    // contradict each other, and gets told so. A request that DEFERS the level
+    // no longer reaches this rejection -- see the case below, which is what the
+    // per-request URL was always meant to do.
     SignFixture fix{"tsaurlbb"};
     CardObject card(*serverConn, sdbus::ObjectPath{kCardPath}, kPkiBit, sdbus::ObjectPath{kReaderPath}, mgr,
                     fix.deps());
@@ -688,10 +690,114 @@ TEST(CardObjectOperations, SignRejectsTsaUrlPairedWithTheBaselineLevel)
     const int fd = makeInputMemfd(std::string_view{"\x30\x82\x01\x00", 4});
     ASSERT_GE(fd, 0);
     try {
-        callSign(*proxy, fd, {{"tsaUrl", sdbus::Variant{std::string{"https://tsa.example.com/ts"}}}});
-        ADD_FAILURE() << "expected tsaUrl paired with the baseline (b-b) level to be rejected";
+        callSign(*proxy, fd,
+                 {{"level", sdbus::Variant{std::string{"b-b"}}},
+                  {"tsaUrl", sdbus::Variant{std::string{"https://tsa.example.com/ts"}}}});
+        ADD_FAILURE() << "expected tsaUrl paired with an explicit baseline (b-b) level to be rejected";
     } catch (const sdbus::Error& e) {
         EXPECT_EQ(e.getName(), "org.librescrs.Agent.Error.UnsupportedSignatureParameter");
+    }
+
+    clientConn->leaveEventLoop();
+    serverConn->leaveEventLoop();
+}
+
+// ---- the "let the agent decide" level sentinel -----------------------
+
+TEST(CardObjectOperations, SignAcceptsTheAgentDecidesLevelSentinel)
+{
+    auto serverConn = sdbus::createSessionBusConnection();
+    ASSERT_NE(serverConn, nullptr);
+    serverConn->requestName(sdbus::ServiceName{"org.librescrs.Agent.Test.SignLevelAuto"});
+
+    OperationManager mgr(nullptr);
+    SignFixture fix{"levelauto"};
+    CardObject card(*serverConn, sdbus::ObjectPath{kCardPath}, kPkiBit, sdbus::ObjectPath{kReaderPath}, mgr,
+                    fix.deps());
+    serverConn->enterEventLoopAsync();
+
+    auto clientConn = sdbus::createSessionBusConnection();
+    clientConn->enterEventLoopAsync();
+    auto proxy = sdbus::createProxy(*clientConn, sdbus::ServiceName{"org.librescrs.Agent.Test.SignLevelAuto"},
+                                    sdbus::ObjectPath{kCardPath});
+
+    // "auto" is what format and packaging already accepted; level rejected it,
+    // so the same intent had to be spelled two ways depending on the transport.
+    // An Operation is minted, which means no method-entry rejection.
+    const int fd = makeInputMemfd(std::string_view{"\x30\x82\x01\x00", 4});
+    ASSERT_GE(fd, 0);
+    const auto opPath = callSign(*proxy, fd, {{"level", sdbus::Variant{std::string{"auto"}}}});
+    EXPECT_TRUE(std::string{opPath}.starts_with("/org/librescrs/Agent/op/")) << "got " << std::string{opPath};
+    std::this_thread::sleep_for(50ms);
+
+    clientConn->leaveEventLoop();
+    serverConn->leaveEventLoop();
+}
+
+TEST(CardObjectOperations, SignAcceptsATsaUrlAlongsideTheAgentDecidesSentinel)
+{
+    auto serverConn = sdbus::createSessionBusConnection();
+    ASSERT_NE(serverConn, nullptr);
+    serverConn->requestName(sdbus::ServiceName{"org.librescrs.Agent.Test.SignAutoTsa"});
+
+    OperationManager mgr(nullptr);
+    // No TsaUrls configured, so before this the defaulted level resolved to b-b
+    // and the request was refused for carrying a tsaUrl at that level -- the
+    // per-request override could never be used on its own. The supplied URL now
+    // counts toward "a timestamp authority is available", so the defaulted
+    // baseline lifts to b-t and the request stands.
+    SignFixture fix{"autotsa"};
+    CardObject card(*serverConn, sdbus::ObjectPath{kCardPath}, kPkiBit, sdbus::ObjectPath{kReaderPath}, mgr,
+                    fix.deps());
+    serverConn->enterEventLoopAsync();
+
+    auto clientConn = sdbus::createSessionBusConnection();
+    clientConn->enterEventLoopAsync();
+    auto proxy = sdbus::createProxy(*clientConn, sdbus::ServiceName{"org.librescrs.Agent.Test.SignAutoTsa"},
+                                    sdbus::ObjectPath{kCardPath});
+
+    const int fd = makeInputMemfd(std::string_view{"\x30\x82\x01\x00", 4});
+    ASSERT_GE(fd, 0);
+    const auto opPath = callSign(*proxy, fd,
+                                 {{"level", sdbus::Variant{std::string{"auto"}}},
+                                  {"tsaUrl", sdbus::Variant{std::string{"https://tsa.example/p"}}}});
+    EXPECT_TRUE(std::string{opPath}.starts_with("/org/librescrs/Agent/op/")) << "got " << std::string{opPath};
+    std::this_thread::sleep_for(50ms);
+
+    clientConn->leaveEventLoop();
+    serverConn->leaveEventLoop();
+}
+
+// A malformed tsaUrl must be rejected on its own terms, not swallowed because
+// it happened to lift the level first. This is why the URL is validated before
+// the level is resolved rather than after.
+TEST(CardObjectOperations, SignRejectsAMalformedTsaUrlEvenWhenTheLevelIsDeferred)
+{
+    auto serverConn = sdbus::createSessionBusConnection();
+    ASSERT_NE(serverConn, nullptr);
+    serverConn->requestName(sdbus::ServiceName{"org.librescrs.Agent.Test.SignAutoBadTsa"});
+
+    OperationManager mgr(nullptr);
+    SignFixture fix{"autobadtsa"};
+    CardObject card(*serverConn, sdbus::ObjectPath{kCardPath}, kPkiBit, sdbus::ObjectPath{kReaderPath}, mgr,
+                    fix.deps());
+    serverConn->enterEventLoopAsync();
+
+    auto clientConn = sdbus::createSessionBusConnection();
+    clientConn->enterEventLoopAsync();
+    auto proxy = sdbus::createProxy(*clientConn, sdbus::ServiceName{"org.librescrs.Agent.Test.SignAutoBadTsa"},
+                                    sdbus::ObjectPath{kCardPath});
+
+    const int fd = makeInputMemfd(std::string_view{"\x30\x82\x01\x00", 4});
+    ASSERT_GE(fd, 0);
+    try {
+        callSign(*proxy, fd,
+                 {{"level", sdbus::Variant{std::string{"auto"}}},
+                  {"tsaUrl", sdbus::Variant{std::string{"http://tsa.example.com"}}}});
+        ADD_FAILURE() << "expected a non-https tsaUrl to be rejected even with a deferred level";
+    } catch (const sdbus::Error& e) {
+        EXPECT_EQ(e.getName(), "org.librescrs.Agent.Error.UnsupportedSignatureParameter");
+        EXPECT_NE(std::string{e.getMessage()}.find("https"), std::string::npos) << "got: " << e.getMessage();
     }
 
     clientConn->leaveEventLoop();

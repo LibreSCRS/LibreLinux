@@ -93,7 +93,7 @@
                document with Error.UnsupportedSignatureParameter (no Operation).
       options  a{sv}, all non-secret:
                  "format"      s  auto|pades|cades|xades|jades|asice  (NO asics)
-                 "level"       s  b-b|b-t|b-lt|b-lta
+                 "level"       s  auto|b-b|b-t|b-lt|b-lta
                  "packaging"   s  auto|enveloped|detached  (NO enveloping)
                  "allowExpired" b  B-B only; ignored for the timestamped family
                  "displayName" s | "reason" s | "location" s   (client chrome,

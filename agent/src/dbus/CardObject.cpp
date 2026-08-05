@@ -268,38 +268,13 @@ ResolvedSignOptions resolveSignOptions(const std::map<std::string, sdbus::Varian
         throw sdbus::Error{sdbus::Error::Name{kBadParamErrName}, "Unsupported signature format"};
     }
 
-    // Resolve the effective level per request (D-b): an explicit option always
-    // wins; an absent/defaulted "b-b" upgrades to "b-t" when a TSA is configured.
-    std::optional<std::string> requestedLevel;
-    if (const auto it = options.find("level"); it != options.end()) {
-        try {
-            requestedLevel = it->second.get<std::string>();
-        } catch (const sdbus::Error&) {
-            throw sdbus::Error{sdbus::Error::Name{kBadParamErrName}, "level must be a string"};
-        }
-    }
-    std::string level = sp::resolveSignLevel(requestedLevel, config.defaultLevel(), !config.tsaUrls().empty());
-    if (!sp::isKnownLevel(level)) {
-        throw sdbus::Error{sdbus::Error::Name{kBadParamErrName}, "Unsupported signature level"};
-    }
-    // This release produces the whole baseline AdES family (b-b, b-t, b-lt,
-    // b-lta). Fail closed at the agent for anything outside it.
-    if (!sp::isImplementedSignLevel(level)) {
-        throw sdbus::Error{sdbus::Error::Name{kBadParamErrName}, "Only the " + sp::implementedSignLevelsDisplay() +
-                                                                     " signature levels are supported in this release"};
-    }
-
-    std::string packaging = optString(options, "packaging", "auto");
-    if (packaging == "auto" || packaging.empty()) {
-        packaging = sp::defaultPackagingFor(format);
-    }
-    if (!sp::isKnownPackaging(packaging)) {
-        throw sdbus::Error{sdbus::Error::Name{kBadParamErrName}, "Unsupported packaging mode"};
-    }
-
     // tsaUrl overrides the configured TSA for THIS sign only -- https +
-    // non-empty host, and meaningful only for the timestamped/long-term
-    // family (paired with level "b-b" it is a method-entry rejection).
+    // non-empty host. Read and validated BEFORE the level is resolved, because
+    // it counts toward "a timestamp authority is available" below: doing it in
+    // this order means a malformed URL is rejected on its own terms instead of
+    // first lifting the level it is about to be rejected against. Whether the
+    // RESOLVED level admits a tsaUrl at all is checked further down, once there
+    // is a level to check it against.
     std::string tsaUrl;
     if (const auto it = options.find("tsaUrl"); it != options.end()) {
         try {
@@ -311,10 +286,51 @@ ResolvedSignOptions resolveSignOptions(const std::map<std::string, sdbus::Varian
             throw sdbus::Error{sdbus::Error::Name{kBadParamErrName},
                                "tsaUrl must be an https URL with a non-empty host"};
         }
-        if (level == "b-b") {
-            throw sdbus::Error{sdbus::Error::Name{kBadParamErrName},
-                               "tsaUrl is only meaningful for the timestamped/long-term family (b-t/b-lt/b-lta)"};
+    }
+
+    // Resolve the effective level per request: an explicit option always wins;
+    // a request that DEFERS -- an absent key, or the "auto" sentinel the other
+    // two option vocabularies already accepted -- takes the configured default,
+    // and a defaulted "b-b" upgrades to "b-t" when a timestamp authority is
+    // available. The `try` still wraps only the extraction, so a non-string
+    // level keeps its own specific rejection.
+    std::optional<std::string> requestedLevel;
+    if (const auto it = options.find("level"); it != options.end()) {
+        try {
+            requestedLevel = sp::requestedLevelFrom(it->second.get<std::string>());
+        } catch (const sdbus::Error&) {
+            throw sdbus::Error{sdbus::Error::Name{kBadParamErrName}, "level must be a string"};
         }
+    }
+    // A per-request tsaUrl counts toward "a timestamp authority is available",
+    // so a DEFAULTED baseline lifts to b-t instead of resolving to b-b and then
+    // being rejected for carrying a tsaUrl at all.
+    const bool hasTsa = !config.tsaUrls().empty() || !tsaUrl.empty();
+    std::string level = sp::resolveSignLevel(requestedLevel, config.defaultLevel(), hasTsa);
+    if (!sp::isKnownLevel(level)) {
+        throw sdbus::Error{sdbus::Error::Name{kBadParamErrName}, "Unsupported signature level"};
+    }
+    // This release produces the whole baseline AdES family (b-b, b-t, b-lt,
+    // b-lta). Fail closed at the agent for anything outside it.
+    if (!sp::isImplementedSignLevel(level)) {
+        throw sdbus::Error{sdbus::Error::Name{kBadParamErrName}, "Only the " + sp::implementedSignLevelsDisplay() +
+                                                                     " signature levels are supported in this release"};
+    }
+    // A tsaUrl is meaningful only for the timestamped/long-term family. Checked
+    // against the RESOLVED level: a request that deferred and lifted to b-t on
+    // the strength of this very URL is legitimate, and only an explicit b-b can
+    // still land here.
+    if (!tsaUrl.empty() && level == "b-b") {
+        throw sdbus::Error{sdbus::Error::Name{kBadParamErrName},
+                           "tsaUrl is only meaningful for the timestamped/long-term family (b-t/b-lt/b-lta)"};
+    }
+
+    std::string packaging = optString(options, "packaging", "auto");
+    if (packaging == "auto" || packaging.empty()) {
+        packaging = sp::defaultPackagingFor(format);
+    }
+    if (!sp::isKnownPackaging(packaging)) {
+        throw sdbus::Error{sdbus::Error::Name{kBadParamErrName}, "Unsupported packaging mode"};
     }
 
     // visualSignature attaches a PAdES visible-signature appearance; all six
