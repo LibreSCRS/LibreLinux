@@ -8,8 +8,9 @@
 //   Test A (gate absent)  -> RequestSecret("pin") must return status="cancelled"
 //                            with a 0-byte memfd (fail-safe, no secret leaked).
 //   Test B (gate present) -> RequestSecret("pin") must return status="ok", a
-//                            memfd whose bytes == the DUMMY pin (argv[1], e.g.
-//                            "1234") and whose size <= kMaxSecretBytes (8 KiB),
+//                            memfd whose bytes == the DUMMY secret (argv[1],
+//                            e.g. "contract-probe-not-a-pin") and whose size
+//                            <= kMaxSecretBytes (8 KiB),
 //                            sealed EXACTLY F_SEAL_SHRINK|GROW|WRITE with
 //                            F_SEAL_SEAL NOT set — the contract the agent's
 //                            SecretMemfdReader + shared creator define.

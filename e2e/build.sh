@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: LGPL-2.1-or-later
 # Build the autonomous test harness (auto-prompter + validator).
-# Standalone g++ + pkg-config sdbus-c++ — deliberately NOT a CMake/CI target,
-# so it can never sneak into the shipped build. Reuses the tree's generated
+# Standalone g++ + pkg-config sdbus-c++ — deliberately NOT a CMake target, so
+# it can never sneak into the shipped build. CI runs this script to compile
+# the harness (and never runs the binaries). Reuses the tree's generated
 # Prompter1 adaptor/proxy headers and the shared sealed-memfd creator.
 set -euo pipefail
 

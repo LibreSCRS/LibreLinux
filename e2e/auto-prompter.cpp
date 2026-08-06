@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 // SPDX-FileCopyrightText: 2026 hirashix0
 //
-// AUTONOMOUS TEST HARNESS — NOT part of the shipped product, NOT in the CI build.
+// AUTONOMOUS TEST HARNESS — NOT part of the shipped product, not a CMake
+// target. CI compiles it via e2e/build.sh but never runs it.
 //
 // Headless auto-prompter: implements org.librescrs.Prompter1 so a through-the-
 // agent hardware smoke run needs NO human at the pinentry dialog. It answers

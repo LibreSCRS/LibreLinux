@@ -1,11 +1,9 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 name: CI
 
-# LibreLinux is currently unpublished — this workflow activates on the first
-# push to GitHub (the agent/prompter repos have no remote yet). The job that
-# builds LibreLinux first acquires LibreMiddleware exactly as LibreCelik's CI
-# expects it: built from source against the public org repo and installed to a
-# prefix, because LibreLinux consumes it via
+# The job that builds LibreLinux first acquires LibreMiddleware exactly as
+# LibreCelik's CI expects it: built from source against the public org repo
+# and installed to a prefix, because LibreLinux consumes it via
 # `find_package(LibreMiddleware 4.2 REQUIRED CONFIG)` (CMakeLists.txt) — there
 # is no FetchContent fallback here, so the package must exist on disk first.
 

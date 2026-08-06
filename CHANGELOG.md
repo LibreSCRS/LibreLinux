@@ -43,7 +43,11 @@ and its secure PIN/CAN entry prompter, plus a client PKCS#11 module.
   dedicated current / new / confirm dialog), kept isolated from the
   headless agent and called over a private session-bus interface.
 - **Security hardening.** Client authorization is gated through
-  **polkit**, with a fail-closed fallback when polkit is unreachable.
+  **polkit**; when polkit is unreachable, a built-in fallback keeps
+  polkit's default-allow decision for the operational actions (sign,
+  PKCS#11 login, configuration, credential management — the PIN
+  remains the consent gate) and fails closed on the trust-elevation
+  tier and on unknown actions.
   Secrets travel between components as **sealed in-memory buffers**
   and are never written to disk or logs. The daemon runs under a
   **strict systemd sandbox**, and outbound network access
