@@ -87,6 +87,8 @@ add_library(LibreLinuxAgentCore STATIC
     src/SealedMemfd.cpp
     src/ConfigPaths.h
     src/ConfigPaths.cpp
+    src/PluginDirectory.h
+    src/PluginDirectory.cpp
     src/AuthMethodName.h
     src/operations/Operation1Adaptor.h
     src/operations/Operation1Adaptor.cpp

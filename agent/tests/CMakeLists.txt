@@ -19,6 +19,16 @@ target_link_libraries(ConfigPathsTest PRIVATE
     GTest::gtest_main)
 add_test(NAME ConfigPathsTest COMMAND ConfigPathsTest)
 
+# The plugin-directory cascade and the report it produces. Bus-free: the
+# resolution is injected (no mutated environment) and the end-to-end cases drive
+# a real CardPluginService over a temp directory with an injected log sink.
+add_executable(PluginDirectoryTest PluginDirectoryTest.cpp)
+target_link_libraries(PluginDirectoryTest PRIVATE
+    LibreLinuxAgentCore
+    GTest::gtest
+    GTest::gtest_main)
+add_test(NAME PluginDirectoryTest COMMAND PluginDirectoryTest)
+
 add_executable(CallerIdentityTest CallerIdentityTest.cpp)
 target_link_libraries(CallerIdentityTest PRIVATE
     LibreLinuxAgentCore

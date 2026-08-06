@@ -97,6 +97,31 @@ LIBRESCRS_PLUGIN_DIR="$HOME/.local/librescrs/lib/librescrs/plugins"
 (If you instead install LM and the agent into the *same* prefix, the default
 path resolves correctly and no override is needed.)
 
+The agent reports all of this at startup, so you never have to guess which
+directory it settled on:
+
+```console
+$ journalctl --user -u librescrs-agent | grep 'card plugins'
+card plugins: LIBRESCRS_PLUGIN_DIR is not set
+card plugins: using /usr/local/lib/librescrs/plugins (the compiled-in default)
+card plugins: loaded 0 plugins from /usr/local/lib/librescrs/plugins — that directory does not exist; no card can be used until it does and holds plugins
+```
+
+A directory that yields no plugins is worth checking for first: with none
+loaded, **every** card reports as unusable, which looks exactly like a card
+LibreSCRS does not support. That case is logged at warning level and says which
+of three things is wrong, because the fix differs:
+
+| what the warning says | what to do |
+|---|---|
+| `no card can be used until this directory holds plugins` | the directory is there and empty — install LibreMiddleware's plugins into it, or point the override at where they already are |
+| `that directory does not exist` | create it, or fix the override — nothing is at that path |
+| `that directory could not be read (…)` | the directory exists but the agent cannot look inside it; fix the permissions on it or a parent |
+
+A healthy start instead reports `loaded 6 plugins from …` at info with no
+warning, and any plugin file that failed to load is named with its diagnostic
+(`… was not loaded (plugin ABI mismatch): expected ABI 8 got 6`).
+
 ## 3. Build and install the agent + prompter (`--user`)
 
 From this repository:

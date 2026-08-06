@@ -2,11 +2,11 @@
 // SPDX-FileCopyrightText: 2026 hirashix0
 #include "AgentService.h"
 #include "ConfigPaths.h"
+#include "PluginDirectory.h"
 #include <LibreSCRS/Agent/backend/Logging.h>
 #include <LibreSCRS/Agent/presence/PluginCapabilityResolver.h>
 #include <LibreSCRS/Plugin/CardPluginService.h>
 #include <cstdlib>
-#include <filesystem>
 #include <memory>
 #include <string>
 #include <sys/prctl.h>
@@ -39,11 +39,17 @@ int main(int /*argc*/, char** /*argv*/)
     // is passed explicitly so the librescrs form is owner-visible here.
     LibreSCRS::Agent::log::init({}, "rs.librescrs.agent");
 
-    namespace fs = std::filesystem;
+    // Resolve the plugin directory and SAY SO. A directory that yields no
+    // plugins makes every card report as unusable, which is indistinguishable
+    // from a card nothing supports — so the trail (which source won, which lost,
+    // how many plugins loaded, what failed) is logged before anything else can
+    // go wrong. Zero loaded is a warning, not a footnote.
     const char* envDir = std::getenv("LIBRESCRS_PLUGIN_DIR");
-    const fs::path pluginDir = (envDir && *envDir) ? fs::path(envDir) : fs::path(LIBRESCRS_DEFAULT_PLUGIN_DIR);
+    const auto pluginDirs = LibreSCRS::Agent::resolvePluginDir(
+        {.environment = (envDir && *envDir) ? envDir : "", .compiledDefault = LIBRESCRS_DEFAULT_PLUGIN_DIR});
 
-    auto pluginService = std::make_shared<LibreSCRS::Plugin::CardPluginService>(pluginDir);
+    auto pluginService = std::make_shared<LibreSCRS::Plugin::CardPluginService>(pluginDirs.dir);
+    LibreSCRS::Agent::reportPluginLoad(pluginDirs, *pluginService);
 
     // Own the resolver on the stack; AgentService takes a reference.
     LibreSCRS::Agent::PluginCapabilityResolver resolver(std::move(pluginService));
