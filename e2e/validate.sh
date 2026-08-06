@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: LGPL-2.1-or-later
-# STEP 4 driver: prove the memfd/seal contract end-to-end with a DUMMY pin and
+# Driver: prove the memfd/seal contract end-to-end with a DUMMY pin and
 # NO card. Starts a private session bus, launches the auto-prompter with a dummy
 # secret, then runs the validator (which toggles the gate and asserts bytes +
 # seals + gate behaviour). Nothing here touches a card, sign, login, or PIN op.

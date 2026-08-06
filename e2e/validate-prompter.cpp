@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 // SPDX-FileCopyrightText: 2026 hirashix0
 //
-// STEP 4 VALIDATION — proves the auto-prompter's memfd/seal contract end-to-end
+// Proves the auto-prompter's memfd/seal contract end-to-end
 // WITHOUT any smart card, sign, login or real PIN. It is a pure Prompter1 CLIENT
 // (mirrors the agent's PrompterClient) that:
 //

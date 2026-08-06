@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: LGPL-2.1-or-later
 #
-# STEP 3 — autonomous through-the-agent HW-smoke harness launcher.
+# Autonomous through-the-agent HW-smoke harness launcher.
 #
 # Brings up a PRIVATE session bus with the librescrs-agent daemon and the
 # headless auto-prompter, waits until BOTH well-known names are owned, prints

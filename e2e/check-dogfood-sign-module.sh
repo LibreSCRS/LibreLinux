@@ -15,7 +15,7 @@
 # LIBRESCRS_PKCS11_MODULE if set, else the exe-relative FHS layout), then
 # dlopens it and confirms C_GetFunctionList returns CKR_OK. It needs NO card,
 # PIN, or prompter, so it runs in CI and post-install; it deterministically
-# catches the item-69 regression class (missing/wrong/unloadable module path).
+# catches the missing/wrong/unloadable signing-module-path regression class.
 #
 # Exit: 0 = module resolves and loads (or agent not installed -> SKIP);
 #       non-zero = the deployed agent could not load its signing module.
