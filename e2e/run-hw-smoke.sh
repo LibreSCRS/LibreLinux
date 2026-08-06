@@ -15,6 +15,7 @@ export MODULE="${REPO}/build/pkcs11-module/librescrs-pkcs11-agent.so"
 # shellcheck source=lib-env.sh
 source "${HERE}/lib-env.sh"
 librescrs_export_lm_paths "${REPO}" || exit 1
+export E2E_LIB="${HERE}/lib-harness.sh"
 export TEST_BIN="${1:?test binary required}"
 export TEST_FILTER="${2:-}"
 
@@ -28,34 +29,8 @@ export LIBRESCRS_PROMPTER_GATE="$GATE"
 
 dbus-run-session -- bash -c '
   set -uo pipefail
-  # Auto-prompter FIRST + claim the name, so the agent never dbus-activates the
-  # installed (real) pinentry.
-  "$AUTO_PROMPTER" > "$RUNDIR/prompter.log" 2>&1 & PROMPTER_PID=$!
-  for _ in $(seq 1 50); do busctl --user status org.librescrs.Prompter1 >/dev/null 2>&1 && break; sleep 0.1; done
-  # The org.librescrs polkit policy is not installed on this box (needs root), so
-  # an installed-policy PolkitAuthorizer would deny the (default-allow) login as
-  # an "unregistered action". Make the system bus unreachable to the agent so it
-  # uses the shipping DefaultAuthorizer fallback, whose sign/login allow decision
-  # is identical (only the trust/TSA tier differs, unused here).
-  DBUS_SYSTEM_BUS_ADDRESS="unix:path=${RUNDIR}/no-system-bus" \
-  "$AGENT_BIN"     > "$RUNDIR/agent.log"    2>&1 & AGENT_PID=$!
-  cleanup(){ rm -f "$GATE"; kill "$PROMPTER_PID" "$AGENT_PID" 2>/dev/null; wait 2>/dev/null; }
-  trap cleanup EXIT
-  up=0
-  for _ in $(seq 1 100); do
-    busctl --user status org.librescrs.Agent >/dev/null 2>&1 && { up=1; break; }
-    kill -0 "$AGENT_PID" 2>/dev/null || break
-    sleep 0.1
-  done
-  if [[ $up -ne 1 ]]; then echo "=== AGENT DID NOT COME UP ==="; cat "$RUNDIR/agent.log"; exit 1; fi
-  # Wait for the agent to finish async card enumeration + export at least one card object.
-  card=0
-  for _ in $(seq 1 150); do   # up to ~15s
-    if busctl --user tree org.librescrs.Agent 2>/dev/null | grep -q "/org/librescrs/Agent/card/"; then card=1; break; fi
-    sleep 0.1
-  done
-  echo "=== names owned; cards exported: $( busctl --user tree org.librescrs.Agent 2>/dev/null | grep -c "/card/" ) (readers: $( busctl --user tree org.librescrs.Agent 2>/dev/null | grep -c "/reader/" )) ==="
-  if [[ $card -ne 1 ]]; then echo "=== NO CARD OBJECT EXPORTED ==="; echo "--- agent.log ---"; cat "$RUNDIR/agent.log"; exit 2; fi
+  source "$E2E_LIB" || exit 1
+  librescrs_harness_up || exit $?
   echo "=== arming gate + running test ==="
   touch "$GATE"
   if [[ -n "$TEST_FILTER" ]]; then

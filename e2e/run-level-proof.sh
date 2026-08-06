@@ -19,6 +19,7 @@ export MODULE="${REPO}/build/pkcs11-module/librescrs-pkcs11-agent.so"
 # shellcheck source=lib-env.sh
 source "${HERE}/lib-env.sh"
 librescrs_export_lm_paths "${REPO}" || exit 1
+export E2E_LIB="${HERE}/lib-harness.sh"
 export TEST_BIN="${HERE}/sign-proof"
 # Build like the sibling runner does, rather than failing with "missing binary"
 # on a fresh checkout and leaving the reader to find build.sh themselves.
@@ -44,26 +45,8 @@ export LIBRESCRS_OUT_DIR="${RUNDIR}/out"; mkdir -p "$LIBRESCRS_OUT_DIR"
 
 dbus-run-session -- bash -c '
   set -uo pipefail
-  "$AUTO_PROMPTER" > "$RUNDIR/prompter.log" 2>&1 & PROMPTER_PID=$!
-  for _ in $(seq 1 50); do busctl --user status org.librescrs.Prompter1 >/dev/null 2>&1 && break; sleep 0.1; done
-  DBUS_SYSTEM_BUS_ADDRESS="unix:path=${RUNDIR}/no-system-bus" \
-  "$AGENT_BIN"     > "$RUNDIR/agent.log"    2>&1 & AGENT_PID=$!
-  cleanup(){ rm -f "$GATE"; kill "$PROMPTER_PID" "$AGENT_PID" 2>/dev/null; wait 2>/dev/null; }
-  trap cleanup EXIT
-  up=0
-  for _ in $(seq 1 100); do
-    busctl --user status org.librescrs.Agent >/dev/null 2>&1 && { up=1; break; }
-    kill -0 "$AGENT_PID" 2>/dev/null || break
-    sleep 0.1
-  done
-  if [[ $up -ne 1 ]]; then echo "=== AGENT DID NOT COME UP ==="; cat "$RUNDIR/agent.log"; exit 1; fi
-  card=0
-  for _ in $(seq 1 150); do
-    if busctl --user tree org.librescrs.Agent 2>/dev/null | grep -q "/org/librescrs/Agent/card/"; then card=1; break; fi
-    sleep 0.1
-  done
-  echo "=== cards exported: $( busctl --user tree org.librescrs.Agent 2>/dev/null | grep -c "/card/" ) ==="
-  if [[ $card -ne 1 ]]; then echo "=== NO CARD OBJECT EXPORTED ==="; tail -40 "$RUNDIR/agent.log"; exit 2; fi
+  source "$E2E_LIB" || exit 1
+  librescrs_harness_up || exit $?
   echo "=== arming gate + running the ONE sign ==="
   touch "$GATE"
   "$TEST_BIN"

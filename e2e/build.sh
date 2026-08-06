@@ -25,7 +25,7 @@ done
 CXX="${CXX:-g++}"
 SDBUS_CFLAGS="$(pkg-config --cflags sdbus-c++)"
 SDBUS_LIBS="$(pkg-config --libs sdbus-c++)"
-STD="${STD:--std=c++20}"
+STD="${STD:--std=c++23}"
 
 echo "[build] auto-prompter ..."
 # shellcheck disable=SC2086
