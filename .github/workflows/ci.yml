@@ -36,7 +36,7 @@ jobs:
 
       - name: Check clang-format
         run: |
-          find agent prompter common pkcs11-module -name "*.cpp" -o -name "*.h" \
+          find agent prompter common pkcs11-module e2e -name "*.cpp" -o -name "*.h" \
             | xargs clang-format-21 --dry-run --Werror
 
   build-linux:
@@ -123,6 +123,20 @@ jobs:
       - name: Build (agent + prompter)
         working-directory: LibreLinux
         run: cmake --build build -j4
+
+      # --- e2e harness compiles ---------------------------------------------
+      # The hardware-acceptance clients under e2e/ are deliberately outside the
+      # CMake build: they need a card, a reader and a human's secrets, so they
+      # can never run here. That is exactly why they need this step. Left
+      # uncompiled they drift out of the wire contract silently — the headless
+      # prompter had already stopped building against its own generated adaptor,
+      # missing a method the interface had grown, and nothing reported it
+      # because nothing ever compiled the file.
+      #
+      # This compiles them and runs nothing: no card, no secrets, no PIN.
+      - name: Build the e2e harness (compile only, no card)
+        working-directory: LibreLinux
+        run: ./e2e/build.sh
 
       # --- Qt-free gate (project invariant) ---------------------------------
       # The librescrs-agent daemon MUST stay Qt-free (DE-agnostic: sdbus-c++ +

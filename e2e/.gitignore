@@ -1,6 +1,5 @@
-# Compiled e2e helper binaries (built locally from the *.cpp sources here).
-# Ignore the binaries only; the .cpp/.sh sources are intentionally not ignored.
+# Compiled e2e helper binaries (built locally from the *.cpp sources here by
+# build.sh). Ignore the binaries only; the .cpp/.sh sources are tracked.
 /auto-prompter
-/level-deferral-proof
-/nam-sign-proof
+/sign-proof
 /validate-prompter
