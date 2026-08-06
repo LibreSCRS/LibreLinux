@@ -388,12 +388,44 @@ int main(int argc, char** argv)
 
     std::mutex m;
     std::condition_variable cv;
-    bool finished = false;
-    std::uint32_t sStatus = 99, sErr = 0;
-    std::string sMsgKey, sMsgFallback;
-    bool gotResult = false;
-    std::string artifact;
-    std::map<std::string, sdbus::Variant> resultMeta;
+    // Signal payloads keyed by operation object path: the match rules below go
+    // in BEFORE the Sign call, so the handlers can fire before the reply names
+    // the operation and must buffer per path.
+    struct SignOutcome
+    {
+        std::uint32_t status = 99;
+        std::uint32_t errorCode = 0;
+        std::string msgKey;
+        std::string msgFallback;
+    };
+    struct SignResult
+    {
+        std::string artifact;
+        std::map<std::string, sdbus::Variant> meta;
+    };
+    std::map<std::string, SignOutcome> finishedByPath;
+    std::map<std::string, SignResult> resultByPath;
+
+    // Subscribe BEFORE issuing the call. A proxy subscription can only be made
+    // once the reply names the operation path, and a fast operation may emit
+    // Result / Finished before those match rules land — a missed Finished
+    // would report a false timeout for a sign that already consumed the PIN.
+    const std::string matchBase = std::string{"type='signal',sender='"} + kAgentSvc + "'";
+    conn->addMatch(matchBase + ",interface='" + kSignIf + "',member='Result'", [&](sdbus::Message msg) {
+        sdbus::UnixFd fd;
+        std::map<std::string, sdbus::Variant> meta;
+        msg >> fd >> meta;
+        std::string bytes = readAll(fd.get());
+        std::lock_guard<std::mutex> lk(m);
+        resultByPath[msg.getPath()] = SignResult{std::move(bytes), std::move(meta)};
+    });
+    conn->addMatch(matchBase + ",interface='" + kOpIf + "',member='Finished'", [&](sdbus::Message msg) {
+        SignOutcome out;
+        msg >> out.status >> out.errorCode >> out.msgKey >> out.msgFallback;
+        std::lock_guard<std::mutex> lk(m);
+        finishedByPath[msg.getPath()] = std::move(out);
+        cv.notify_all();
+    });
 
     sdbus::ObjectPath signOp;
     std::fprintf(stderr, "[proof] === issuing THE ONE Sign call (certId=%s) ===\n", certId.c_str());
@@ -411,50 +443,43 @@ int main(int argc, char** argv)
     ::close(docFd);
     std::fprintf(stderr, "[proof] Sign op = %s\n", signOp.c_str());
 
-    auto op = sdbus::createProxy(*conn, sdbus::ServiceName{kAgentSvc}, signOp);
-    op->uponSignal("Result").onInterface(kSignIf).call(
-        [&](const sdbus::UnixFd& fd, const std::map<std::string, sdbus::Variant>& meta) {
-            std::string bytes = readAll(fd.get());
-            std::lock_guard<std::mutex> lk(m);
-            artifact = std::move(bytes);
-            resultMeta = meta;
-            gotResult = true;
-        });
-    op->uponSignal("Finished")
-        .onInterface(kOpIf)
-        .call([&](std::uint32_t status, std::uint32_t errorCode, const std::string& msgKey,
-                  const std::string& msgFallback) {
-            std::lock_guard<std::mutex> lk(m);
-            sStatus = status;
-            sErr = errorCode;
-            sMsgKey = msgKey;
-            sMsgFallback = msgFallback;
-            finished = true;
-            cv.notify_all();
-        });
-
+    SignOutcome outcome;
     {
         std::unique_lock<std::mutex> lk(m);
-        if (!cv.wait_for(lk, std::chrono::seconds(120), [&] { return finished; })) {
+        if (!cv.wait_for(lk, std::chrono::seconds(120), [&] { return finishedByPath.contains(signOp); })) {
             std::fprintf(stderr, "[proof] FATAL: sign timed out after 120s (NO retry)\n");
             return 21;
         }
+        outcome = finishedByPath[signOp];
     }
 
-    std::fprintf(stderr, "[proof] Sign Finished: status=%u errorCode=%u msgKey=\"%s\" msgFallback=\"%s\"\n", sStatus,
-                 sErr, sMsgKey.c_str(), sMsgFallback.c_str());
+    std::fprintf(stderr, "[proof] Sign Finished: status=%u errorCode=%u msgKey=\"%s\" msgFallback=\"%s\"\n",
+                 outcome.status, outcome.errorCode, outcome.msgKey.c_str(), outcome.msgFallback.c_str());
 
-    if (sStatus != 0) {
-        std::fprintf(stderr, "[proof] === SIGN FAILED (status=%u errorCode=%u) — NOT retrying ===\n", sStatus, sErr);
-        std::printf("SIGN_RESULT=FAIL status=%u errorCode=%u msgKey=%s msgFallback=%s\n", sStatus, sErr,
-                    sMsgKey.c_str(), sMsgFallback.c_str());
+    if (outcome.status != 0) {
+        std::fprintf(stderr, "[proof] === SIGN FAILED (status=%u errorCode=%u) — NOT retrying ===\n", outcome.status,
+                     outcome.errorCode);
+        std::printf("SIGN_RESULT=FAIL status=%u errorCode=%u msgKey=%s msgFallback=%s\n", outcome.status,
+                    outcome.errorCode, outcome.msgKey.c_str(), outcome.msgFallback.c_str());
         return 22;
     }
 
     // ---- 5. Retrieve the artifact -------------------------------------------
+    std::string artifact;
+    std::map<std::string, sdbus::Variant> resultMeta;
+    bool gotResult = false;
+    {
+        std::lock_guard<std::mutex> lk(m);
+        if (auto it = resultByPath.find(signOp); it != resultByPath.end()) {
+            artifact = std::move(it->second.artifact);
+            resultMeta = std::move(it->second.meta);
+            gotResult = true;
+        }
+    }
     if (!gotResult) {
         std::fprintf(stderr, "[proof] Result signal missed; recovering via Sign1.GetResult()\n");
         try {
+            auto op = sdbus::createProxy(*conn, sdbus::ServiceName{kAgentSvc}, signOp);
             sdbus::UnixFd fd;
             std::map<std::string, sdbus::Variant> meta;
             op->callMethod("GetResult").onInterface(kSignIf).storeResultsTo(fd, meta);

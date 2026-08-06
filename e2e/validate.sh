@@ -14,6 +14,10 @@ DUMMY_SECRET="contract-probe-not-a-pin"   # arbitrary bytes; nothing here reache
 export LIBRESCRS_PROMPTER_GATE="${LIBRESCRS_PROMPTER_GATE:-/tmp/librescrs-e2e/prompt.gate}"
 mkdir -p "$(dirname "${LIBRESCRS_PROMPTER_GATE}")"
 rm -f "${LIBRESCRS_PROMPTER_GATE}"   # start with the gate CLOSED
+# Disarm the gate no matter how the run ends: under `set -e` a failing
+# dbus-run-session exits this script immediately, so inline cleanup after the
+# call would be skipped and a crashed run would leave the gate armed.
+trap 'rm -f "${LIBRESCRS_PROMPTER_GATE}"' EXIT
 
 dbus-run-session -- bash -c '
   set -euo pipefail
@@ -36,6 +40,3 @@ dbus-run-session -- bash -c '
 
   "'"${HERE}"'/validate-prompter" "'"${DUMMY_SECRET}"'"
 '
-rc=$?
-rm -f "${LIBRESCRS_PROMPTER_GATE}"
-exit ${rc}

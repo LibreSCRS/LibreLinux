@@ -33,9 +33,14 @@ echo "=== client RC=$RC ==="
 
 if [[ $RC -eq 0 && -s "$ART" ]]; then
     echo "=== openssl cms -verify (detached CAdES over the document; chain check skipped) ==="
+    VRC=0
     openssl cms -verify -no_signer_cert_verify -inform DER -in "$ART" \
-        -content "$DOC" -out /dev/null
-    echo "=== openssl verify RC=$? ==="
+        -content "$DOC" -out /dev/null || VRC=$?
+    echo "=== openssl verify RC=$VRC ==="
+    if [[ $VRC -ne 0 ]]; then
+        echo "=== VERIFY FAILED — the artifact is not a valid signature over the document ===" >&2
+        exit 1
+    fi
 else
     echo "=== NO artifact — sign did not succeed; nothing to verify ==="
 fi
