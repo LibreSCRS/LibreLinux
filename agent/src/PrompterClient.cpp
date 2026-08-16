@@ -5,11 +5,14 @@
 #include "PrompterWire.h" // shared Prompter1 kind / option-key / status vocabulary
 #include "SecretMemfdReader.h"
 #include "org.librescrs.Prompter1_proxy.h"
+#include <LibreSCRS/Auth/PaceSecretKind.h>
 #include <sdbus-c++/Error.h>
 #include <sdbus-c++/IProxy.h>
 #include <sdbus-c++/ProxyInterfaces.h>
 #include <sdbus-c++/Types.h>
+#include <algorithm>
 #include <map>
+#include <optional>
 #include <string>
 #include <tuple>
 #include <utility>
@@ -20,8 +23,11 @@ namespace {
 
 // Kind / option-key / status names live in common/PrompterWire.h (shared with
 // the prompter producer so the two binaries cannot drift).
+using LibreLinux::PrompterWire::kKindCan;
+using LibreLinux::PrompterWire::kKindMrz;
 using LibreLinux::PrompterWire::kStatusCancelled;
 using LibreLinux::PrompterWire::kStatusOk;
+using LibreLinux::PrompterWire::kStatusOkMrz;
 using LibreLinux::PrompterWire::kStatusUnauthorized;
 
 PromptStatus parseStatus(std::string_view raw)
@@ -41,6 +47,40 @@ PromptStatus parseStatus(std::string_view raw)
         return PromptStatus::Error;
     }
     return PromptStatus::Error;
+}
+
+// Did THIS request offer the user a switch to the MRZ form? True only for the
+// exact shape the prompter mints its distinct status on: a CAN request whose
+// alternative-kind list named the MRZ kind. The list is marshalled for every
+// kind (see buildOptionsDict), so the requested-kind test here is what keeps a
+// future caller that sets altKinds on some other prompt from being handed an
+// MRZ payload in that prompt's slot.
+bool offeredMrzAlternative(std::string_view kind, const PromptOptions& options)
+{
+    if (kind != std::string_view{kKindCan}) {
+        return false;
+    }
+    return std::ranges::find(options.altKinds, std::string_view{kKindMrz}) != options.altKinds.end();
+}
+
+struct ParsedStatus
+{
+    PromptStatus status = PromptStatus::Error;
+    std::optional<LibreSCRS::Auth::PaceSecretKind> chosenKind;
+};
+
+// The RequestSecret status parse, aware of what this very request asked for.
+// Exactly one status is sent-options-dependent: the distinct success token is
+// meaningful only to a caller that opted in, and is otherwise unexpected
+// vocabulary. Deliberately NOT recognised in parseStatus above — a status the
+// caller never invited must take the same fail-closed route as any unknown one,
+// which is precisely what the delegation below does.
+ParsedStatus parseRequestSecretStatus(std::string_view raw, bool mrzAlternativeOffered)
+{
+    if (mrzAlternativeOffered && raw == kStatusOkMrz) {
+        return ParsedStatus{PromptStatus::Ok, LibreSCRS::Auth::PaceSecretKind::Mrz};
+    }
+    return ParsedStatus{parseStatus(raw), std::nullopt};
 }
 
 std::map<std::string, sdbus::Variant> buildOptionsDict(const PromptOptions& options)
@@ -79,6 +119,13 @@ std::map<std::string, sdbus::Variant> buildOptionsDict(const PromptOptions& opti
     }
     if (!options.lastError.empty()) {
         dict.emplace(LibreLinux::PrompterWire::kOptLastError, sdbus::Variant{options.lastError});
+    }
+    // Opt-in to an in-dialog switch to an alternative credential form. Omitted
+    // whenever the caller sets none, so every existing caller's dictionary is
+    // byte-identical to before; a prompter that predates the key simply drops
+    // it and answers with the plain status vocabulary.
+    if (!options.altKinds.empty()) {
+        dict.emplace(LibreLinux::PrompterWire::kOptAltKinds, sdbus::Variant{options.altKinds});
     }
     return dict;
 }
@@ -224,7 +271,9 @@ PromptResult PrompterClient::request(std::string_view kind, const PromptOptions&
     }
 
     auto& [rawStatus, secretFd, userMessage] = reply;
-    result.status = parseStatus(rawStatus);
+    const auto parsed = parseRequestSecretStatus(rawStatus, offeredMrzAlternative(kind, options));
+    result.status = parsed.status;
+    result.chosenKind = parsed.chosenKind;
     result.userMessage = std::move(userMessage);
 
     if (result.status != PromptStatus::Ok) {
@@ -238,6 +287,9 @@ PromptResult PrompterClient::request(std::string_view kind, const PromptOptions&
     if (!secret.has_value()) {
         log::warnf("PrompterClient: memfd read failed for {}: {}", kind, readError);
         result.status = PromptStatus::Error;
+        // No secret means no credential to classify: drop the chosen kind too,
+        // so a failed result never reads as "holding an MRZ".
+        result.chosenKind.reset();
         if (result.userMessage.empty()) {
             result.userMessage = readError;
         }

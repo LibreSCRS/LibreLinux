@@ -442,6 +442,17 @@ target_link_libraries(RequestSecretsXmlCodegenTest PRIVATE
     GTest::gtest_main)
 add_test(NAME RequestSecretsXmlCodegenTest COMMAND RequestSecretsXmlCodegenTest)
 
+# The ONE place the RequestSecret alternative-kind option key and its distinct
+# success status are spelled absolutely (everything else goes through the
+# PrompterWire constants). Keeps the cross-platform wire strings pinned; see the
+# file header. Header-only vocabulary, so no bus and no link beyond gtest.
+add_executable(PrompterVocabularyPinTest PrompterVocabularyPinTest.cpp)
+target_link_libraries(PrompterVocabularyPinTest PRIVATE
+    LibreLinuxAgentCore
+    GTest::gtest
+    GTest::gtest_main)
+add_test(NAME PrompterVocabularyPinTest COMMAND PrompterVocabularyPinTest)
+
 # PrompterClient multi-secret (change_pin) end-to-end: drive requestPinChange
 # against an in-process mock Prompter1 adaptor scripting RequestSecrets (two
 # sealed fds; primary = current PIN, secondary = new PIN). Reuses the locally

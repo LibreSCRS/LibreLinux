@@ -40,6 +40,7 @@
 #include <string_view>
 #include <tuple>
 #include <unistd.h>
+#include <vector>
 
 namespace {
 
@@ -73,6 +74,36 @@ const char* envKeyFor(std::string_view kind)
         return "LIBRESCRS_MRZ";
     }
     return nullptr;
+}
+
+// Does the request's alternative-kind option name @p kind? A missing or
+// mistyped entry reads as "not offered" — the same treated-as-absent tolerance
+// the real prompter's option lifts have.
+bool altKindsOffer(const std::map<std::string, sdbus::Variant>& options, std::string_view kind)
+{
+    const auto it = options.find(wire::kOptAltKinds);
+    if (it == options.end()) {
+        return false;
+    }
+    try {
+        for (const auto& offered : it->second.get<std::vector<std::string>>()) {
+            if (offered == kind) {
+                return true;
+            }
+        }
+    } catch (const sdbus::Error&) {
+        return false;
+    }
+    return false;
+}
+
+// Does this run want the harness to take an offered switch to the MRZ form?
+// A run that does not say so explicitly behaves byte-for-byte as before, so
+// every existing leg keeps answering the requested kind.
+bool mrzSwitchRequested()
+{
+    const char* v = std::getenv("LIBRESCRS_FORCE_MRZ");
+    return v != nullptr && std::string_view{v} == "1";
 }
 
 // A sealed memfd built via the SAME shared creator the real prompter uses:
@@ -112,12 +143,29 @@ public:
 
 private:
     std::tuple<std::string, sdbus::UnixFd, std::string>
-    RequestSecret(const std::string& kind, const std::map<std::string, sdbus::Variant>& /*options*/) override
+    RequestSecret(const std::string& kind, const std::map<std::string, sdbus::Variant>& options) override
     {
         // SAFETY GATE: no gate file -> never release anything.
         if (!gateOpen()) {
             logDecision(kind, false, "no-gate");
             return {wire::kStatusCancelled, sdbus::UnixFd{sealedFd({}), sdbus::adopt_fd}, std::string{}};
+        }
+
+        // Stand in for a user who takes the offered switch to the MRZ form:
+        // answer the alternative credential with the distinct status, so a leg
+        // can drive the alternative-kind path with no human at the dialog. All
+        // three conditions must hold — the gate above, an explicit request from
+        // this run, and an actual offer on this prompt — so nothing changes for
+        // any leg that does not ask for it.
+        if (kind == wire::kKindCan && mrzSwitchRequested() && altKindsOffer(options, wire::kKindMrz)) {
+            const char* mrz = std::getenv("LIBRESCRS_MRZ");
+            if (mrz == nullptr) {
+                // Same fail-safe as every other kind: NEVER fabricate a secret.
+                logDecision(kind, false, "env-unset");
+                return {wire::kStatusCancelled, sdbus::UnixFd{sealedFd({}), sdbus::adopt_fd}, std::string{}};
+            }
+            logDecision(kind, true, "alt-kind-mrz");
+            return {wire::kStatusOkMrz, sdbus::UnixFd{sealedFd(std::string_view{mrz}), sdbus::adopt_fd}, std::string{}};
         }
 
         const char* key = envKeyFor(kind);

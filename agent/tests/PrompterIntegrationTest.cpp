@@ -10,8 +10,10 @@
 #include "PrompterClient.h"
 #include "org.librescrs.Prompter1_adaptor.h"
 
+#include "PrompterWire.h"       // shared kind / option-key / status vocabulary
 #include "SealedMemfdCreator.h" // shared sealed-memfd creator
 
+#include <LibreSCRS/Auth/PaceSecretKind.h>
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <unistd.h>
@@ -36,6 +38,16 @@
 using namespace LibreSCRS::Agent;
 
 namespace {
+
+// The alternative-kind rollout cases below spell every option key and status
+// through this alias, never as literals: the absolute spellings are pinned in
+// exactly one place (PrompterVocabularyPinTest.cpp) and nowhere else.
+namespace wire = LibreLinux::PrompterWire;
+
+// ICAO Doc 9303 specimen document (not a real credential): document number
+// L898902C< with check digit 3, date of birth 690806/1, date of expiry
+// 940623/6, in the prompter's canonical three-line payload shape.
+constexpr std::string_view kSpecimenMrzPayload = "L898902C<3\n6908061\n9406236";
 
 constexpr const char* kMockServiceName = "org.librescrs.Prompter1.Test";
 constexpr const char* kMockObjectPath = "/org/librescrs/Prompter1";
@@ -383,4 +395,106 @@ TEST_F(PrompterIntegrationTest, RetryContextIsForwardedAsItsOwnOptionKeys)
 
     ASSERT_TRUE(captured.options.contains("last_error"));
     EXPECT_EQ(captured.options.at("last_error").get<std::string>(), "librescrs.error.preRead.authFailed");
+}
+
+// --- Alternative-kind rollout matrix ---------------------------------------
+//
+// The `alt_kinds` option and the `ok_mrz` status are ONE additive growth of
+// this boundary, so both rollout directions have to hold at once. The four
+// direction-pairs are: new client x new prompter, new client x old prompter,
+// old client x new (or hostile) prompter, and old x old — the last being, by
+// name, the rest of this suite, which stays untouched and green.
+
+TEST_F(PrompterIntegrationTest, AltKindsRideTheOptionsDict)
+{
+    m_mock->setBehavior(MockBehavior{.status = wire::kStatusOk, .secretBytes = "123456"});
+
+    PromptOptions opts;
+    opts.altKinds = {wire::kKindMrz};
+
+    const auto result = m_client->requestCan(opts);
+    ASSERT_EQ(result.status, PromptStatus::Ok);
+
+    const auto captured = m_mock->captured();
+    ASSERT_TRUE(captured.seen);
+    EXPECT_EQ(captured.kind, wire::kKindCan);
+
+    ASSERT_TRUE(captured.options.contains(wire::kOptAltKinds))
+        << "a populated PromptOptions::altKinds must marshal as its own option key";
+    EXPECT_EQ(captured.options.at(wire::kOptAltKinds).get<std::vector<std::string>>(),
+              (std::vector<std::string>{wire::kKindMrz}));
+}
+
+// New client x OLD prompter: a backend that predates the option simply lifts
+// the keys it knows, so the request degrades to an ordinary CAN prompt and the
+// reply is the plain success status. The client must report exactly that — no
+// chosen kind, secret intact.
+TEST_F(PrompterIntegrationTest, OldPrompterIgnoresAltKindsAndPlainOkStillWorks)
+{
+    m_mock->setBehavior(MockBehavior{.status = wire::kStatusOk, .secretBytes = "123456"});
+
+    PromptOptions opts;
+    opts.altKinds = {wire::kKindMrz};
+
+    const auto result = m_client->requestCan(opts);
+    EXPECT_EQ(result.status, PromptStatus::Ok);
+    ASSERT_TRUE(result.secret.has_value());
+    EXPECT_EQ(result.secret->view(), "123456");
+    EXPECT_FALSE(result.chosenKind.has_value())
+        << "a plain success reply carries no chosen-kind, whatever the request offered";
+}
+
+// New client x new prompter: the user took the offered switch, so the reply
+// carries the distinct status and an MRZ payload. The client reports success
+// AND which credential it is actually holding.
+TEST_F(PrompterIntegrationTest, OkMrzMapsToChosenKindWhenSent)
+{
+    m_mock->setBehavior(MockBehavior{.status = wire::kStatusOkMrz, .secretBytes = std::string{kSpecimenMrzPayload}});
+
+    PromptOptions opts;
+    opts.altKinds = {wire::kKindMrz};
+
+    const auto result = m_client->requestCan(opts);
+    EXPECT_EQ(result.status, PromptStatus::Ok);
+    ASSERT_TRUE(result.secret.has_value());
+    EXPECT_EQ(result.secret->view(), kSpecimenMrzPayload);
+    ASSERT_TRUE(result.chosenKind.has_value());
+    EXPECT_EQ(*result.chosenKind, LibreSCRS::Auth::PaceSecretKind::Mrz);
+}
+
+// OLD client x new (or hostile) prompter: the request never opted in, so the
+// distinct status is unexpected vocabulary. It must fail closed exactly as any
+// unknown status does — never a success carrying an MRZ payload the caller
+// would deposit as a CAN.
+TEST_F(PrompterIntegrationTest, OkMrzWithoutOptInCollapsesToError)
+{
+    m_mock->setBehavior(MockBehavior{.status = wire::kStatusOkMrz, .secretBytes = std::string{kSpecimenMrzPayload}});
+
+    const auto result = m_client->requestCan(PromptOptions{});
+    EXPECT_EQ(result.status, PromptStatus::Error);
+    EXPECT_FALSE(result.secret.has_value()) << "no secret may surface on an unexpected status";
+    EXPECT_FALSE(result.chosenKind.has_value());
+}
+
+// The option rides ANY kind's dictionary, so the requested-kind condition on
+// the parse side is the only thing standing between a future flow bug and an
+// MRZ payload landing in a PIN slot. Pin it: the same opted-in request on a
+// non-CAN kind still fails closed.
+TEST_F(PrompterIntegrationTest, OkMrzOnNonCanRequestWithAltKindsCollapsesToError)
+{
+    m_mock->setBehavior(MockBehavior{.status = wire::kStatusOkMrz, .secretBytes = std::string{kSpecimenMrzPayload}});
+
+    PromptOptions opts;
+    opts.altKinds = {wire::kKindMrz};
+
+    const auto result = m_client->requestPin(opts);
+    EXPECT_EQ(result.status, PromptStatus::Error);
+    EXPECT_FALSE(result.secret.has_value()) << "no secret may surface on an unexpected status";
+    EXPECT_FALSE(result.chosenKind.has_value());
+
+    const auto captured = m_mock->captured();
+    ASSERT_TRUE(captured.seen);
+    EXPECT_EQ(captured.kind, wire::kKindPin);
+    EXPECT_TRUE(captured.options.contains(wire::kOptAltKinds))
+        << "the option is marshalled for any kind — hence the parse-side kind guard";
 }
