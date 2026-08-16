@@ -13,6 +13,9 @@
 #include <optional>
 #include <string>
 #include <vector>
+namespace LibreSCRS::Plugin {
+class CardPluginService;
+}
 namespace LibreSCRS::Agent {
 class ReaderObject;
 class CardObject;
@@ -62,11 +65,16 @@ public:
     // typed op it spawns CO-OWNS it for abandoned-worker keep-alive and binds its
     // shutdown token so each op bails + skips completion on backend teardown. Tests
     // construct an ephemeral context at test scope (or leave its shares null).
+    // @p pluginService is the plugin registry the per-card credential depositor
+    // resolves its mutable plugin handles from (the SAME registry the capability
+    // resolver wraps; it MUST outlive this frontend). Null in tests that never
+    // renegotiate a CAN prompt into an MRZ read: each card then carries no
+    // depositor and the read operations fall back to the no-op seam.
     AgentFrontend(BusExporter& transport, std::shared_ptr<sdbus::IConnection> connection,
                   Operations::OperationManager& opManager, std::shared_ptr<CryptoWorkerContext> cryptoContext,
                   CardReadCache& readCache, Operations::SigningEngineProvider& signingEngine, Authorizer& authorizer,
                   Operations::RateLimiter& rateLimiter, Config::ConfigStore& config, Pkcs11Broker* pkcs11,
-                  std::string version);
+                  std::string version, LibreSCRS::Plugin::CardPluginService* pluginService = nullptr);
     ~AgentFrontend();
     AgentFrontend(const AgentFrontend&) = delete;
     AgentFrontend& operator=(const AgentFrontend&) = delete;
@@ -162,6 +170,10 @@ private:
     Operations::RateLimiter& m_rateLimiter;
     Config::ConfigStore& m_config;
     std::string m_version;
+    // The plugin registry the per-card credential depositor resolves mutable
+    // plugin handles from (borrowed, owned by the composition root; the SAME
+    // registry the capability resolver wraps). Null in tests -- see the ctor.
+    LibreSCRS::Plugin::CardPluginService* m_pluginService{nullptr};
 
     // std::map (not unordered_map) -- InterfacesRemoved fires in a deterministic
     // path order on teardown, which is easier to read in journald and to test.

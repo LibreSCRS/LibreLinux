@@ -35,11 +35,11 @@ AgentFrontend::AgentFrontend(BusExporter& transport, std::shared_ptr<sdbus::ICon
                              std::shared_ptr<CryptoWorkerContext> cryptoContext, CardReadCache& readCache,
                              Operations::SigningEngineProvider& signingEngine, Authorizer& authorizer,
                              Operations::RateLimiter& rateLimiter, Config::ConfigStore& config, Pkcs11Broker* pkcs11,
-                             std::string version)
+                             std::string version, LibreSCRS::Plugin::CardPluginService* pluginService)
     : m_transport(transport), m_connection(std::move(connection)), m_opManager(opManager),
       m_cryptoCtx(std::move(cryptoContext)), m_readCache(readCache), m_signingEngine(signingEngine),
       m_authorizer(authorizer), m_rateLimiter(rateLimiter), m_config(config), m_version(std::move(version)),
-      m_pkcs11(pkcs11)
+      m_pluginService(pluginService), m_pkcs11(pkcs11)
 {
     // Root: Manager1 + Config1 + Pkcs11_1 + ObjectManager on one path. Children
     // the frontend materialises under this path are picked up by sdbus-c++'s
@@ -104,6 +104,13 @@ CardOperationDeps AgentFrontend::buildDepsForCard(const std::string& cardPath, c
     // so no plugin is bound here. Pre-read auth is derived from that same held
     // session inside the flow, so no per-card plugin handle is needed here.
     deps.ownedReader = std::make_shared<Operations::LmCardReader>();
+    // The deposit seam is the one read-path seam that DOES need the registry: a
+    // renegotiated read hands the chosen passport MRZ to the candidate plugins,
+    // and only the registry holds mutable handles to them. Resolution there is
+    // registry-only and card-free by construction (see the seam's own contract).
+    if (m_pluginService != nullptr) {
+        deps.ownedDepositor = std::make_shared<Operations::LmCredentialDepositor>(*m_pluginService);
+    }
     deps.ownedCertReader = std::make_shared<Operations::LmCertificateReader>();
     // Reuses m_signingEngine's already-built TrustStoreService (see
     // SigningEngineProvider::trustSnapshot()) -- no separate trust store, no

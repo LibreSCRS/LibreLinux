@@ -37,6 +37,7 @@ std::optional<CardReadSnapshot> GetPhotoOperation::obtainSnapshot()
         .artifact = m_deps.artifact,
         .token = token(),
         .onCardType = m_deps.onCardType,
+        .depositor = m_deps.depositor,
     });
     auto result = flow.run();
     if (result.outcome != IdentityReadFlow::Outcome::Ok || !result.snapshot) {

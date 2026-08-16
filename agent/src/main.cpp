@@ -51,10 +51,13 @@ int main(int /*argc*/, char** /*argv*/)
     auto pluginService = std::make_shared<LibreSCRS::Plugin::CardPluginService>(pluginDirs.dir);
     LibreSCRS::Agent::reportPluginLoad(pluginDirs, *pluginService);
 
-    // Own the resolver on the stack; AgentService takes a reference.
-    LibreSCRS::Agent::PluginCapabilityResolver resolver(std::move(pluginService));
+    // Own the resolver on the stack; AgentService takes a reference. The
+    // registry share is KEPT here (co-owned with the resolver) so the service
+    // can also hand it to the per-card credential depositor, which needs
+    // mutable plugin handles the capability seam deliberately does not expose.
+    LibreSCRS::Agent::PluginCapabilityResolver resolver(pluginService);
     LibreSCRS::Agent::AgentService agent(resolver, LIBRELINUX_VERSION_STR, LibreSCRS::Agent::resolveConfigFile(),
-                                         LibreSCRS::Agent::resolveCacheRoot());
+                                         LibreSCRS::Agent::resolveCacheRoot(), pluginService.get());
     if (!agent.registerOnBus()) {
         return 1;
     }

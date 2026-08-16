@@ -61,6 +61,7 @@ void ReadIdentityOperation::doWork()
         .artifact = m_deps.artifact,
         .token = token(),
         .onCardType = m_deps.onCardType,
+        .depositor = m_deps.depositor,
     });
     auto result = flow.run();
 

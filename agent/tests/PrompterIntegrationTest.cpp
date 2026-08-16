@@ -13,7 +13,22 @@
 #include "PrompterWire.h"       // shared kind / option-key / status vocabulary
 #include "SealedMemfdCreator.h" // shared sealed-memfd creator
 
+#include <LibreSCRS/Agent/cache/CredentialCache.h>
+#include <LibreSCRS/Agent/operations/CardSessionHolder.h>
+#include <LibreSCRS/Agent/operations/IdentityReadFlow.h>
+#include <LibreSCRS/Agent/operations/PromptSerializer.h>
+#include <LibreSCRS/Agent/operations/Seams.h>
+#include <LibreSCRS/Auth/AuthRequirement.h>
+#include <LibreSCRS/Auth/ErrorKeys.h>
 #include <LibreSCRS/Auth/PaceSecretKind.h>
+#include <LibreSCRS/CancelToken.h>
+#include <LibreSCRS/LocalizedText.h>
+#include <LibreSCRS/Plugin/CardPlugin.h>
+#include <LibreSCRS/Plugin/PluginTypes.h>
+#include <LibreSCRS/Plugin/ReadResult.h>
+#include <LibreSCRS/SmartCard/AppletAid.h>
+#include <LibreSCRS/SmartCard/CardMap.h>
+#include <LibreSCRS/SmartCard/CardSession.h>
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <unistd.h>
@@ -26,9 +41,12 @@
 #include <cerrno>
 #include <cstddef>
 #include <cstdint>
+#include <expected>
+#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <tuple>
@@ -497,4 +515,140 @@ TEST_F(PrompterIntegrationTest, OkMrzOnNonCanRequestWithAltKindsCollapsesToError
     EXPECT_EQ(captured.kind, wire::kKindPin);
     EXPECT_TRUE(captured.options.contains(wire::kOptAltKinds))
         << "the option is marshalled for any kind — hence the parse-side kind guard";
+}
+
+// --- The offer is real, end to end -----------------------------------------
+//
+// Everything above scripts PromptOptions by hand, so all of it stays green even
+// if NOTHING in the production read path ever sets `altKinds`. This case closes
+// that hole: it runs the SAME IdentityReadFlow both platform read operations
+// run, against a card whose candidate declares travel-document crypto, with the
+// REAL PrompterClient talking to the mock over the private bus — and asserts the
+// request that lands on the wire is kind `can` carrying `alt_kinds == {"mrz"}`.
+// Nothing here sets the offer flag or installs a choice sink; both come from the
+// flow's own reading of its candidate list.
+//
+// Observation point, stated plainly: this drives the flow directly rather than
+// ReadIdentity over Card1, because the middleware's CardSession exposes no
+// accessor for an installed credential provider — so a hermetic CardReader
+// double (which is what every through-the-operations harness in this suite
+// uses) cannot model the middleware's own on-cache-miss provider callback from
+// inside a read, and no prompt would ever be issued. The flow object is the
+// closest seam at which the callback can be driven, and it is the whole of what
+// the operations contribute to this decision: the operations pass deps, the flow
+// computes the offer. The wire, the client, the capability predicate and the
+// prompt-options marshalling are all the production ones.
+
+namespace {
+
+// A candidate declaring identity data AND travel-document crypto: the one
+// family whose pre-read secret has a CAN/MRZ duality.
+class TravelDocumentCandidate final : public LibreSCRS::Plugin::CardPlugin
+{
+public:
+    TravelDocumentCandidate()
+    {
+        setIdentity("travel-doc-stub", "stub", 0);
+    }
+    LibreSCRS::Plugin::CardCapabilities capabilities() const override
+    {
+        using LibreSCRS::Plugin::CardCapabilities;
+        return static_cast<CardCapabilities>(static_cast<std::uint32_t>(CardCapabilities::IdentityData) |
+                                             static_cast<std::uint32_t>(CardCapabilities::EmrtdCrypto));
+    }
+    std::span<const LibreSCRS::Plugin::Atr> supportedAtrs() const noexcept override
+    {
+        return {};
+    }
+
+protected:
+    LibreSCRS::Plugin::ReadResult doReadCard(LibreSCRS::SmartCard::CardSession&, GroupCallback) const override
+    {
+        return LibreSCRS::Plugin::ReadResult::communicationError(LibreSCRS::Auth::ErrorKeys::genericComm());
+    }
+};
+
+// Reader double that invokes the credential provider the flow installed, the
+// way the middleware invokes it from inside readCard on a channel cache miss.
+class ProviderDrivingReader final : public Operations::CardReader
+{
+public:
+    std::function<void()> onRead;
+    Operations::ReadOutcome read(LibreSCRS::SmartCard::CardSession&, const Operations::CandidateList&,
+                                 LibreSCRS::CancelToken, Operations::GroupReadCallback = {}) override
+    {
+        if (onRead) {
+            onRead();
+        }
+        return Operations::ReadOutcome{Operations::ReadOutcome::Status::Cancelled, std::nullopt, "cancelled"};
+    }
+    GroupSnapshot readTokenInfo(LibreSCRS::SmartCard::CardSession&, const Operations::CandidateList&,
+                                LibreSCRS::CancelToken) override
+    {
+        return {};
+    }
+};
+
+class SilentPhaseSink final : public Operations::OperationPhaseSink
+{
+public:
+    void setPhase(std::uint32_t) noexcept override {}
+};
+
+} // namespace
+
+TEST_F(PrompterIntegrationTest, ProductionReadOnEmrtdCandidateOffersMrzAlternative)
+{
+    // The user dismisses the dialog: this case is about the REQUEST that goes
+    // out, not about what comes back.
+    m_mock->setBehavior(MockBehavior{.status = wire::kStatusCancelled});
+
+    auto factory = [](const std::string& r)
+        -> std::expected<std::shared_ptr<LibreSCRS::SmartCard::CardSession>, LibreSCRS::SmartCard::OpenError> {
+        return LibreSCRS::SmartCard::detail::makeDetachedCardSession(r);
+    };
+    auto resolver = [](std::span<const std::uint8_t>, LibreSCRS::SmartCard::CardSession&) {
+        return Operations::CandidateList{std::make_shared<TravelDocumentCandidate>()};
+    };
+    Operations::CardSessionHolder holder("FakeReader", std::move(factory), std::move(resolver),
+                                         std::make_shared<LibreSCRS::SmartCard::CardMap>());
+
+    ProviderDrivingReader reader;
+    Operations::NullCredentialDepositor depositor;
+    Operations::PromptSerializer serializer;
+    CredentialCache credentials;
+    SilentPhaseSink phaseSink;
+    Operations::NullGroupSink groupSink;
+    LibreSCRS::CancelSource cancelSource;
+
+    Operations::IdentityReadFlow flow(Operations::IdentityReadFlowDeps{
+        .holder = holder,
+        .reader = reader,
+        .prompter = *m_client,
+        .serializer = serializer,
+        .cache = credentials,
+        .phaseSink = phaseSink,
+        .groupSink = groupSink,
+        .cardKey = "/org/librescrs/Agent/card/1",
+        .requester = "integration-test",
+        .artifact = "identity",
+        .token = cancelSource.token(),
+        .depositor = depositor,
+    });
+    reader.onRead = [&flow] {
+        static_cast<void>(flow.credentialProvider()(LibreSCRS::Auth::AuthRequirement::forPaceSecret(
+            LibreSCRS::SmartCard::AppletAid{}, LibreSCRS::Auth::PaceSecretKind::Can, std::nullopt,
+            LibreSCRS::LocalizedText{})));
+    };
+
+    const auto result = flow.run();
+    EXPECT_EQ(result.outcome, Operations::IdentityReadFlow::Outcome::Cancelled);
+
+    const auto captured = m_mock->captured();
+    ASSERT_TRUE(captured.seen) << "the production read must actually have prompted";
+    EXPECT_EQ(captured.kind, wire::kKindCan);
+    ASSERT_TRUE(captured.options.contains(wire::kOptAltKinds))
+        << "a travel-document card's CAN prompt must offer the MRZ alternative";
+    EXPECT_EQ(captured.options.at(wire::kOptAltKinds).get<std::vector<std::string>>(),
+              (std::vector<std::string>{wire::kKindMrz}));
 }

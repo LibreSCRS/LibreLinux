@@ -308,6 +308,10 @@ add_executable(PrompterIntegrationTest
     PrompterIntegrationTest.cpp
     ${_test_prompter_adaptor})
 target_include_directories(PrompterIntegrationTest PRIVATE ${LL_DBUS_GEN_DIR})
+# The production-read case drives the real IdentityReadFlow against a detached
+# fake card session, which needs the middleware-internal session factory (same
+# opt-in the other session-driving suites here use).
+target_compile_definitions(PrompterIntegrationTest PRIVATE LIBRESCRS_INTERNAL_BUILD)
 target_link_libraries(PrompterIntegrationTest PRIVATE
     LibreLinuxAgentCore
     GTest::gtest

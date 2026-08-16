@@ -55,6 +55,13 @@ class TrustVerifier;
 struct CardOperationDeps
 {
     std::shared_ptr<Operations::CardReader> ownedReader;
+    // Deposits a holder-chosen passport MRZ into the candidate plugins when an
+    // identity read renegotiates a CAN prompt into an MRZ read. Same
+    // co-ownership class as the other seams: it holds the plugin registry by
+    // reference, so an abandoned reader that unblocks past the flow gate must
+    // not find it freed with the card. Engaged only when the frontend was given
+    // a plugin registry to resolve deposit targets from.
+    std::shared_ptr<Operations::CredentialDepositor> ownedDepositor;
     std::shared_ptr<Operations::CertificateReader> ownedCertReader;
     std::shared_ptr<Operations::Signer> ownedSigner;
     std::shared_ptr<Operations::CredentialManager> ownedCredentials;
@@ -71,6 +78,11 @@ struct CardOperationDeps
     // engaged. The Operation classes consume references, so these handles
     // must remain valid for the card's lifetime.
     Operations::CardReader* reader{nullptr};
+    // Auto-populated from ownedDepositor. Left null by tests that wire the bare
+    // handles directly; CardObject then hands the read/photo operations the
+    // shared no-op depositor, so the flow's reference is always well-formed and
+    // a renegotiation simply deposits nothing.
+    Operations::CredentialDepositor* depositor{nullptr};
     Operations::CertificateReader* certReader{nullptr};
     Operations::TrustVerifier* trustVerifier{nullptr};
     Operations::Signer* signer{nullptr};

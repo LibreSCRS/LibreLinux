@@ -69,6 +69,19 @@ constexpr const char* kInputTooLargeErrName = "org.librescrs.Agent.Error.InputTo
 // they are sourced directly from common/AgentErrorNames.h at each call site
 // (no hand-spelled local copy to drift from the producer/consumer spelling).
 
+// The read/photo flows take the deposit seam by REFERENCE, so a wiring site
+// that has no plugin registry to resolve deposit targets from still has to hand
+// them something. This shared no-op stands in there, exactly as NullGroupSink
+// stands in for a wiring site with no Group signal to emit: the renegotiation
+// then deposits nothing and the re-run fails auth truthfully, instead of the
+// deps struct carrying an optional reference nobody can honour. Stateless, so
+// one instance serves every card.
+Operations::CredentialDepositor& depositorOrNoOp(Operations::CredentialDepositor* wired) noexcept
+{
+    static Operations::NullCredentialDepositor noDeposit;
+    return wired != nullptr ? *wired : noDeposit;
+}
+
 // Artifact labels surfaced in the consent prompt — WHAT the client is about
 // to read. Domain-blind, no card specifics. Stable, lower-case identifiers a
 // future polkit action / CTK binding can also key off.
@@ -395,6 +408,9 @@ CardObject::CardObject(sdbus::IConnection& connection, sdbus::ObjectPath path, s
     if (m_deps.ownedReader && !m_deps.reader) {
         m_deps.reader = m_deps.ownedReader.get();
     }
+    if (m_deps.ownedDepositor && !m_deps.depositor) {
+        m_deps.depositor = m_deps.ownedDepositor.get();
+    }
     if (m_deps.ownedCertReader && !m_deps.certReader) {
         m_deps.certReader = m_deps.ownedCertReader.get();
     }
@@ -454,6 +470,10 @@ void CardObject::attachLifetimeGuards(Operations::OperationBase& op) const
     // (keepAlive no-ops a null share).
     op.keepAlive(m_deps.ownedSigner);
     op.keepAlive(m_deps.ownedReader);
+    // The deposit seam holds the plugin registry by reference, so an abandoned
+    // reader that unblocks past the flow gate and renegotiates must not
+    // dereference a seam freed with the CardObject.
+    op.keepAlive(m_deps.ownedDepositor);
     op.keepAlive(m_deps.ownedCertReader);
     op.keepAlive(m_deps.ownedTrustVerifier);
     // The credential seam is stateless (a router over the plugin list), co-owned
@@ -637,11 +657,17 @@ sdbus::ObjectPath CardObject::ReadIdentity()
     const std::string sender = callerSender();
     Operations::ReadIdentityOperation::Deps deps{
         // holder is stamped by OperationManager from the per-reader worker.
-        .reader = *m_deps.reader,         .prompter = *m_deps.prompter,
-        .serializer = *m_deps.serializer, .credentials = *m_deps.credentials,
-        .readCache = *m_deps.readCache,   .cardKey = m_deps.cardKey,
-        .readerName = m_deps.readerName,  .requester = requester,
-        .artifact = kArtifactIdentity,    .onCardType = m_deps.onCardTypeResolved,
+        .reader = *m_deps.reader,
+        .depositor = depositorOrNoOp(m_deps.depositor),
+        .prompter = *m_deps.prompter,
+        .serializer = *m_deps.serializer,
+        .credentials = *m_deps.credentials,
+        .readCache = *m_deps.readCache,
+        .cardKey = m_deps.cardKey,
+        .readerName = m_deps.readerName,
+        .requester = requester,
+        .artifact = kArtifactIdentity,
+        .onCardType = m_deps.onCardTypeResolved,
     };
     // Pass the requesting client's unique-name (CallerToken) into publish so the
     // sender → ops table is wired BEFORE the op enters the worker queue; a
@@ -681,11 +707,17 @@ sdbus::ObjectPath CardObject::GetPhoto()
     const std::string sender = callerSender();
     Operations::GetPhotoOperation::Deps deps{
         // holder is stamped by OperationManager from the per-reader worker.
-        .reader = *m_deps.reader,         .prompter = *m_deps.prompter,
-        .serializer = *m_deps.serializer, .credentials = *m_deps.credentials,
-        .readCache = *m_deps.readCache,   .cardKey = m_deps.cardKey,
-        .readerName = m_deps.readerName,  .requester = requester,
-        .artifact = kArtifactPhoto,       .onCardType = m_deps.onCardTypeResolved,
+        .reader = *m_deps.reader,
+        .depositor = depositorOrNoOp(m_deps.depositor),
+        .prompter = *m_deps.prompter,
+        .serializer = *m_deps.serializer,
+        .credentials = *m_deps.credentials,
+        .readCache = *m_deps.readCache,
+        .cardKey = m_deps.cardKey,
+        .readerName = m_deps.readerName,
+        .requester = requester,
+        .artifact = kArtifactPhoto,
+        .onCardType = m_deps.onCardTypeResolved,
     };
     try {
         const auto id = m_manager.publish(

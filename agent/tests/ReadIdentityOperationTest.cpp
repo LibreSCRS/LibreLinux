@@ -81,6 +81,11 @@ public:
     ReadOutcome outcome;
     int reads = 0; ///< how many times the card was actually walked
 };
+// These suites never renegotiate a CAN prompt into an MRZ read (their fake
+// readers prompt for nothing), so the ready-made no-op deposit seam keeps the
+// operation's reference well-formed without a plugin registry.
+NullCredentialDepositor depositor;
+
 class FakePrompter final : public PrompterClientBase
 {
 public:
@@ -133,6 +138,7 @@ TEST(ReadIdentityOperation, SuccessPathPopulatesCacheEmitsResultThenFinishes)
                              ReadIdentityOperation::Deps{
                                  .holder = holder.get(),
                                  .reader = reader,
+                                 .depositor = depositor,
                                  .prompter = prompter,
                                  .serializer = serializer,
                                  .credentials = credCache,
@@ -180,6 +186,7 @@ TEST(ReadIdentityOperation, SecondReadOfSameCardServesFromCacheWithoutReWalking)
                                  ReadIdentityOperation::Deps{
                                      .holder = holder.get(),
                                      .reader = reader,
+                                     .depositor = depositor,
                                      .prompter = prompter,
                                      .serializer = serializer,
                                      .credentials = credCache,
@@ -206,6 +213,7 @@ TEST(ReadIdentityOperation, SecondReadOfSameCardServesFromCacheWithoutReWalking)
                                  ReadIdentityOperation::Deps{
                                      .holder = holder.get(),
                                      .reader = reader,
+                                     .depositor = depositor,
                                      .prompter = prompter,
                                      .serializer = serializer,
                                      .credentials = credCache,
@@ -241,6 +249,7 @@ TEST(ReadIdentityOperation, FlowErrorMapsToFinishedError)
                              ReadIdentityOperation::Deps{
                                  .holder = holder.get(),
                                  .reader = reader,
+                                 .depositor = depositor,
                                  .prompter = prompter,
                                  .serializer = serializer,
                                  .credentials = credCache,

@@ -24,6 +24,9 @@ public:
         // worker that serialises this reader's ops (single-threaded; no locking).
         CardSessionHolder* holder{nullptr};
         CardReader& reader;
+        // See ReadIdentityOperation::Deps::depositor -- a GetPhoto cache miss
+        // runs the same flow, so it renegotiates on the same terms.
+        CredentialDepositor& depositor;
         PrompterClientBase& prompter;
         // Agent-wide single-live-prompt gate (see IdentityReadFlowDeps).
         PromptSerializer& serializer;

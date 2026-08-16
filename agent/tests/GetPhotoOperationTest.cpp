@@ -88,6 +88,11 @@ inline std::unique_ptr<CardSessionHolder> makeUnusedHolder()
     return std::make_unique<CardSessionHolder>("Unused", std::move(factory), std::move(resolver),
                                                std::make_shared<LibreSCRS::SmartCard::CardMap>());
 }
+// This suite never renegotiates a CAN prompt into an MRZ read (its reader
+// prompts for nothing), so the ready-made no-op deposit seam keeps the
+// operation's reference well-formed without a plugin registry.
+NullCredentialDepositor depositor;
+
 class UnusedReader final : public CardReader
 {
 public:
@@ -156,6 +161,7 @@ TEST(GetPhotoOperation, CacheHitSkipsFlowAndEmitsPhoto)
                          GetPhotoOperation::Deps{
                              .holder = holder.get(),
                              .reader = reader,
+                             .depositor = depositor,
                              .prompter = prompter,
                              .serializer = serializer,
                              .credentials = credCache,
@@ -197,6 +203,7 @@ TEST(GetPhotoOperation, MemfdSealFailureFinishesErrorClosed)
                          GetPhotoOperation::Deps{
                              .holder = holder.get(),
                              .reader = reader,
+                             .depositor = depositor,
                              .prompter = prompter,
                              .serializer = serializer,
                              .credentials = credCache,
@@ -232,6 +239,7 @@ TEST(GetPhotoOperation, NoPhotoFieldYieldsError)
                          GetPhotoOperation::Deps{
                              .holder = holder.get(),
                              .reader = reader,
+                             .depositor = depositor,
                              .prompter = prompter,
                              .serializer = serializer,
                              .credentials = credCache,

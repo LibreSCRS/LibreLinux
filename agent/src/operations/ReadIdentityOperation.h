@@ -23,6 +23,11 @@ public:
         // worker that serialises this reader's ops (single-threaded; no locking).
         CardSessionHolder* holder{nullptr};
         CardReader& reader;
+        // Deposits a holder-chosen passport MRZ into the candidate plugins when
+        // the flow renegotiates a CAN prompt into an MRZ read (see
+        // IdentityReadFlowDeps::depositor). Bound by CardObject from the
+        // per-card seam bundle.
+        CredentialDepositor& depositor;
         PrompterClientBase& prompter;
         // Agent-wide single-live-prompt gate (see IdentityReadFlowDeps).
         PromptSerializer& serializer;

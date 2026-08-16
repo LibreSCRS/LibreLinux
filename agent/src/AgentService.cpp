@@ -44,9 +44,9 @@ int onShutdownSignal(sd_event_source* /*s*/, const struct signalfd_siginfo* /*si
 } // namespace
 
 AgentService::AgentService(CapabilityResolver& resolver, std::string version, std::filesystem::path configFile,
-                           std::filesystem::path cacheRoot)
-    : m_resolver(resolver), m_version(std::move(version)), m_configFile(std::move(configFile)),
-      m_cacheRoot(std::move(cacheRoot))
+                           std::filesystem::path cacheRoot, LibreSCRS::Plugin::CardPluginService* pluginService)
+    : m_resolver(resolver), m_pluginService(pluginService), m_version(std::move(version)),
+      m_configFile(std::move(configFile)), m_cacheRoot(std::move(cacheRoot))
 {
     // The neutral core (which now owns the config store, caches, key tracker,
     // presence model, and operation scheduler) is assembled in registerOnBus once
@@ -300,7 +300,7 @@ bool AgentService::registerOnBus()
         m_frontend = std::make_unique<AgentFrontend>(
             *m_exporter, m_connection, m_core->operationManager(), m_core->sharedCryptoContext(),
             m_core->cardReadCache(), m_core->signingEngineProvider(), m_core->authorizer(), m_core->rateLimiter(),
-            m_core->configStore(), &m_core->pkcs11(), m_version);
+            m_core->configStore(), &m_core->pkcs11(), m_version, m_pluginService);
 
         // Card-removal events from the monitor reach the core CardKeyTracker via
         // MonitorBridge; the tracker fires this callback with the dropped card's

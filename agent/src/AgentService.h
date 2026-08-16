@@ -16,6 +16,9 @@ struct sd_event_source;
 namespace sdbus {
 class IConnection;
 }
+namespace LibreSCRS::Plugin {
+class CardPluginService;
+}
 namespace LibreSCRS::Agent {
 class CapabilityResolver;
 class AgentFrontend;
@@ -32,8 +35,14 @@ class EventLoopPoster;
 class AgentService
 {
 public:
+    // @p pluginService is the plugin registry the per-card credential depositor
+    // resolves mutable plugin handles from — the SAME registry @p resolver
+    // wraps, borrowed here rather than reached through the resolver so the
+    // capability seam keeps its narrow, card-facts-only surface. Like
+    // @p resolver it MUST outlive this service. Null (the default) in
+    // conformance harnesses that never renegotiate a read.
     AgentService(CapabilityResolver& resolver, std::string version, std::filesystem::path configFile,
-                 std::filesystem::path cacheRoot);
+                 std::filesystem::path cacheRoot, LibreSCRS::Plugin::CardPluginService* pluginService = nullptr);
     ~AgentService();
     AgentService(const AgentService&) = delete;
     AgentService& operator=(const AgentService&) = delete;
@@ -56,6 +65,9 @@ private:
     void quiesce() noexcept;
 
     CapabilityResolver& m_resolver;
+    // Borrowed plugin registry (may be null) threaded into the frontend, which
+    // builds the per-card credential depositor from it.
+    LibreSCRS::Plugin::CardPluginService* m_pluginService{nullptr};
     std::string m_version;
     // Config paths captured from the ctor and handed to the AgentCore aggregate
     // when it is emplaced in registerOnBus (the ConfigStore + caches it builds now
