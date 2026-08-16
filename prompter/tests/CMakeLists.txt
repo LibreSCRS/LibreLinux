@@ -321,6 +321,43 @@ add_test(NAME PromptDialogRetryContextTest COMMAND PromptDialogRetryContextTest)
 set_tests_properties(PromptDialogRetryContextTest PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# Pins the opt-in CAN -> MRZ switch affordance (Options::offerMrzSwitch): no
+# affordance without the opt-in, the in-place widget swap and its re-framing of
+# the dialog, and the canonical payload the swapped-in MRZ form captures.
+qt_add_executable(PromptDialogAltKindsTest
+    PromptDialogAltKindsTest.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/PromptDialog.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/PromptDialog.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/InputWidgetBase.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/InputWidgetBase.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/PinInputWidget.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/PinInputWidget.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/CanInputWidget.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/CanInputWidget.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/MrzInputWidget.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/MrzInputWidget.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/ChangePinInputWidget.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/ChangePinInputWidget.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/SecretMemfd.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/SecretMemfd.cpp)
+
+target_include_directories(PromptDialogAltKindsTest PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src)
+
+target_link_libraries(PromptDialogAltKindsTest PRIVATE
+    Qt6::Core
+    Qt6::Gui
+    Qt6::Widgets
+    Qt6::Test
+    KF6::I18n
+    LibreMiddleware::Secure
+    GTest::gtest
+    GTest::gtest_main)
+
+add_test(NAME PromptDialogAltKindsTest COMMAND PromptDialogAltKindsTest)
+set_tests_properties(PromptDialogAltKindsTest PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # Multi-field secret collection (change_pin): dialog-level cases (per-role
 # bounds, confirm-mismatch inline error, two-sealed-fd capture, read-then-hide
 # ordering, confirm containment) plus service-level RequestSecrets cases over

@@ -63,6 +63,21 @@ inline constexpr const char* kOptMaxLength = "max_length";
 //                generic line for anything else, never showing the raw key.
 inline constexpr const char* kOptAttempt = "attempt";
 inline constexpr const char* kOptLastError = "last_error";
+// Opt-in on a kind-"can" RequestSecret: the ALTERNATIVE credential kinds the
+// caller can also consume for the same operation, as an `as` array of kind
+// strings from the kKind* vocabulary above (today the only meaningful member is
+// kKindMrz). Sending it asks the prompter to offer the user an in-dialog switch
+// to that alternative form; unknown members are ignored, never rendered.
+//
+// Additive rollout contract, BOTH directions:
+//   * new caller x old prompter -- the prompter lifts only the keys it knows,
+//     so this one is dropped: no switch is offered and the reply is the plain
+//     kStatusOk vocabulary, exactly as before.
+//   * old caller x new prompter -- the key is absent, so the switch affordance
+//     is never constructed and kStatusOkMrz below is structurally unmintable.
+// The key is meaningful ONLY on kind "can"; a request of any other kind that
+// carries it renders no switch and answers with today's status vocabulary.
+inline constexpr const char* kOptAltKinds = "alt_kinds";
 
 // Additional option-dict keys of RequestSecrets (all non-secret metadata).
 // Per-role bounds: primary_* applies to the CURRENT credential field,
@@ -78,6 +93,19 @@ inline constexpr const char* kOptPinLabel = "pin_label";
 
 // Status strings returned by RequestSecret (the first tuple element).
 inline constexpr const char* kStatusOk = "ok";
+// Returned INSTEAD of kStatusOk when, and only when, the request was kind
+// "can", carried kOptAltKinds containing kKindMrz, and the user switched the
+// dialog to the MRZ form before accepting: the secret_fd then carries an MRZ
+// payload (the canonical three-line document-number / date-of-birth /
+// date-of-expiry shape), not a CAN. It tells the caller WHICH credential it is
+// holding, so it can deposit the value under the right field identifier.
+//
+// Minting is gated on the same offer the dialog rendered, so "offered" and
+// "minted" cannot diverge: a caller that never opted in never sees this status,
+// and a caller that opted in but whose user stayed on the CAN form gets plain
+// kStatusOk. Consumers treat an unexpected kStatusOkMrz as they treat any
+// unknown status -- fail closed to an error, never as a successful CAN.
+inline constexpr const char* kStatusOkMrz = "ok_mrz";
 inline constexpr const char* kStatusCancelled = "cancelled";
 inline constexpr const char* kStatusError = "error";
 // Returned to a caller that fails the prompter's binary-identity gate; pairs

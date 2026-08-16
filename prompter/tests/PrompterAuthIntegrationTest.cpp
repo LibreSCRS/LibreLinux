@@ -28,15 +28,21 @@
 // through the in-process reject() seam rather than a self-deadlocking bus
 // cancel. Runs under dbus-run-session (private bus) + QT_QPA_PLATFORM=offscreen.
 
+#include "PromptDialog.h"
 #include "PrompterService.h"
+#include "PrompterWire.h"
 
 #include "org.librescrs.Prompter1_proxy.h"
 
 #include <QApplication>
+#include <QDialogButtonBox>
+#include <QLineEdit>
+#include <QMetaObject>
+#include <QPushButton>
 #include <QTimer>
 
 #include <sys/stat.h>
-#include <unistd.h> // getpid
+#include <unistd.h> // getpid, read, lseek
 
 #include <sdbus-c++/IConnection.h>
 #include <sdbus-c++/IProxy.h>
@@ -46,12 +52,16 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstddef>
 #include <cstdlib>
 #include <filesystem>
+#include <functional>
+#include <map>
 #include <memory>
 #include <string>
 #include <thread>
 #include <tuple>
+#include <vector>
 
 namespace {
 
@@ -97,6 +107,60 @@ off_t fdSize(int fd)
         return -1;
     }
     return st.st_size;
+}
+
+// Read back a sealed memfd's contents for assertion (house helper, mirrored
+// from PrompterMultiFieldTest). The caller owns the fd.
+std::string readMemfd(int fd)
+{
+    if (fd < 0) {
+        return {};
+    }
+    const off_t size = ::lseek(fd, 0, SEEK_END);
+    if (size <= 0) {
+        return {};
+    }
+    ::lseek(fd, 0, SEEK_SET);
+    std::string out(static_cast<std::size_t>(size), '\0');
+    std::size_t off = 0;
+    while (off < out.size()) {
+        const auto n = ::read(fd, out.data() + off, out.size() - off);
+        if (n <= 0) {
+            break;
+        }
+        off += static_cast<std::size_t>(n);
+    }
+    return out;
+}
+
+// ICAO 9303 SPECIMEN values (the published example document), not a real
+// travel document.
+constexpr const char* kSpecimenDocNumber = "L898902C36";
+constexpr const char* kSpecimenDateOfBirth = "7408122";
+constexpr const char* kSpecimenDateOfExpiry = "1204159";
+constexpr const char* kSpecimenPayload = "L898902C36\n7408122\n1204159";
+
+QPushButton* okButtonOf(LibreLinux::Prompter::PromptDialog& dlg)
+{
+    auto* box = dlg.findChild<QDialogButtonBox*>();
+    return box != nullptr ? box->button(QDialogButtonBox::Ok) : nullptr;
+}
+
+QPushButton* switchButtonOf(LibreLinux::Prompter::PromptDialog& dlg)
+{
+    return dlg.findChild<QPushButton*>(QStringLiteral("switchToMrzButton"));
+}
+
+// Fill the three MRZ fields with the specimen values, addressed in
+// construction order (document number, date of birth, date of expiry) — the
+// convention InputWidgetValidationTest uses, the widget names no edits.
+void fillMrzSpecimen(QWidget& root)
+{
+    const auto edits = root.findChildren<QLineEdit*>();
+    ASSERT_EQ(edits.size(), 3) << "the MRZ form must expose exactly three entry fields";
+    edits[0]->setText(QString::fromLatin1(kSpecimenDocNumber));
+    edits[1]->setText(QString::fromLatin1(kSpecimenDateOfBirth));
+    edits[2]->setText(QString::fromLatin1(kSpecimenDateOfExpiry));
 }
 
 // True once the prompter has published a live dialog.
@@ -160,6 +224,50 @@ protected:
         LibreLinux::Prompter::PrompterService::s_activeDialog.store(nullptr);
         LibreLinux::Prompter::PrompterService::s_activeOwnerPid.store(0);
         ::unsetenv(kPeerEnv);
+    }
+
+    // Run @p onDialog (GUI thread, queued onto the live dialog) while a worker
+    // drives RequestSecret(kind, options); returns the reply tuple. The
+    // scripted-dialog harness of PrompterMultiFieldTest's
+    // PrompterMultiFieldBusTest::driveRequestSecrets, for the single-secret
+    // method: the sd-bus dispatcher blocks inside RequestSecret for the
+    // dialog's lifetime, so the script has to reach the dialog in-process while
+    // this thread runs the Qt event loop the dialog needs.
+    std::tuple<std::string, sdbus::UnixFd, std::string>
+    driveRequestSecret(const std::string& kind, const std::map<std::string, sdbus::Variant>& options,
+                       const std::function<void(LibreLinux::Prompter::PromptDialog*)>& onDialog)
+    {
+        std::tuple<std::string, sdbus::UnixFd, std::string> reply;
+        std::atomic<bool> returned{false};
+        std::thread driver([&] {
+            reply = m_client->RequestSecret(kind, options);
+            returned.store(true);
+        });
+
+        std::thread watcher([&] {
+            if (!spinUntil(dialogIsLive, std::chrono::seconds{10})) {
+                return; // no dialog appeared; the caller's assertions fail below
+            }
+            auto* dlg = LibreLinux::Prompter::PrompterService::s_activeDialog.load();
+            if (dlg != nullptr) {
+                QMetaObject::invokeMethod(dlg, [dlg, &onDialog]() { onDialog(dlg); }, Qt::QueuedConnection);
+            }
+        });
+
+        QTimer quitPoll;
+        quitPoll.setInterval(5);
+        QObject::connect(&quitPoll, &QTimer::timeout, [&] {
+            if (returned.load()) {
+                QApplication::instance()->quit();
+            }
+        });
+        quitPoll.start();
+        QTimer::singleShot(15000, QApplication::instance(), []() { QApplication::instance()->quit(); });
+        QApplication::instance()->exec();
+        driver.join();
+        watcher.join();
+        EXPECT_TRUE(returned.load()) << "RequestSecret never returned (test wedged)";
+        return reply;
     }
 
     std::unique_ptr<sdbus::IConnection> m_serverConn;
@@ -308,6 +416,210 @@ TEST_F(PrompterAuthIntegrationTest, AuthorizedRequestSecretRunsDialogWithCallerA
     // Slots cleared after the dialog unwinds.
     EXPECT_EQ(LibreLinux::Prompter::PrompterService::s_activeDialog.load(), nullptr);
     EXPECT_EQ(LibreLinux::Prompter::PrompterService::s_activeOwnerPid.load(), 0);
+}
+
+// --- The alternative-kind opt-in and the status it can mint -----------------
+//
+// The service decides ONCE, in the RequestSecret handler where both the kind
+// and the lifted options are in scope, whether a switch is offered; that same
+// decision gates the distinct status. Offered and minted therefore cannot
+// diverge, and every caller that does not opt in keeps today's vocabulary
+// byte-identically.
+
+TEST_F(PrompterAuthIntegrationTest, OkMrzMintedOnlyWhenOfferedAndChosen)
+{
+    ::setenv(kPeerEnv, selfExe().string().c_str(), 1);
+
+    int argc = 1;
+    const char* argv[] = {"prompter-auth-test"};
+    QApplication app(argc, const_cast<char**>(argv));
+
+    namespace wire = LibreLinux::PrompterWire;
+    const std::map<std::string, sdbus::Variant> options{
+        {wire::kOptAltKinds, sdbus::Variant{std::vector<std::string>{wire::kKindMrz}}},
+    };
+
+    auto reply = driveRequestSecret(wire::kKindCan, options, [](LibreLinux::Prompter::PromptDialog* dlg) {
+        auto* button = switchButtonOf(*dlg);
+        ASSERT_NE(button, nullptr) << "the opt-in must reach the dialog as a switch affordance";
+        button->click();
+        fillMrzSpecimen(*dlg);
+        auto* ok = okButtonOf(*dlg);
+        ASSERT_NE(ok, nullptr);
+        ASSERT_TRUE(ok->isEnabled());
+        ok->click();
+    });
+
+    EXPECT_EQ(std::get<0>(reply), wire::kStatusOkMrz)
+        << "a CAN request that opted in and whose user switched must answer with the distinct status";
+    const int fd = std::get<1>(reply).get();
+    ASSERT_GE(fd, 0);
+    EXPECT_EQ(readMemfd(fd), std::string(kSpecimenPayload)) << "the fd must carry the MRZ payload, not a CAN";
+    EXPECT_TRUE(std::get<2>(reply).empty());
+}
+
+TEST_F(PrompterAuthIntegrationTest, PlainOkWhenOptedInButUserStaysOnCan)
+{
+    ::setenv(kPeerEnv, selfExe().string().c_str(), 1);
+
+    int argc = 1;
+    const char* argv[] = {"prompter-auth-test"};
+    QApplication app(argc, const_cast<char**>(argv));
+
+    namespace wire = LibreLinux::PrompterWire;
+    const std::map<std::string, sdbus::Variant> options{
+        {wire::kOptAltKinds, sdbus::Variant{std::vector<std::string>{wire::kKindMrz}}},
+    };
+
+    // The affordance is offered but declined: the user fills the CAN form the
+    // request actually asked for.
+    auto reply = driveRequestSecret(wire::kKindCan, options, [](LibreLinux::Prompter::PromptDialog* dlg) {
+        ASSERT_NE(switchButtonOf(*dlg), nullptr);
+        auto* edit = dlg->findChild<QLineEdit*>();
+        ASSERT_NE(edit, nullptr);
+        edit->setText(QStringLiteral("123456"));
+        auto* ok = okButtonOf(*dlg);
+        ASSERT_NE(ok, nullptr);
+        ok->click();
+    });
+
+    EXPECT_EQ(std::get<0>(reply), wire::kStatusOk) << "opting in must not by itself change the answered status";
+    EXPECT_EQ(readMemfd(std::get<1>(reply).get()), std::string("123456"));
+}
+
+TEST_F(PrompterAuthIntegrationTest, AltKindsIgnoredForNonCanKinds)
+{
+    ::setenv(kPeerEnv, selfExe().string().c_str(), 1);
+
+    int argc = 1;
+    const char* argv[] = {"prompter-auth-test"};
+    QApplication app(argc, const_cast<char**>(argv));
+
+    namespace wire = LibreLinux::PrompterWire;
+    const std::map<std::string, sdbus::Variant> options{
+        {wire::kOptAltKinds, sdbus::Variant{std::vector<std::string>{wire::kKindMrz}}},
+    };
+
+    // Kind "pin": the option is CAN-scoped, so no affordance and no new status.
+    std::atomic<bool> pinSawSwitch{true};
+    auto pinReply = driveRequestSecret(wire::kKindPin, options, [&](LibreLinux::Prompter::PromptDialog* dlg) {
+        pinSawSwitch.store(switchButtonOf(*dlg) != nullptr);
+        auto* edit = dlg->findChild<QLineEdit*>();
+        ASSERT_NE(edit, nullptr);
+        edit->setText(QStringLiteral("1234"));
+        auto* ok = okButtonOf(*dlg);
+        ASSERT_NE(ok, nullptr);
+        ok->click();
+    });
+    EXPECT_FALSE(pinSawSwitch.load()) << "the option is CAN-scoped; a PIN prompt must render no switch";
+    EXPECT_EQ(std::get<0>(pinReply), wire::kStatusOk);
+
+    // Kind "mrz": the dialog IS the MRZ form, but the request never offered a
+    // choice — the reply must stay on today's vocabulary, so a flow bug can
+    // never deliver an MRZ payload under the distinct status to a slot that
+    // asked for something else.
+    std::atomic<bool> mrzSawSwitch{true};
+    auto mrzReply = driveRequestSecret(wire::kKindMrz, options, [&](LibreLinux::Prompter::PromptDialog* dlg) {
+        mrzSawSwitch.store(switchButtonOf(*dlg) != nullptr);
+        fillMrzSpecimen(*dlg);
+        auto* ok = okButtonOf(*dlg);
+        ASSERT_NE(ok, nullptr);
+        ok->click();
+    });
+    EXPECT_FALSE(mrzSawSwitch.load()) << "an MRZ prompt has nothing to switch to";
+    EXPECT_EQ(std::get<0>(mrzReply), wire::kStatusOk) << "only a CAN request that opted in may mint the new status";
+    EXPECT_EQ(readMemfd(std::get<1>(mrzReply).get()), std::string(kSpecimenPayload));
+}
+
+TEST_F(PrompterAuthIntegrationTest, AltKindsValueHygiene)
+{
+    ::setenv(kPeerEnv, selfExe().string().c_str(), 1);
+
+    int argc = 1;
+    const char* argv[] = {"prompter-auth-test"};
+    QApplication app(argc, const_cast<char**>(argv));
+
+    namespace wire = LibreLinux::PrompterWire;
+
+    // A member that is NOT the alternative this dialog can offer buys nothing.
+    std::atomic<bool> sawSwitchForUnknownMember{true};
+    auto unknownReply = driveRequestSecret(
+        wire::kKindCan, {{wire::kOptAltKinds, sdbus::Variant{std::vector<std::string>{wire::kKindPin}}}},
+        [&](LibreLinux::Prompter::PromptDialog* dlg) {
+            sawSwitchForUnknownMember.store(switchButtonOf(*dlg) != nullptr);
+            auto* edit = dlg->findChild<QLineEdit*>();
+            ASSERT_NE(edit, nullptr);
+            edit->setText(QStringLiteral("123456"));
+            okButtonOf(*dlg)->click();
+        });
+    EXPECT_FALSE(sawSwitchForUnknownMember.load()) << "only the alternative the dialog can actually offer counts";
+    EXPECT_EQ(std::get<0>(unknownReply), wire::kStatusOk);
+
+    // An empty list is an opt-in to nothing.
+    std::atomic<bool> sawSwitchForEmptyList{true};
+    auto emptyReply =
+        driveRequestSecret(wire::kKindCan, {{wire::kOptAltKinds, sdbus::Variant{std::vector<std::string>{}}}},
+                           [&](LibreLinux::Prompter::PromptDialog* dlg) {
+                               sawSwitchForEmptyList.store(switchButtonOf(*dlg) != nullptr);
+                               auto* edit = dlg->findChild<QLineEdit*>();
+                               ASSERT_NE(edit, nullptr);
+                               edit->setText(QStringLiteral("123456"));
+                               okButtonOf(*dlg)->click();
+                           });
+    EXPECT_FALSE(sawSwitchForEmptyList.load()) << "an empty list offers nothing";
+    EXPECT_EQ(std::get<0>(emptyReply), wire::kStatusOk);
+
+    // The known member alongside junk still offers exactly ONE switch; the
+    // junk members are ignored, never rendered as further affordances.
+    std::atomic<int> switchCount{-1};
+    auto mixedReply = driveRequestSecret(
+        wire::kKindCan,
+        {{wire::kOptAltKinds,
+          sdbus::Variant{std::vector<std::string>{"nonsense", wire::kKindMrz, "another-unknown-kind"}}}},
+        [&](LibreLinux::Prompter::PromptDialog* dlg) {
+            switchCount.store(
+                static_cast<int>(dlg->findChildren<QPushButton*>(QStringLiteral("switchToMrzButton")).size()));
+            auto* button = switchButtonOf(*dlg);
+            ASSERT_NE(button, nullptr);
+            button->click();
+            fillMrzSpecimen(*dlg);
+            okButtonOf(*dlg)->click();
+        });
+    EXPECT_EQ(switchCount.load(), 1) << "unknown members must not render additional affordances";
+    EXPECT_EQ(std::get<0>(mixedReply), wire::kStatusOkMrz);
+}
+
+TEST_F(PrompterAuthIntegrationTest, MistypedAltKindsIsTreatedAsAbsent)
+{
+    ::setenv(kPeerEnv, selfExe().string().c_str(), 1);
+
+    int argc = 1;
+    const char* argv[] = {"prompter-auth-test"};
+    QApplication app(argc, const_cast<char**>(argv));
+
+    namespace wire = LibreLinux::PrompterWire;
+    // Wrong variant type (a plain string where an array of strings belongs):
+    // dropped exactly like an unknown key — no switch, no error, today's
+    // status. The lift must neither throw nor half-apply.
+    const std::map<std::string, sdbus::Variant> options{
+        {wire::kOptAltKinds, sdbus::Variant{std::string{"mrz"}}},
+    };
+
+    std::atomic<bool> sawSwitch{true};
+    auto reply = driveRequestSecret(wire::kKindCan, options, [&](LibreLinux::Prompter::PromptDialog* dlg) {
+        sawSwitch.store(switchButtonOf(*dlg) != nullptr);
+        auto* edit = dlg->findChild<QLineEdit*>();
+        ASSERT_NE(edit, nullptr);
+        edit->setText(QStringLiteral("123456"));
+        auto* ok = okButtonOf(*dlg);
+        ASSERT_NE(ok, nullptr);
+        ok->click();
+    });
+
+    EXPECT_FALSE(sawSwitch.load()) << "a mistyped option must behave exactly like a caller that never sent it";
+    EXPECT_EQ(std::get<0>(reply), wire::kStatusOk);
+    EXPECT_EQ(readMemfd(std::get<1>(reply).get()), std::string("123456"));
+    EXPECT_TRUE(std::get<2>(reply).empty()) << "a mistyped option is not an error";
 }
 
 // --- Ownership gate (pure predicate) ---------------------------------------

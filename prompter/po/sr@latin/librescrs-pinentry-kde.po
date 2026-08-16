@@ -5,7 +5,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: librescrs-pinentry-kde\n"
 "Report-Msgid-Bugs-To: https://librescrs.github.io/\n"
-"POT-Creation-Date: 2026-07-26 02:31+0200\n"
+"POT-Creation-Date: 2026-08-16 09:05+0200\n"
 "PO-Revision-Date: 2026-07-19\n"
 "Last-Translator: hirashix0\n"
 "Language-Team: Serbian\n"
@@ -88,61 +88,104 @@ msgctxt "@label:textbox PIN entry field"
 msgid "PIN:"
 msgstr "PIN:"
 
-#: prompter/src/PromptDialog.cpp:55
+#: prompter/src/PromptDialog.cpp:69
+#, kde-format
+msgctxt ""
+"@info:status inline error shown above a re-prompt after the card rejected "
+"the previously entered CAN/MRZ"
+msgid "The value you entered was not accepted. Please try again."
+msgstr "Uneta vrednost nije prihvaćena. Pokušajte ponovo."
+
+#: prompter/src/PromptDialog.cpp:72
+#, kde-format
+msgctxt "@info:status generic inline error shown above a credential re-prompt"
+msgid "Your previous entry was not accepted. Please try again."
+msgstr "Vaš prethodni unos nije prihvaćen. Pokušajte ponovo."
+
+#: prompter/src/PromptDialog.cpp:85
+#, kde-format
+msgctxt "@info line naming the credential the visible entry form takes"
+msgid "Enter the card access number (CAN) printed on the document."
+msgstr "Unesite broj za pristup kartici (CAN) odštampan na dokumentu."
+
+#: prompter/src/PromptDialog.cpp:88
+#, kde-format
+msgctxt "@info line naming the credential the visible entry form takes"
+msgid ""
+"Enter the document details exactly as printed in the machine-readable zone."
+msgstr "Unesite podatke o dokumentu tačno onako kako su odštampani u mašinski čitljivoj zoni."
+
+#: prompter/src/PromptDialog.cpp:102
+#, kde-format
+msgctxt ""
+"@action:button switch the credential prompt back to the card access number "
+"form"
+msgid "Use card access number (CAN) instead"
+msgstr "Pređi na broj za pristup kartici (CAN)"
+
+#: prompter/src/PromptDialog.cpp:105
+#, kde-format
+msgctxt ""
+"@action:button switch the credential prompt to the passport machine-readable "
+"zone form"
+msgid "Use passport MRZ instead"
+msgstr "Pređi na mašinski čitljivu zonu pasoša"
+
+#: prompter/src/PromptDialog.cpp:112
 #, kde-format
 msgctxt "@title:window PIN entry dialog"
 msgid "Enter PIN"
 msgstr "Unesite PIN"
 
-#: prompter/src/PromptDialog.cpp:57
+#: prompter/src/PromptDialog.cpp:114
 #, kde-format
 msgctxt "@title:window CAN entry dialog"
 msgid "Enter Card Access Number"
 msgstr "Unesite broj za pristup kartici"
 
-#: prompter/src/PromptDialog.cpp:59
+#: prompter/src/PromptDialog.cpp:116
 #, kde-format
 msgctxt "@title:window MRZ entry dialog"
 msgid "Enter Machine-Readable Zone"
 msgstr "Unesite mašinski čitljivu zonu"
 
-#: prompter/src/PromptDialog.cpp:61
+#: prompter/src/PromptDialog.cpp:118
 #, kde-format
 msgctxt "@title:window PIN change dialog"
 msgid "Change PIN"
 msgstr "Promeni PIN"
 
-#: prompter/src/PromptDialog.cpp:63
+#: prompter/src/PromptDialog.cpp:120
 #, kde-format
 msgctxt "@title:window generic credential entry"
 msgid "Enter Credentials"
 msgstr "Unesite pristupne podatke"
 
-#: prompter/src/PromptDialog.cpp:137
+#: prompter/src/PromptDialog.cpp:214
 #, kde-format
 msgctxt "@info list of documents included in a batch signing request"
 msgid "Documents: %1"
 msgstr "Dokumenti: %1"
 
-#: prompter/src/PromptDialog.cpp:147
+#: prompter/src/PromptDialog.cpp:223
 #, kde-format
 msgctxt "@info card identity label"
 msgid "Card: %1"
 msgstr "Kartica: %1"
 
-#: prompter/src/PromptDialog.cpp:162
+#: prompter/src/PromptDialog.cpp:238
 #, kde-format
 msgctxt "@title:group framed area for application-supplied request details"
 msgid "Requested by an application"
 msgstr "Zahtevala aplikacija"
 
-#: prompter/src/PromptDialog.cpp:169
+#: prompter/src/PromptDialog.cpp:245
 #, kde-format
 msgctxt "@info requester identity label"
 msgid "Requested by: %1"
 msgstr "Podnosilac zahteva: %1"
 
-#: prompter/src/PromptDialog.cpp:172
+#: prompter/src/PromptDialog.cpp:248
 #, kde-format
 msgctxt "@info artifact label"
 msgid "Artifact: %1"

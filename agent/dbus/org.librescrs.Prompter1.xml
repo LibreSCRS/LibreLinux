@@ -33,13 +33,30 @@
                    "last_error"  (s) retry context: msgKey of the failure
                                  that triggered the retry; absent alongside
                                  "attempt"
+                   "alt_kinds"   (as) kind "can" ONLY: the alternative
+                                 credential kinds this caller can also consume
+                                 for the same operation (today: {"mrz"}).
+                                 Sending it makes the dialog offer an in-dialog
+                                 switch to that form. Purely additive: a
+                                 prompter that does not know the key ignores it
+                                 and answers "ok" as before; a caller that does
+                                 not send it never gets the switch — and hence
+                                 never the "ok_mrz" status below. Unknown
+                                 members are ignored, never rendered. On any
+                                 other kind the key has no effect.
 
       Outputs:
-        status        "ok" | "cancelled" | "error" | "unauthorized"
+        status        "ok" | "ok_mrz" | "cancelled" | "error" | "unauthorized"
                       ("unauthorized" is the fail-closed rejection of a caller
                       whose peer credentials are not the agent — a non-agent
                       process trying to drive the prompter directly; the agent,
-                      the only authorized caller, never receives it.)
+                      the only authorized caller, never receives it.
+                      "ok_mrz" is returned ONLY to a caller that sent
+                      "alt_kinds" containing "mrz" on a "can" request AND whose
+                      user switched to the MRZ form before accepting: secret_fd
+                      then carries an MRZ payload instead of a CAN. Every other
+                      caller — including one that opted in but stayed on the
+                      CAN form — keeps the "ok" vocabulary unchanged.)
         secret_fd     sealed memfd containing the secret bytes (size() can be 0
                       on cancellation/error); recipient MUST read, scrub into a
                       Secure::String, and close immediately

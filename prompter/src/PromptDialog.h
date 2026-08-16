@@ -10,6 +10,7 @@
 
 class QDialogButtonBox;
 class QLabel;
+class QPushButton;
 
 namespace LibreLinux::Prompter {
 
@@ -71,6 +72,23 @@ public:
         int attempt = 0;
         QString lastError;
 
+        // The wire's `alt_kinds` RequestSecret option, lifted verbatim: the
+        // alternative credential kinds the CALLER declared it can also consume
+        // for this operation. A plain value carry with no policy attached —
+        // whether any of them is actually offered is decided by the service,
+        // once, where the requested kind is also in scope; the dialog itself
+        // reads only @ref offerMrzSwitch below. Empty for every caller that
+        // does not opt in (i.e. every caller today).
+        QStringList altKinds;
+
+        // Render an in-dialog switch between the CAN form and the passport MRZ
+        // form. Set by the service iff the request asked for a CAN *and* its
+        // `alt_kinds` named the MRZ kind. The dialog makes no policy decision
+        // of its own: it renders the affordance iff this flag is set, and the
+        // service mints its distinct "the user switched" status off the same
+        // flag, so what is offered and what can be answered cannot diverge.
+        bool offerMrzSwitch = false;
+
         // Kind::ChangePin only — per-role bounds (primary drives the current
         // field; new drives the new AND confirm fields) + display-only labels.
         int primaryMinLength = 4;
@@ -120,13 +138,36 @@ public:
     /// error while the confirmation differs from the new PIN.
     void accept() override;
 
+    /// True while the MRZ form is the ACTIVE input widget — either because the
+    /// prompt asked for an MRZ outright, or because a CAN prompt offered the
+    /// switch (@ref Options::offerMrzSwitch) and the user took it. The service
+    /// combines it with the offer to decide which status the reply carries; a
+    /// prompt that never offered a switch cannot report a switched outcome.
+    [[nodiscard]] bool mrzChosen() const;
+
 private:
     void buildLayout(const Options& opts);
     void wireValidity();
 
+    /// Toggle the active input widget between the CAN and MRZ forms IN PLACE
+    /// (same layout slot) and re-frame the dialog for the kind now shown. Only
+    /// reachable from the switch affordance, which exists only under
+    /// @ref Options::offerMrzSwitch.
+    void swapInputKind();
+
+    /// Drop the retry-context error line, if one is shown. It described the
+    /// attempt made with the PREVIOUS form's credential, so it must not
+    /// survive a swap and accuse a form the user has not submitted yet.
+    void clearRetryError();
+
+    Kind m_kind;
+    Options m_opts; ///< non-secret request metadata; re-read when re-framing
     InputWidgetBase* m_widget;
     ChangePinInputWidget* m_changePinWidget = nullptr; // alias of m_widget for Kind::ChangePin
     QDialogButtonBox* m_buttons;
+    QPushButton* m_switchButton = nullptr; // null unless Options::offerMrzSwitch
+    QLabel* m_kindHint = nullptr;          // null unless Options::offerMrzSwitch
+    QLabel* m_retryError = nullptr;        // null unless Options::attempt > 0
     SecretFdPair m_captured;
 };
 

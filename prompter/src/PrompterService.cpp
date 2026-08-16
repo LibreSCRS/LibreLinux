@@ -39,6 +39,7 @@ namespace {
 // Kind / option-key / status names live in common/PrompterWire.h (shared with
 // the agent consumer so the two binaries cannot drift). kStatusUnauthorized
 // pairs with a zero-byte sealed memfd so no dialog shows and no secret leaks.
+using PrompterWire::kOptAltKinds;
 using PrompterWire::kOptArtifact;
 using PrompterWire::kOptArtifacts;
 using PrompterWire::kOptAttempt;
@@ -57,6 +58,7 @@ using PrompterWire::kOptTitle;
 using PrompterWire::kStatusCancelled;
 using PrompterWire::kStatusError;
 using PrompterWire::kStatusOk;
+using PrompterWire::kStatusOkMrz;
 using PrompterWire::kStatusUnauthorized;
 
 // Lift a stringly-typed option, tolerating either a real string variant
@@ -143,6 +145,12 @@ PromptDialog::Options buildOptions(const std::map<std::string, sdbus::Variant>& 
     // matching the sender's own omit-when-default convention.
     out.attempt = static_cast<int>(optionUInt(opts, kOptAttempt, 0u));
     out.lastError = QString::fromStdString(optionString(opts, kOptLastError));
+    // Plain value carry, no policy: a mistyped (or absent) `alt_kinds` yields
+    // an empty list here — the same "treated as absent" tolerance every other
+    // lift above has. Whether any member is actually offered depends on the
+    // requested KIND, which this helper deliberately does not see; that
+    // decision is made once, in the RequestSecret handler.
+    out.altKinds = optionStringList(opts, kOptAltKinds);
     return out;
 }
 
@@ -196,6 +204,10 @@ struct DialogOutcome
     // be adopted as fd 0 (stdin). Set to a real (possibly empty-sealed) memfd
     // on every reachable return.
     int fd{-1};
+    // Which form the user actually submitted on (see PromptDialog::mrzChosen).
+    // Reported, never decided, here: the handler combines it with the offer it
+    // made to pick the reply status. False on every non-accept path.
+    bool mrzChosen{false};
 };
 
 // The fd MUST default to the -1 "no fd" sentinel, never 0 (a live descriptor —
@@ -243,7 +255,7 @@ DialogOutcome runDialog(PromptDialog::Kind kind, const PromptDialog::Options& op
     if (fd < 0) {
         return {kStatusError, makeEmptySealedFd()};
     }
-    return {kStatusOk, fd};
+    return {kStatusOk, fd, dlg.mrzChosen()};
 }
 
 struct MultiDialogOutcome
@@ -326,7 +338,18 @@ PrompterService::RequestSecret(const std::string& kind, const std::map<std::stri
         // convention.
         return std::make_tuple(std::string{kStatusError}, std::move(wrapped), std::string{});
     }
-    const PromptDialog::Options opts = buildOptions(options);
+    PromptDialog::Options opts = buildOptions(options);
+
+    // THE conjunction, evaluated once and nowhere else: the alternative-kind
+    // opt-in is meaningful only on a CAN request, and only for the alternative
+    // this dialog can actually offer. This is the single site where both the
+    // requested kind and the lifted options are in scope, and the flag it
+    // produces is the same one the status decision below reads — so an offer
+    // the user never saw can never be answered, and an answer the caller never
+    // opted into can never be minted.
+    const bool offerMrzSwitch =
+        *parsedKind == PromptDialog::Kind::Can && opts.altKinds.contains(QString::fromLatin1(PrompterWire::kKindMrz));
+    opts.offerMrzSwitch = offerMrzSwitch;
 
     // Hop to the Qt main thread: every widget allocation, layout, event
     // dispatch and exec() must run there.
@@ -349,11 +372,22 @@ PrompterService::RequestSecret(const std::string& kind, const std::map<std::stri
         outcome = runDialog(*parsedKind, opts, ownerPid);
     }
 
+    // The ONLY site that mints the switched-to-MRZ status, gated on the very
+    // offer made above: an accepted prompt that offered the switch AND was
+    // submitted on the MRZ form answers with it, because the fd then carries
+    // an MRZ payload rather than a CAN. Every other outcome — including an
+    // opted-in caller whose user stayed on the CAN form — keeps today's
+    // status vocabulary unchanged.
+    std::string status = std::move(outcome.status);
+    if (status == kStatusOk && offerMrzSwitch && outcome.mrzChosen) {
+        status = kStatusOkMrz;
+    }
+
     // sdbus::UnixFd with adopt_fd takes exclusive ownership of the fd we
     // just minted (no dup, no double-close). The wire encoder transmits
     // it via SCM_RIGHTS; the receiver gets its own dup'd fd.
     sdbus::UnixFd wrapped{outcome.fd, sdbus::adopt_fd};
-    return std::make_tuple(outcome.status, std::move(wrapped), std::string{});
+    return std::make_tuple(std::move(status), std::move(wrapped), std::string{});
 }
 
 std::tuple<std::string, sdbus::UnixFd, sdbus::UnixFd, std::string>

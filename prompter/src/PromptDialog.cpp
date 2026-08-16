@@ -72,6 +72,39 @@ QString retryErrorText(const QString& lastErrorKey)
                  "Your previous entry was not accepted. Please try again.");
 }
 
+// Prompter-authored line naming the credential the VISIBLE form takes. Rendered
+// only on a prompt that offers the CAN/MRZ switch: there, and only there, the
+// form under the caller's description can change while the dialog is open, so
+// the dialog owes the user a line that follows the swap. Empty (and never
+// rendered) for every other prompt — no existing dialog gains a label.
+QString kindHintText(PromptDialog::Kind kind)
+{
+    switch (kind) {
+    case PromptDialog::Kind::Can:
+        return i18nc("@info line naming the credential the visible entry form takes",
+                     "Enter the card access number (CAN) printed on the document.");
+    case PromptDialog::Kind::Mrz:
+        return i18nc("@info line naming the credential the visible entry form takes",
+                     "Enter the document details exactly as printed in the machine-readable zone.");
+    case PromptDialog::Kind::Pin:
+    case PromptDialog::Kind::ChangePin:
+        break;
+    }
+    return {};
+}
+
+// Label of the switch affordance: it always names the form the click would
+// bring up, never the one already on screen.
+QString switchButtonText(PromptDialog::Kind current)
+{
+    if (current == PromptDialog::Kind::Mrz) {
+        return i18nc("@action:button switch the credential prompt back to the card access number form",
+                     "Use card access number (CAN) instead");
+    }
+    return i18nc("@action:button switch the credential prompt to the passport machine-readable zone form",
+                 "Use passport MRZ instead");
+}
+
 QString defaultTitle(PromptDialog::Kind kind)
 {
     switch (kind) {
@@ -105,7 +138,8 @@ QLabel* makeClientSuppliedLabel(const QString& text, const char* objectName, QWi
 } // namespace
 
 PromptDialog::PromptDialog(Kind kind, const Options& opts, QWidget* parent, ChangePinWidgetFactory factory)
-    : QDialog(parent), m_widget(widgetFor(kind, opts, factory)), m_buttons(new QDialogButtonBox(this))
+    : QDialog(parent), m_kind(kind), m_opts(opts), m_widget(widgetFor(kind, opts, factory)),
+      m_buttons(new QDialogButtonBox(this))
 {
     if (kind == Kind::ChangePin) {
         // The factory (test seam) returns a ChangePinInputWidget (or a
@@ -151,6 +185,17 @@ void PromptDialog::buildLayout(const Options& opts)
         desc->setWordWrap(true);
         desc->setTextFormat(Qt::PlainText);
         layout->addWidget(desc);
+    }
+
+    // Prompter chrome (trusted, agent-independent): which credential the form
+    // currently on screen takes. Only a switchable prompt renders it, and
+    // swapInputKind() re-renders it for the form it installs.
+    if (opts.offerMrzSwitch) {
+        m_kindHint = new QLabel(kindHintText(m_kind), this);
+        m_kindHint->setObjectName(QStringLiteral("kindHintLabel"));
+        m_kindHint->setWordWrap(true);
+        m_kindHint->setTextFormat(Qt::PlainText);
+        layout->addWidget(m_kindHint);
     }
 
     // Untrusted area, but rendered in the SAME zone as the description above
@@ -213,15 +258,30 @@ void PromptDialog::buildLayout(const Options& opts)
     // rendered (parity with the GUI's inline-error-without-a-counter bar);
     // the number only selects presence, never appears in the text itself.
     if (opts.attempt > 0) {
-        auto* retryError = new QLabel(retryErrorText(opts.lastError), this);
-        retryError->setObjectName(QStringLiteral("retryErrorLabel"));
-        retryError->setWordWrap(true);
-        retryError->setTextFormat(Qt::PlainText);
-        layout->addWidget(retryError);
+        m_retryError = new QLabel(retryErrorText(opts.lastError), this);
+        m_retryError->setObjectName(QStringLiteral("retryErrorLabel"));
+        m_retryError->setWordWrap(true);
+        m_retryError->setTextFormat(Qt::PlainText);
+        layout->addWidget(m_retryError);
     }
 
     m_widget->setParent(this);
     layout->addWidget(m_widget);
+
+    // The switch affordance sits between the input widget and the button box:
+    // it changes what is being asked for, so it belongs with the entry area,
+    // not among the accept/cancel actions. Flat, and explicitly NOT a default
+    // button — Return must still accept the dialog, never silently swap the
+    // form out from under a user who has already typed.
+    if (opts.offerMrzSwitch) {
+        m_switchButton = new QPushButton(switchButtonText(m_kind), this);
+        m_switchButton->setObjectName(QStringLiteral("switchToMrzButton"));
+        m_switchButton->setFlat(true);
+        m_switchButton->setAutoDefault(false);
+        m_switchButton->setDefault(false);
+        connect(m_switchButton, &QPushButton::clicked, this, &PromptDialog::swapInputKind);
+        layout->addWidget(m_switchButton);
+    }
 
     m_buttons->setStandardButtons(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
     layout->addWidget(m_buttons);
@@ -242,6 +302,71 @@ void PromptDialog::wireValidity()
     // would touch the freed button; scoping it to the button severs it first.
     connect(m_widget, &InputWidgetBase::validityChanged, okButton,
             [this, okButton]() { okButton->setEnabled(m_widget->isValid()); });
+}
+
+bool PromptDialog::mrzChosen() const
+{
+    return m_kind == Kind::Mrz;
+}
+
+void PromptDialog::clearRetryError()
+{
+    if (m_retryError == nullptr) {
+        return;
+    }
+    if (auto* box = qobject_cast<QVBoxLayout*>(layout())) {
+        box->removeWidget(m_retryError);
+    }
+    m_retryError->hide();
+    m_retryError->setParent(nullptr);
+    m_retryError->deleteLater();
+    m_retryError = nullptr;
+}
+
+void PromptDialog::swapInputKind()
+{
+    auto* box = qobject_cast<QVBoxLayout*>(layout());
+    if (box == nullptr || m_widget == nullptr) {
+        return;
+    }
+    const int slot = box->indexOf(m_widget);
+    if (slot < 0) {
+        return;
+    }
+    const Kind next = (m_kind == Kind::Mrz) ? Kind::Can : Kind::Mrz;
+
+    // Out with the old, in the ONE order that neither orphans it nor lets a
+    // dying widget drive the surviving one: sever its signals first (its
+    // destructor scrub emits textChanged -> validityChanged), take it off the
+    // layout and out of the widget tree, then hand it to deleteLater — that
+    // destructor IS the disposal path for whatever the user had typed.
+    InputWidgetBase* previous = m_widget;
+    previous->disconnect();
+    box->removeWidget(previous);
+    previous->hide();
+    previous->setParent(nullptr);
+    previous->deleteLater();
+
+    // In with the new, at the SAME slot the old one held.
+    m_widget = widgetFor(next, m_opts, {});
+    m_widget->setParent(this);
+    box->insertWidget(slot, m_widget);
+    m_widget->show();
+    m_kind = next;
+
+    // Re-frame everything that spoke about the previous kind. The caller's own
+    // title still wins if it supplied one; the numeric entry bounds are simply
+    // not carried across — each form applies its own entry rules.
+    setWindowTitle(m_opts.title.isEmpty() ? defaultTitle(next) : m_opts.title);
+    if (m_kindHint != nullptr) {
+        m_kindHint->setText(kindHintText(next));
+    }
+    clearRetryError();
+    if (m_switchButton != nullptr) {
+        m_switchButton->setText(switchButtonText(next));
+    }
+    wireValidity();
+    m_widget->setFocus();
 }
 
 int PromptDialog::captureSecretFd()
