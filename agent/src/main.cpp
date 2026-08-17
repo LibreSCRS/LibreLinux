@@ -6,6 +6,7 @@
 #include <LibreSCRS/Agent/backend/Logging.h>
 #include <LibreSCRS/Agent/presence/PluginCapabilityResolver.h>
 #include <LibreSCRS/Plugin/CardPluginService.h>
+#include <LibreSCRS/Trust/TrustStoreService.h>
 #include <cstdlib>
 #include <memory>
 #include <string>
@@ -48,7 +49,24 @@ int main(int /*argc*/, char** /*argv*/)
     const auto pluginDirs = LibreSCRS::Agent::resolvePluginDir(
         {.environment = (envDir && *envDir) ? envDir : "", .compiledDefault = LIBRESCRS_DEFAULT_PLUGIN_DIR});
 
-    auto pluginService = std::make_shared<LibreSCRS::Plugin::CardPluginService>(pluginDirs.dir);
+    // Card-data verification anchors. The rs-eid plugin verifies the card's
+    // security objects only through a TrustStore handed to it at registry
+    // construction — without one it quietly reports every verification as
+    // unknown. Built from an EMPTY TrustConfig on purpose: the bundled MUP
+    // certificates resolve relative to the running executable and need no TSL
+    // sources; the signing engine keeps its own config-driven trust service
+    // for certificate verdicts. A failed create degrades to a registry
+    // without anchors — reads still work, verification reports unknown.
+    std::shared_ptr<LibreSCRS::Trust::TrustStoreService> cardTrust;
+    if (auto trustResult = LibreSCRS::Trust::TrustStoreService::create({}); trustResult) {
+        cardTrust = std::move(*trustResult);
+    } else {
+        LibreSCRS::Agent::log::warnf("card verification anchors unavailable: {}",
+                                     trustResult.error().userMessage.defaultText);
+    }
+
+    auto pluginService = std::make_shared<LibreSCRS::Plugin::CardPluginService>(
+        pluginDirs.dir, cardTrust ? cardTrust->trustStore() : nullptr);
     LibreSCRS::Agent::reportPluginLoad(pluginDirs, *pluginService);
 
     // Own the resolver on the stack; AgentService takes a reference. The
