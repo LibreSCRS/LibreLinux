@@ -16,7 +16,16 @@ option(LIBRELINUX_USE_INSTALLED_AGENT_CORE
        "Consume LibreAgent via find_package(CONFIG) instead of FetchContent" OFF)
 
 if(LIBRELINUX_USE_INSTALLED_AGENT_CORE)
-    find_package(LibreAgent 4.3 REQUIRED CONFIG)
+    # The floor is a PACKAGING compatibility statement, not an API-accuracy one:
+    # it says only "an agent this old cannot possibly satisfy this backend", and
+    # the exported package's own SameMajorVersion rule additionally rejects
+    # anything from a different major. It is NOT what keeps this backend in step
+    # with the core's API — that is the revision the source path below consumes,
+    # and a mismatch there fails at compile time, where it belongs. Raising the
+    # floor above the agent's actual released version buys no accuracy: it just
+    # makes this branch unsatisfiable by every agent package that exists, which
+    # is a build break for packagers rather than a guard.
+    find_package(LibreAgent 4.2 REQUIRED CONFIG)
     message(STATUS "LibreAgent: using installed package (CONFIG)")
 else()
     message(STATUS "LibreAgent: building from source (FetchContent)")
