@@ -22,6 +22,8 @@
 #include "PromptDialog.h"
 
 #include <QApplication>
+#include <QDate>
+#include <QDateEdit>
 #include <QDialogButtonBox>
 #include <QEvent>
 #include <QLabel>
@@ -47,9 +49,12 @@ namespace {
 // travel document: document number + check digit, date of birth + check digit,
 // date of expiry + check digit. Their concatenation is the canonical three-line
 // payload MrzInputWidget::captureSecretFd emits.
-constexpr const char* kSpecimenDocNumber = "L898902C36";
-constexpr const char* kSpecimenDateOfBirth = "7408122";
-constexpr const char* kSpecimenDateOfExpiry = "1204159";
+// User-facing specimen entry (ICAO 9303 worked example): the human types the
+// document number WITHOUT its check digit and picks the two dates; the widget
+// computes the check digits, so the captured payload below carries them.
+constexpr const char* kSpecimenDocNumber = "L898902C3";
+const QDate kSpecimenDateOfBirth(1974, 8, 12);
+const QDate kSpecimenDateOfExpiry(2012, 4, 15);
 constexpr const char* kSpecimenPayload = "L898902C36\n7408122\n1204159";
 
 PromptDialog::Options switchableCanOptions()
@@ -82,16 +87,21 @@ void flushDeferredDeletes()
     QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
 }
 
-// Fill the three MRZ fields with the specimen values. The widget names no
-// edits, so they are addressed in construction order (document number, date of
-// birth, date of expiry) — the same convention InputWidgetValidationTest uses.
+// Fill the MRZ form with the specimen values. The fields are addressed by
+// object name (the two date entries are QDateEdits, whose internal line edits
+// would make positional findChildren<QLineEdit*>() ambiguous) — the same
+// convention InputWidgetValidationTest uses.
 void fillMrzSpecimen(QWidget& root)
 {
-    const auto edits = root.findChildren<QLineEdit*>();
-    ASSERT_EQ(edits.size(), 3) << "the MRZ form must expose exactly three entry fields";
-    edits[0]->setText(QString::fromLatin1(kSpecimenDocNumber));
-    edits[1]->setText(QString::fromLatin1(kSpecimenDateOfBirth));
-    edits[2]->setText(QString::fromLatin1(kSpecimenDateOfExpiry));
+    auto* doc = root.findChild<QLineEdit*>(QStringLiteral("mrzDocumentNumber"));
+    auto* dob = root.findChild<QDateEdit*>(QStringLiteral("mrzDateOfBirth"));
+    auto* expiry = root.findChild<QDateEdit*>(QStringLiteral("mrzDateOfExpiry"));
+    ASSERT_NE(doc, nullptr) << "the MRZ form must expose its document-number entry";
+    ASSERT_NE(dob, nullptr);
+    ASSERT_NE(expiry, nullptr);
+    doc->setText(QString::fromLatin1(kSpecimenDocNumber));
+    dob->setDate(kSpecimenDateOfBirth);
+    expiry->setDate(kSpecimenDateOfExpiry);
 }
 
 // Read back a sealed memfd's contents for assertion (house helper, mirrored
@@ -311,16 +321,17 @@ TEST(PromptDialogAltKinds, OkDisabledUntilMrzValid)
     ASSERT_NE(ok, nullptr);
     EXPECT_FALSE(ok->isEnabled()) << "an empty MRZ form must not be acceptable";
 
-    const auto edits = dlg.findChildren<QLineEdit*>();
-    ASSERT_EQ(edits.size(), 3);
-    edits[0]->setText(QString::fromLatin1(kSpecimenDocNumber));
+    auto* doc = dlg.findChild<QLineEdit*>(QStringLiteral("mrzDocumentNumber"));
+    auto* dob = dlg.findChild<QDateEdit*>(QStringLiteral("mrzDateOfBirth"));
+    auto* expiry = dlg.findChild<QDateEdit*>(QStringLiteral("mrzDateOfExpiry"));
+    ASSERT_NE(doc, nullptr);
+    ASSERT_NE(dob, nullptr);
+    ASSERT_NE(expiry, nullptr);
+    doc->setText(QString::fromLatin1(kSpecimenDocNumber));
     EXPECT_FALSE(ok->isEnabled()) << "a partially filled MRZ form must not be acceptable";
-    edits[1]->setText(QString::fromLatin1(kSpecimenDateOfBirth));
-    EXPECT_FALSE(ok->isEnabled());
-    // A wrong check digit on an otherwise complete entry stays unacceptable.
-    edits[2]->setText(QStringLiteral("1204158"));
-    EXPECT_FALSE(ok->isEnabled()) << "a failing ICAO check digit must not be acceptable";
-    edits[2]->setText(QString::fromLatin1(kSpecimenDateOfExpiry));
+    dob->setDate(kSpecimenDateOfBirth);
+    EXPECT_FALSE(ok->isEnabled()) << "an untouched expiry date must keep the form unacceptable";
+    expiry->setDate(kSpecimenDateOfExpiry);
     EXPECT_TRUE(ok->isEnabled()) << "validity must be re-wired to the swapped-in widget";
 }
 

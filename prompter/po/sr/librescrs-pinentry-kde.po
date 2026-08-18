@@ -64,23 +64,23 @@ msgctxt "@info:tooltip short description"
 msgid "Secure-input prompter for the LibreSCRS smart-card agent."
 msgstr "Безбедан унос за LibreSCRS агента паметних картица."
 
-#: prompter/src/MrzInputWidget.cpp:75
+#: prompter/src/MrzInputWidget.cpp:110
 #, kde-format
-msgctxt "@label:textbox MRZ document number incl. check digit"
-msgid "Document number (incl. check digit):"
-msgstr "Број документа (укљ. контролну цифру):"
+msgctxt "@label:textbox MRZ document number, without its check digit"
+msgid "Document number:"
+msgstr "Број документа:"
 
-#: prompter/src/MrzInputWidget.cpp:79
+#: prompter/src/MrzInputWidget.cpp:114
 #, kde-format
-msgctxt "@label:textbox MRZ date of birth YYMMDD + check digit"
-msgid "Date of birth (YYMMDD + check digit):"
-msgstr "Датум рођења (ГГММДД + контролна цифра):"
+msgctxt "@label MRZ date of birth, calendar entry"
+msgid "Date of birth:"
+msgstr "Датум рођења:"
 
-#: prompter/src/MrzInputWidget.cpp:83
+#: prompter/src/MrzInputWidget.cpp:116
 #, kde-format
-msgctxt "@label:textbox MRZ date of expiry YYMMDD + check digit"
-msgid "Date of expiry (YYMMDD + check digit):"
-msgstr "Датум истека (ГГММДД + контролна цифра):"
+msgctxt "@label MRZ date of expiry, calendar entry"
+msgid "Date of expiry:"
+msgstr "Датум истека:"
 
 #: prompter/src/PinInputWidget.cpp:30
 #, kde-format

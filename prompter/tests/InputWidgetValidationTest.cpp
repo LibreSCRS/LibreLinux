@@ -19,6 +19,8 @@
 #include <gtest/gtest.h>
 
 #include <QApplication>
+#include <QDate>
+#include <QDateEdit>
 #include <QLineEdit>
 #include <QSignalSpy>
 
@@ -227,44 +229,109 @@ TEST(MrzCheckDigit, NonDigitCheckCharIsAlwaysInvalid)
     EXPECT_FALSE(LibreLinux::Prompter::MrzInputWidget::checkDigitOk(QStringLiteral("690806"), QChar(u'<')));
 }
 
-TEST(MrzInputWidget, ValidatesEachFieldIndependently)
+TEST(MrzCheckDigit, ComputeMatchesKnownVectors)
 {
-    LibreLinux::Prompter::MrzInputWidget w;
-    auto edits = allLineEdits(&w);
-    ASSERT_EQ(edits.size(), 3u);
-    edits[0]->setText(QStringLiteral("L898902C<3"));
-    edits[1]->setText(QStringLiteral("6908061"));
-    edits[2]->setText(QStringLiteral("9406236"));
-    EXPECT_TRUE(w.isValid());
-
-    // Flip ONE digit in the document number's check digit — must invalidate.
-    edits[0]->setText(QStringLiteral("L898902C<4"));
-    EXPECT_FALSE(w.isValid());
+    // ICAO 9303 worked-example fields: the computed digit must be the
+    // published one, and must satisfy the widget's own verifier.
+    using W = LibreLinux::Prompter::MrzInputWidget;
+    EXPECT_EQ(W::computeCheckDigit(QStringLiteral("L898902C<")), QChar(u'3'));
+    EXPECT_EQ(W::computeCheckDigit(QStringLiteral("L898902C3")), QChar(u'6'));
+    EXPECT_EQ(W::computeCheckDigit(QStringLiteral("740812")), QChar(u'2'));
+    EXPECT_EQ(W::computeCheckDigit(QStringLiteral("120415")), QChar(u'9'));
+    EXPECT_EQ(W::computeCheckDigit(QStringLiteral("690806")), QChar(u'1'));
+    EXPECT_EQ(W::computeCheckDigit(QStringLiteral("940623")), QChar(u'6'));
+    // Invalid character -> null QChar, never a digit.
+    EXPECT_EQ(W::computeCheckDigit(QStringLiteral("69?806")), QChar{});
 }
 
-TEST(MrzInputWidget, RejectsShortField)
+namespace {
+
+// The MRZ form addresses its fields by object name: the two date entries are
+// QDateEdits (whose internal line edits would make positional
+// findChildren<QLineEdit*>() ambiguous).
+struct MrzFields
 {
-    LibreLinux::Prompter::MrzInputWidget w;
-    auto edits = allLineEdits(&w);
-    // The regex enforces exact field widths; shorter than 10/7/7 must
-    // hasAcceptableInput()==false, regardless of check-digit math.
-    edits[0]->setText(QStringLiteral("L898902C"));
-    edits[1]->setText(QStringLiteral("6908061"));
-    edits[2]->setText(QStringLiteral("9406236"));
-    EXPECT_FALSE(w.isValid());
+    QLineEdit* doc = nullptr;
+    QDateEdit* dob = nullptr;
+    QDateEdit* expiry = nullptr;
+};
+
+MrzFields mrzFields(QWidget* w)
+{
+    return {w->findChild<QLineEdit*>(QStringLiteral("mrzDocumentNumber")),
+            w->findChild<QDateEdit*>(QStringLiteral("mrzDateOfBirth")),
+            w->findChild<QDateEdit*>(QStringLiteral("mrzDateOfExpiry"))};
 }
 
-TEST(MrzInputWidget, CaptureJoinsWithNewlineSeparator)
+} // namespace
+
+TEST(MrzInputWidget, ValidatesFieldsWithoutCheckDigitEntry)
 {
     LibreLinux::Prompter::MrzInputWidget w;
-    auto edits = allLineEdits(&w);
-    edits[0]->setText(QStringLiteral("L898902C<3"));
-    edits[1]->setText(QStringLiteral("6908061"));
-    edits[2]->setText(QStringLiteral("9406236"));
+    const auto f = mrzFields(&w);
+    ASSERT_NE(f.doc, nullptr);
+    ASSERT_NE(f.dob, nullptr);
+    ASSERT_NE(f.expiry, nullptr);
+
+    EXPECT_FALSE(w.isValid()) << "an empty form must be invalid";
+
+    f.doc->setText(QStringLiteral("L898902C3"));
+    EXPECT_FALSE(w.isValid()) << "untouched (sentinel) dates must keep the form invalid";
+
+    f.dob->setDate(QDate(1974, 8, 12));
+    EXPECT_FALSE(w.isValid());
+    f.expiry->setDate(QDate(2012, 4, 15));
+    EXPECT_TRUE(w.isValid()) << "document number + two real dates are all the user must provide";
+
+    f.doc->clear();
+    EXPECT_FALSE(w.isValid()) << "the document number is mandatory";
+}
+
+TEST(MrzInputWidget, LowercaseEntryIsUppercased)
+{
+    LibreLinux::Prompter::MrzInputWidget w;
+    const auto f = mrzFields(&w);
+    ASSERT_NE(f.doc, nullptr);
+    f.doc->setText(QStringLiteral("l898902c3"));
+    EXPECT_EQ(f.doc->text(), QStringLiteral("L898902C3"));
+}
+
+TEST(MrzInputWidget, CaptureComputesCheckDigitsAndJoins)
+{
+    // The canonical payload grammar is unchanged (docNo9+cd \n YYMMDD+cd \n
+    // YYMMDD+cd) — the check digits are now computed here, never typed.
+    LibreLinux::Prompter::MrzInputWidget w;
+    const auto f = mrzFields(&w);
+    ASSERT_NE(f.doc, nullptr);
+    f.doc->setText(QStringLiteral("L898902C3"));
+    f.dob->setDate(QDate(1974, 8, 12));
+    f.expiry->setDate(QDate(2012, 4, 15));
     const int fd = w.captureSecretFd();
     ASSERT_GE(fd, 0);
-    EXPECT_EQ(readMemfd(fd), "L898902C<3\n6908061\n9406236");
+    EXPECT_EQ(readMemfd(fd), "L898902C36\n7408122\n1204159");
     ::close(fd);
+}
+
+TEST(MrzInputWidget, PadsShortDocumentNumberWithFiller)
+{
+    // Short document numbers are legal; the MRZ always carries them
+    // '<'-padded to nine characters, with the check digit over the padded
+    // field.
+    LibreLinux::Prompter::MrzInputWidget w;
+    const auto f = mrzFields(&w);
+    ASSERT_NE(f.doc, nullptr);
+    f.doc->setText(QStringLiteral("AB123"));
+    f.dob->setDate(QDate(1974, 8, 12));
+    f.expiry->setDate(QDate(2012, 4, 15));
+    const int fd = w.captureSecretFd();
+    ASSERT_GE(fd, 0);
+    const std::string payload = readMemfd(fd);
+    ::close(fd);
+    const std::string docField = payload.substr(0, payload.find('\n'));
+    ASSERT_EQ(docField.size(), 10u);
+    EXPECT_EQ(docField.substr(0, 9), "AB123<<<<");
+    EXPECT_TRUE(LibreLinux::Prompter::MrzInputWidget::checkDigitOk(QString::fromStdString(docField.substr(0, 9)),
+                                                                   QChar::fromLatin1(docField.back())));
 }
 
 // ----- main -----------------------------------------------------------------

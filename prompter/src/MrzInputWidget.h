@@ -4,18 +4,21 @@
 
 #include "InputWidgetBase.h"
 
+class QDateEdit;
 class QLineEdit;
+class QString;
 
 namespace LibreLinux::Prompter {
 
-/// Machine-readable-zone fields — three entries per ICAO 9303:
-///   * Document number (9 chars + 1 check digit, alphanumeric)
-///   * Date of birth (YYMMDD + check digit)
-///   * Date of expiry (YYMMDD + check digit)
+/// Machine-readable-zone entry, human-shaped: the user types the document
+/// number (up to 9 alphanumerics, WITHOUT its check digit) and picks the two
+/// dates from calendar entries; the ICAO 9303 check digits and the `<`
+/// filler padding are computed here, never typed.
 ///
-/// Each field carries an ICAO 9303 check-digit validator.
-/// @ref captureSecretFd concatenates the three fields with a single `\n`
-/// separator matching the consumer's MRZ credential-parsing contract.
+/// @ref captureSecretFd emits the unchanged canonical payload — three
+/// `\n`-separated fields (document number `<`-padded to 9 chars + check
+/// digit, YYMMDD + check digit twice) matching the consumer's MRZ
+/// credential-parsing contract. Only the human entry changed.
 class MrzInputWidget : public InputWidgetBase
 {
     Q_OBJECT
@@ -32,10 +35,15 @@ public:
     /// widget through synthetic input events.
     [[nodiscard]] static bool checkDigitOk(const QString& fieldValue, QChar checkChar);
 
+    /// ICAO 9303 check digit for @p fieldValue under the same scheme as
+    /// @ref checkDigitOk (the two share one weight walk — no drift).
+    /// Returns a null QChar when @p fieldValue carries an invalid character.
+    [[nodiscard]] static QChar computeCheckDigit(const QString& fieldValue);
+
 private:
     QLineEdit* m_documentNumber;
-    QLineEdit* m_dateOfBirth;
-    QLineEdit* m_dateOfExpiry;
+    QDateEdit* m_dateOfBirth;
+    QDateEdit* m_dateOfExpiry;
 };
 
 } // namespace LibreLinux::Prompter

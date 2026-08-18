@@ -36,6 +36,8 @@
 
 #include <QApplication>
 #include <QDialogButtonBox>
+#include <QDate>
+#include <QDateEdit>
 #include <QLineEdit>
 #include <QMetaObject>
 #include <QPushButton>
@@ -134,10 +136,12 @@ std::string readMemfd(int fd)
 }
 
 // ICAO 9303 SPECIMEN values (the published example document), not a real
-// travel document.
-constexpr const char* kSpecimenDocNumber = "L898902C36";
-constexpr const char* kSpecimenDateOfBirth = "7408122";
-constexpr const char* kSpecimenDateOfExpiry = "1204159";
+// travel document. The human enters the document number WITHOUT its check
+// digit and picks the dates; the widget computes the check digits, so the
+// captured payload carries them.
+constexpr const char* kSpecimenDocNumber = "L898902C3";
+const QDate kSpecimenDateOfBirth(1974, 8, 12);
+const QDate kSpecimenDateOfExpiry(2012, 4, 15);
 constexpr const char* kSpecimenPayload = "L898902C36\n7408122\n1204159";
 
 QPushButton* okButtonOf(LibreLinux::Prompter::PromptDialog& dlg)
@@ -151,16 +155,21 @@ QPushButton* switchButtonOf(LibreLinux::Prompter::PromptDialog& dlg)
     return dlg.findChild<QPushButton*>(QStringLiteral("switchToMrzButton"));
 }
 
-// Fill the three MRZ fields with the specimen values, addressed in
-// construction order (document number, date of birth, date of expiry) — the
-// convention InputWidgetValidationTest uses, the widget names no edits.
+// Fill the MRZ form with the specimen values, addressed by object name (the
+// two date entries are QDateEdits, whose internal line edits would make
+// positional findChildren<QLineEdit*>() ambiguous) — the convention
+// InputWidgetValidationTest uses.
 void fillMrzSpecimen(QWidget& root)
 {
-    const auto edits = root.findChildren<QLineEdit*>();
-    ASSERT_EQ(edits.size(), 3) << "the MRZ form must expose exactly three entry fields";
-    edits[0]->setText(QString::fromLatin1(kSpecimenDocNumber));
-    edits[1]->setText(QString::fromLatin1(kSpecimenDateOfBirth));
-    edits[2]->setText(QString::fromLatin1(kSpecimenDateOfExpiry));
+    auto* doc = root.findChild<QLineEdit*>(QStringLiteral("mrzDocumentNumber"));
+    auto* dob = root.findChild<QDateEdit*>(QStringLiteral("mrzDateOfBirth"));
+    auto* expiry = root.findChild<QDateEdit*>(QStringLiteral("mrzDateOfExpiry"));
+    ASSERT_NE(doc, nullptr) << "the MRZ form must expose its document-number entry";
+    ASSERT_NE(dob, nullptr);
+    ASSERT_NE(expiry, nullptr);
+    doc->setText(QString::fromLatin1(kSpecimenDocNumber));
+    dob->setDate(kSpecimenDateOfBirth);
+    expiry->setDate(kSpecimenDateOfExpiry);
 }
 
 // True once the prompter has published a live dialog.
