@@ -92,10 +92,15 @@ MrzInputWidget::MrzInputWidget(QWidget* parent)
         Q_EMIT validityChanged();
     });
 
+    // The sentinel (minimum) date renders as a placeholder INVITATION, never
+    // as a bizarre literal "01.01.1900" the user has to puzzle over.
+    const QString pickDate = i18nc("@info:placeholder unset date entry", "select date");
+
     m_dateOfBirth->setObjectName(QStringLiteral("mrzDateOfBirth"));
     m_dateOfBirth->setCalendarPopup(true);
     m_dateOfBirth->setDisplayFormat(QStringLiteral("dd.MM.yyyy"));
     m_dateOfBirth->setMinimumDate(kSentinelDate);
+    m_dateOfBirth->setSpecialValueText(pickDate);
     m_dateOfBirth->setMaximumDate(QDate::currentDate());
     connect(m_dateOfBirth, &QDateEdit::dateChanged, this, &InputWidgetBase::validityChanged);
 
@@ -103,6 +108,7 @@ MrzInputWidget::MrzInputWidget(QWidget* parent)
     m_dateOfExpiry->setCalendarPopup(true);
     m_dateOfExpiry->setDisplayFormat(QStringLiteral("dd.MM.yyyy"));
     m_dateOfExpiry->setMinimumDate(kSentinelDate);
+    m_dateOfExpiry->setSpecialValueText(pickDate);
     connect(m_dateOfExpiry, &QDateEdit::dateChanged, this, &InputWidgetBase::validityChanged);
 
     auto* layout = new QFormLayout(this);

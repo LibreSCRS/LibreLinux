@@ -190,3 +190,63 @@ msgstr "Podnosilac zahteva: %1"
 msgctxt "@info artifact label"
 msgid "Artifact: %1"
 msgstr "Predmet: %1"
+
+#: prompter/src/PromptDialog.cpp:150
+#, kde-format
+msgctxt "@info consented operation"
+msgid "Reading identity data"
+msgstr "Čitanje ličnih podataka"
+
+#: prompter/src/PromptDialog.cpp:152
+#, kde-format
+msgctxt "@info consented operation"
+msgid "Reading the photograph"
+msgstr "Čitanje fotografije"
+
+#: prompter/src/PromptDialog.cpp:154
+#, kde-format
+msgctxt "@info consented operation"
+msgid "Reading certificates"
+msgstr "Čitanje sertifikata"
+
+#: prompter/src/PromptDialog.cpp:156
+#, kde-format
+msgctxt "@info consented operation"
+msgid "Reading token information"
+msgstr "Čitanje podataka o tokenu"
+
+#: prompter/src/PromptDialog.cpp:158
+#, kde-format
+msgctxt "@info consented operation"
+msgid "Reading PIN status"
+msgstr "Čitanje stanja PIN-a"
+
+#: prompter/src/PromptDialog.cpp:160
+#, kde-format
+msgctxt "@info consented operation"
+msgid "Signing a document"
+msgstr "Potpisivanje dokumenta"
+
+#: prompter/src/PromptDialog.cpp:162
+#, kde-format
+msgctxt "@info consented operation"
+msgid "Signing multiple documents"
+msgstr "Potpisivanje više dokumenata"
+
+#: prompter/src/PromptDialog.cpp:164
+#, kde-format
+msgctxt "@info consented operation"
+msgid "Cryptographic token operation"
+msgstr "Kriptografska operacija tokena"
+
+#: prompter/src/PromptDialog.cpp:255
+#, kde-format
+msgctxt "@info trusted operation label"
+msgid "Operation: %1"
+msgstr "Radnja: %1"
+
+#: prompter/src/MrzInputWidget.cpp:100
+#, kde-format
+msgctxt "@info:placeholder unset date entry"
+msgid "select date"
+msgstr "izaberite datum"

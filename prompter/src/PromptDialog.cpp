@@ -135,6 +135,33 @@ QLabel* makeClientSuppliedLabel(const QString& text, const char* objectName, QWi
     return label;
 }
 
+// Localized text for the TRUSTED, agent-owned artifact category tokens (the
+// closed vocabulary the flows attach to their consent prompts). A recognised
+// token renders as prompter chrome — a human sentence, not the raw
+// identifier. Anything OUTSIDE the vocabulary is treated as client-supplied
+// and stays framed + inert in the group box below. Empty QString = not a
+// vocabulary token.
+QString operationText(const QString& artifactToken)
+{
+    if (artifactToken == QLatin1String("identity"))
+        return i18nc("@info consented operation", "Reading identity data");
+    if (artifactToken == QLatin1String("photo"))
+        return i18nc("@info consented operation", "Reading the photograph");
+    if (artifactToken == QLatin1String("certificates"))
+        return i18nc("@info consented operation", "Reading certificates");
+    if (artifactToken == QLatin1String("token"))
+        return i18nc("@info consented operation", "Reading token information");
+    if (artifactToken == QLatin1String("credentials"))
+        return i18nc("@info consented operation", "Reading PIN status");
+    if (artifactToken == QLatin1String("signature"))
+        return i18nc("@info consented operation", "Signing a document");
+    if (artifactToken == QLatin1String("signature-batch"))
+        return i18nc("@info consented operation", "Signing multiple documents");
+    if (artifactToken == QLatin1String("pkcs11"))
+        return i18nc("@info consented operation", "Cryptographic token operation");
+    return {};
+}
+
 } // namespace
 
 PromptDialog::PromptDialog(Kind kind, const Options& opts, QWidget* parent, ChangePinWidgetFactory factory)
@@ -227,13 +254,29 @@ void PromptDialog::buildLayout(const Options& opts)
         layout->addWidget(card);
     }
 
-    // Untrusted area: requester + artifact are supplied by the requesting
-    // application. They are framed inside a clearly-titled group box so the
-    // user can never confuse client-supplied text for the prompter's own
-    // (trusted) wording — the title is fixed prompter chrome, the values
-    // inside are inert plain text. The whole box is omitted when neither
-    // field is present.
-    if (!opts.requester.isEmpty() || !opts.artifact.isEmpty()) {
+    // Trusted area: the operation being consented to, derived from the
+    // agent-owned closed-vocabulary artifact token. Rendered as prompter
+    // chrome (a localized human sentence) — never the raw identifier the
+    // wire carries. Tokens outside the vocabulary fall through to the
+    // framed client-supplied area below.
+    const QString operation = operationText(opts.artifact);
+    if (!operation.isEmpty()) {
+        auto* op = new QLabel(i18nc("@info trusted operation label", "Operation: %1", operation), this);
+        op->setObjectName(QStringLiteral("operationLabel"));
+        op->setWordWrap(true);
+        op->setTextFormat(Qt::PlainText);
+        layout->addWidget(op);
+    }
+
+    // Untrusted area: the requester — and any artifact token OUTSIDE the
+    // trusted vocabulary — are client-supplied. They are framed inside a
+    // clearly-titled group box so the user can never confuse client-supplied
+    // text for the prompter's own (trusted) wording — the title is fixed
+    // prompter chrome, the values inside are inert plain text. The whole box
+    // is omitted when nothing client-supplied is present (an agent-initiated
+    // prompt with a recognised operation shows no box at all).
+    const bool unknownArtifact = !opts.artifact.isEmpty() && operation.isEmpty();
+    if (!opts.requester.isEmpty() || unknownArtifact) {
         auto* group = new QGroupBox(
             i18nc("@title:group framed area for application-supplied request details", "Requested by an application"),
             this);
@@ -244,7 +287,7 @@ void PromptDialog::buildLayout(const Options& opts)
             groupLayout->addWidget(makeClientSuppliedLabel(
                 i18nc("@info requester identity label", "Requested by: %1", opts.requester), "requesterLabel", group));
         }
-        if (!opts.artifact.isEmpty()) {
+        if (unknownArtifact) {
             groupLayout->addWidget(makeClientSuppliedLabel(i18nc("@info artifact label", "Artifact: %1", opts.artifact),
                                                            "artifactLabel", group));
         }

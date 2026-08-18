@@ -30,7 +30,7 @@ PromptDialog::Options optsWith(const QString& requester, const QString& artifact
 
 } // namespace
 
-TEST(PromptDialogClientChrome, RequesterAndArtifactRenderInDistinctGroup)
+TEST(PromptDialogClientChrome, RequesterRendersInGroupWhileKnownArtifactIsTrustedChrome)
 {
     int argc = 1;
     const char* argv[] = {"chrome-test"};
@@ -38,17 +38,64 @@ TEST(PromptDialogClientChrome, RequesterAndArtifactRenderInDistinctGroup)
 
     PromptDialog dlg(PromptDialog::Kind::Can, optsWith("firefox", "identity"), nullptr);
 
-    // The client-supplied values live INSIDE the framed group, never loose in
-    // the dialog body next to the trusted description.
+    // The client-supplied requester lives INSIDE the framed group, never
+    // loose in the dialog body next to the trusted description.
     auto* group = dlg.findChild<QGroupBox*>(QStringLiteral("clientSuppliedGroup"));
-    ASSERT_NE(group, nullptr) << "requester/artifact must be framed in the client-supplied group box";
+    ASSERT_NE(group, nullptr) << "a requester must be framed in the client-supplied group box";
 
     auto* requester = group->findChild<QLabel*>(QStringLiteral("requesterLabel"));
-    auto* artifact = group->findChild<QLabel*>(QStringLiteral("artifactLabel"));
     ASSERT_NE(requester, nullptr);
-    ASSERT_NE(artifact, nullptr);
     EXPECT_TRUE(requester->text().contains(QStringLiteral("firefox")));
-    EXPECT_TRUE(artifact->text().contains(QStringLiteral("identity")));
+
+    // "identity" is a TRUSTED closed-vocabulary token: it renders as prompter
+    // chrome (a localized operation sentence) OUTSIDE the group, never as the
+    // raw identifier inside it.
+    EXPECT_EQ(group->findChild<QLabel*>(QStringLiteral("artifactLabel")), nullptr)
+        << "a vocabulary token must not render as a raw client-supplied artifact";
+    auto* operation = dlg.findChild<QLabel*>(QStringLiteral("operationLabel"));
+    ASSERT_NE(operation, nullptr) << "a vocabulary token must render as the trusted operation line";
+    EXPECT_TRUE(operation->text().contains(QStringLiteral("Reading identity data")))
+        << "the token must render as the localized human sentence, not the raw identifier";
+}
+
+TEST(PromptDialogClientChrome, KnownArtifactAloneShowsTrustedOperationWithoutGroup)
+{
+    int argc = 1;
+    const char* argv[] = {"chrome-test"};
+    QApplication app(argc, const_cast<char**>(argv));
+
+    // The agent's own consent prompts carry a vocabulary token and NO
+    // requester: the dialog shows the trusted operation line and no
+    // "requested by an application" frame at all.
+    PromptDialog dlg(PromptDialog::Kind::Can, optsWith(QString{}, QStringLiteral("identity")), nullptr);
+
+    EXPECT_EQ(dlg.findChild<QGroupBox*>(QStringLiteral("clientSuppliedGroup")), nullptr)
+        << "nothing client-supplied is present, so no frame may render";
+    auto* operation = dlg.findChild<QLabel*>(QStringLiteral("operationLabel"));
+    ASSERT_NE(operation, nullptr);
+    EXPECT_EQ(operation->textFormat(), Qt::PlainText);
+}
+
+TEST(PromptDialogClientChrome, UnknownArtifactStaysFramedAndInert)
+{
+    int argc = 1;
+    const char* argv[] = {"chrome-test"};
+    QApplication app(argc, const_cast<char**>(argv));
+
+    // A token OUTSIDE the trusted vocabulary is client-supplied by
+    // definition: framed in the group, rendered literally (inert), and it
+    // must NOT mint a trusted operation line.
+    const QString hostile = QStringLiteral("<b>System Verification</b>");
+    PromptDialog dlg(PromptDialog::Kind::Can, optsWith(QString{}, hostile), nullptr);
+
+    EXPECT_EQ(dlg.findChild<QLabel*>(QStringLiteral("operationLabel")), nullptr)
+        << "an unknown token must never borrow the trusted operation chrome";
+    auto* group = dlg.findChild<QGroupBox*>(QStringLiteral("clientSuppliedGroup"));
+    ASSERT_NE(group, nullptr);
+    auto* artifact = group->findChild<QLabel*>(QStringLiteral("artifactLabel"));
+    ASSERT_NE(artifact, nullptr);
+    EXPECT_EQ(artifact->textFormat(), Qt::PlainText);
+    EXPECT_TRUE(artifact->text().contains(hostile)) << "the literal markup must be preserved, not stripped/interpreted";
 }
 
 TEST(PromptDialogClientChrome, ClientSuppliedLabelsAreInertPlainText)

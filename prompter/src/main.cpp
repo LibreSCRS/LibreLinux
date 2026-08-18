@@ -65,6 +65,12 @@ int main(int argc, char* argv[])
         i18nc("@info:tooltip short description", "Secure-input prompter for the LibreSCRS smart-card agent."),
         KAboutLicense::LGPL_V2_1);
     KAboutData::setApplicationData(aboutData);
+    // Window titles render as "<dialog title> — <display name>". The about
+    // data's name ("LibreSCRS Pinentry" / localized "PIN entry") is the
+    // BINARY's identity, but as a title suffix it mislabels every non-PIN
+    // dialog (a passport MRZ form titled "PIN entry"). Keep the suffix
+    // kind-neutral; the about/crash surfaces keep the full KAboutData name.
+    QGuiApplication::setApplicationDisplayName(QStringLiteral("LibreSCRS"));
 
     std::unique_ptr<sdbus::IConnection> connection;
     try {
