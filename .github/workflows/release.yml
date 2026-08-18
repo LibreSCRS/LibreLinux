@@ -36,9 +36,17 @@ on:
   # the signature check fails closed, which is the intended outcome.
   workflow_dispatch:
 
+# One run per tag at a time: a re-run racing a still-live earlier run would
+# hand gh release create an already-existing release and fail at the last step.
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
 jobs:
   verify-signature:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
         with:
@@ -60,8 +68,18 @@ jobs:
             || { echo "::error::Public key import failed or fingerprint mismatch"; exit 1; }
 
       - name: Verify tag signature
-        # Rejects any unsigned or wrong-fingerprint tag.
-        run: git verify-tag "${{ github.ref_name }}"
+        # verify-tag alone accepts a good signature by ANY key in the keyring,
+        # so the signer is pinned by fingerprint through --raw: VALIDSIG names
+        # the key that actually signed, not merely one that could have. The
+        # ref name moves through the environment, never inline into the
+        # script — a git ref may carry shell metacharacters and the tag
+        # filter's trailing * accepts an arbitrary suffix.
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          EXPECTED_FPR='6B05889AC9A6A7188DF639B06F27A989C2031D16'
+          git verify-tag --raw "$TAG" 2>&1 | grep -q "VALIDSIG $EXPECTED_FPR" \
+            || { echo "::error::Tag $TAG is not signed by the LibreSCRS release key"; exit 1; }
 
   release:
     needs: verify-signature
@@ -97,16 +115,25 @@ jobs:
           fi
 
       - name: Create GitHub release
+        # The ref name and repository move through the environment, never
+        # inline into the script — a git ref may carry shell metacharacters
+        # and the tag filter's trailing * accepts an arbitrary suffix.
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
         run: |
           # Mark X.Y.Z-{rc,beta,alpha,…} as pre-release; everything else stable.
           PRERELEASE_FLAG=""
-          case "${{ github.ref_name }}" in
+          case "$TAG" in
               *-rc*|*-beta*|*-alpha*|*-pre*) PRERELEASE_FLAG="--prerelease" ;;
           esac
-          gh release create "${{ github.ref_name }}" \
-              --repo "${{ github.repository }}" \
-              --title "${{ github.ref_name }}" \
+          # NOTES_ARG must split into two argv entries and PRERELEASE_FLAG
+          # must disappear when empty — deliberately unquoted.
+          # shellcheck disable=SC2086
+          gh release create "$TAG" \
+              --repo "$REPO" \
+              --title "$TAG" \
+              --verify-tag \
               $NOTES_ARG \
               $PRERELEASE_FLAG
