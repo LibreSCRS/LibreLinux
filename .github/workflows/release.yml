@@ -1,0 +1,112 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
+name: Release
+
+# LibreLinux distributes no prebuilt binaries of its own. The daemon, the
+# prompter and the PKCS#11 module are compiled from the tag's sources by
+# distribution packaging (packaging/{arch,debian,rpm}); the Arch recipe pulls
+# the source tarball GitHub generates for the tag. There is therefore nothing
+# for this workflow to upload and nothing to cosign — binary-artifact signing
+# lives in the components that actually ship binaries. A release here needs
+# exactly two things: proof that the tag carries the project signature, and
+# curated notes taken from CHANGELOG.md.
+#
+# The workflow deliberately performs NO build. Besides keeping it cheap, that
+# is what keeps tagging independent of the agent core: a source build resolves
+# LibreAgent through cmake/FindOrUseLibreAgent.cmake, which follows the agent's
+# trunk, so a build step here would make publishing this component depend on
+# what the agent happens to have published at that moment. The publish order
+# (agent first, this component after) is a property of the release sequence and
+# is not something this workflow can assert — so it asserts nothing about it
+# and never fetches the agent.
+
+on:
+  push:
+    tags:
+      # Same shape as the sibling components. The `v`-prefixed spelling is
+      # accepted as well because packaging/arch/PKGBUILD fetches the tarball
+      # from `refs/tags/v$pkgver`; cmake/GitVersion.cmake strips the prefix,
+      # and so does the notes extraction below.
+      - '[0-9]+.[0-9]+.[0-9]+*'
+      - 'v[0-9]+.[0-9]+.[0-9]+*'
+  # Rehearsal path. A maintainer can start this workflow from the Actions tab
+  # against an existing signed tag (Run workflow -> pick the tag as the ref) to
+  # exercise the whole chain, release notes included, without pushing a fresh
+  # tag. github.ref_name is the tag name on that path too, so every step below
+  # behaves exactly as it does on a tag push; started against a branch instead,
+  # the signature check fails closed, which is the intended outcome.
+  workflow_dispatch:
+
+jobs:
+  verify-signature:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.ref }}
+
+      - name: Import LibreSCRS release public key
+        run: |
+          # The published project key travels with the repository, as in the
+          # sibling components. Report its absence in terms of what to do
+          # about it rather than letting gpg fail with a bare open error.
+          if [ ! -f KEYS ]; then
+            echo "::error::KEYS is missing from the repository root — a release tag cannot be verified without the published LibreSCRS release public key"
+            exit 1
+          fi
+          gpg --import KEYS
+          EXPECTED_FPR='6B05889AC9A6A7188DF639B06F27A989C2031D16'
+          gpg --list-keys --with-colons "$EXPECTED_FPR" | grep -q "^pub" \
+            || { echo "::error::Public key import failed or fingerprint mismatch"; exit 1; }
+
+      - name: Verify tag signature
+        # Rejects any unsigned or wrong-fingerprint tag.
+        run: git verify-tag "${{ github.ref_name }}"
+
+  release:
+    needs: verify-signature
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: CHANGELOG.md
+          sparse-checkout-cone-mode: false
+
+      - name: Prepare release notes from CHANGELOG
+        # Extract the section whose `## ` header contains the tag version
+        # (matches `## [X.Y.Z]`, `## [X.Y.Z] — date`, or
+        # `## [Unreleased] — X.Y.Z`). Fall back to auto-generated notes when the
+        # CHANGELOG has no section for this tag so a release never ships empty
+        # notes. --generate-notes and --notes-file are mutually exclusive, hence
+        # the shell branch.
+        run: |
+          VER="${GITHUB_REF_NAME#v}"
+          awk -v ver="$VER" \
+            '/^## / { if ($0 ~ ("(\\[|[[:space:]])" ver "(\\]|[[:space:]]|$)")) {f=1; next} else if (f) exit } f' \
+            CHANGELOG.md > "$RUNNER_TEMP/relnotes.md"
+          # A plain size test would accept a section that exists but holds only
+          # blank lines, which publishes an empty release body; require at
+          # least one non-whitespace byte before using the file.
+          if grep -q '[^[:space:]]' "$RUNNER_TEMP/relnotes.md"; then
+            echo "NOTES_ARG=--notes-file $RUNNER_TEMP/relnotes.md" >> "$GITHUB_ENV"
+          else
+            echo "No CHANGELOG section for $VER — falling back to --generate-notes"
+            echo "NOTES_ARG=--generate-notes" >> "$GITHUB_ENV"
+          fi
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Mark X.Y.Z-{rc,beta,alpha,…} as pre-release; everything else stable.
+          PRERELEASE_FLAG=""
+          case "${{ github.ref_name }}" in
+              *-rc*|*-beta*|*-alpha*|*-pre*) PRERELEASE_FLAG="--prerelease" ;;
+          esac
+          gh release create "${{ github.ref_name }}" \
+              --repo "${{ github.repository }}" \
+              --title "${{ github.ref_name }}" \
+              $NOTES_ARG \
+              $PRERELEASE_FLAG
