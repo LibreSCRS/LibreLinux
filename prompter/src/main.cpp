@@ -40,6 +40,16 @@ int main(int argc, char* argv[])
     // QApplication MUST come first: it sets the per-thread event loop the
     // sdbus-c++ worker will marshal Qt-thread invocations into.
     QApplication app(argc, argv);
+    // RESIDENT service, never quit-on-last-window-closed (the Qt default):
+    // this process is a systemd Type=dbus unit whose only windows are modal
+    // prompt dialogs. With the default, submitting a prompt closes the last
+    // window and tears the whole process down WHILE the sdbus worker is
+    // still delivering the reply — the teardown races the flush, and the
+    // agent intermittently receives a peer-disconnect instead of the
+    // secret (observed on real hardware: an MRZ entry lost at submit).
+    // The service must outlive every dialog; it exits only with the
+    // session (unit stop).
+    app.setQuitOnLastWindowClosed(false);
     QCoreApplication::setOrganizationName(QStringLiteral("LibreSCRS"));
     QCoreApplication::setOrganizationDomain(QStringLiteral("librescrs.github.io"));
     QCoreApplication::setApplicationName(QStringLiteral("librescrs-pinentry-kde"));
