@@ -1200,16 +1200,17 @@ constexpr const char* kAgentServiceCardType = "org.librescrs.Agent.Test.E2E.Card
 constexpr const char* kCardTypeAtInsertion = "srb-eid-stub";
 constexpr const char* kCardTypeFromRead = "SRB-eID-authoritative-read";
 
-// CardPlugin double: IdentityData-capable, single ATR-table candidate (so the
-// held-session resolve is unambiguous), no pre-read unlock, and a successful
-// read whose CardData::cardType is DELIBERATELY DIFFERENT from pluginId() —
-// proving the post-read push is a real value change, not a re-assertion.
+// CardPlugin double: IdentityData-capable, no pre-read unlock, and a
+// successful read whose CardData::cardType is DELIBERATELY DIFFERENT from
+// pluginId() — proving the post-read push is a real value change, not a
+// re-assertion. Identity is parameterised so the resolver below can present
+// a CONTESTED candidate list: the id and priority are the whole point.
 class CardTypeStubPlugin final : public LibreSCRS::Plugin::CardPlugin
 {
 public:
-    CardTypeStubPlugin()
+    explicit CardTypeStubPlugin(const char* id = kCardTypeAtInsertion, int priority = 100)
     {
-        setIdentity(kCardTypeAtInsertion, "stub", 0);
+        setIdentity(id, "stub", priority);
     }
     LibreSCRS::Plugin::CardCapabilities capabilities() const override
     {
@@ -1236,7 +1237,12 @@ protected:
 // Resolver: ATR-only resolvePlugin() never matches (empty table -> the
 // PresenceModel-level insertion always publishes an empty cardType, exactly
 // like the pinned "empty until known" default); resolveCandidates() (the
-// held-session path) resolves to EXACTLY ONE plugin.
+// held-session path) presents TWO candidates at different priorities. The
+// published property must type as the strictly-lower-priority one — the
+// two-generic-plugins tie-break that used to leave the token typed EMPTY.
+// This is the wiring pin: an AgentFrontend reverted to the old
+// exactly-one-candidate rule resolves nothing here and the property
+// assertions below time out RED.
 class CardTypeResolver final : public CapabilityResolver
 {
 public:
@@ -1248,7 +1254,7 @@ public:
     std::vector<std::shared_ptr<const LibreSCRS::Plugin::CardPlugin>>
     resolveCandidates(std::span<const std::uint8_t>, LibreSCRS::SmartCard::CardSession&) override
     {
-        return {std::make_shared<CardTypeStubPlugin>()};
+        return {std::make_shared<CardTypeStubPlugin>(), std::make_shared<CardTypeStubPlugin>("contender-generic", 900)};
     }
 };
 
