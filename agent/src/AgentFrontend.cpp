@@ -4,6 +4,7 @@
 #include "AgentInterfaceNames.h" // LibreLinux::AgentWire::kRootPath
 #include "AgentObjectPath.h"     // agentObjectPath / objectIdFromPath (ObjectId <-> wire path)
 #include "AuthMethodName.h"      // authMethodName (PreReadAuthMethod -> wire string)
+#include "CardTypeArbitration.h" // arbitrateCardType (candidate list -> Card1.CardType)
 #include <LibreSCRS/Agent/CryptoWorkerContext.h>
 #include <LibreSCRS/Agent/cache/CardReadCache.h>
 #include <LibreSCRS/Agent/cache/CredentialCache.h>
@@ -18,7 +19,6 @@
 #include <LibreSCRS/Agent/operations/LmSeams.h>
 #include <LibreSCRS/Agent/operations/OperationManager.h>
 #include <LibreSCRS/Agent/backend/PrompterClientBase.h>
-#include <LibreSCRS/Plugin/CardPlugin.h> // CardPlugin::pluginId() (the single-candidate cardType)
 #include <sdbus-c++/Types.h>
 #include <chrono>
 #include <cstdint>
@@ -171,15 +171,13 @@ std::function<void(Operations::CardSessionHolder&)> AgentFrontend::makeCardResol
         const auto resolution = holder.fullResolution();
         const std::uint32_t caps = resolution.capabilities;
         const std::string wire{authMethodName(resolution.preReadAuth)};
-        // Card1.CardType (single-candidate case): the SAME held-session
-        // candidate list preReadAuth/capabilities were just resolved from.
-        // Ambiguous (more than one match) or empty (no match) both mean "not
-        // yet known" -- stays empty; a later real read resolves it
-        // authoritatively via the property-update path (onCardTypeResolved).
-        std::string cardType;
-        if (resolution.candidates.size() == 1 && resolution.candidates.front()) {
-            cardType = resolution.candidates.front()->pluginId();
-        }
+        // Card1.CardType: arbitrated over the SAME held-session candidate list
+        // preReadAuth/capabilities were just resolved from -- the strictly
+        // highest-priority candidate names the card. A tie at that priority, or
+        // no candidate at all, means "not yet known" -- stays empty; a later
+        // real read resolves it authoritatively via the property-update path
+        // (onCardTypeResolved).
+        const std::string cardType = arbitrateCardType(resolution.candidates);
         // loopPostSink() always hands out a valid callable (it guards its own
         // captured poster internally), so the sink is dereferenced unconditionally.
         sink(std::chrono::microseconds{0}, [this, cardPath, readerPath, readerName, caps, wire, cardType] {

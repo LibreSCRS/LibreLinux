@@ -32,11 +32,15 @@
   CardType (feature-gated "card-type"): the card's type identifier — the SAME
   string GUI plugin dispatch keys on (LM's CardData::cardType /
   CardPlugin::pluginId()). Empty until known: an empty string means either the
-  held-session candidate list resolved to more than one plugin (ambiguous) or
-  has not resolved yet, NOT "no card type exists". Two ways it becomes known:
-    - at card-object creation, when the held-session candidate list resolves
-      to EXACTLY ONE plugin (the same deferred resolution point that yields
-      Capabilities/PreReadAuthMethod above);
+  held-session candidate list named no unambiguous winner or has not resolved
+  yet, NOT "no card type exists". Two ways it becomes known:
+    - at card-object creation, from the held-session candidate list: the
+      candidate with the strictly highest probe priority names the card (the
+      same deferred resolution point that yields
+      Capabilities/PreReadAuthMethod above). Several candidates are the norm,
+      not an anomaly — a card is routinely claimed by its family driver AND by
+      one or both generic drivers. Only a TIE at the top priority is
+      ambiguous, and leaves this empty;
     - authoritatively, from a completed ReadIdentity/GetPhoto read's
       CardData::cardType — pushed via PropertiesChanged on an
       already-published card, so a client that discovered the card before its

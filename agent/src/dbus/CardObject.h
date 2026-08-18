@@ -143,9 +143,10 @@ struct CardOperationDeps
     // resolution and carried through here. Empty is treated as "None".
     std::string preReadAuth;
 
-    // Initial Card1.CardType value: the single-candidate pluginId resolved at
-    // the same deferred point as preReadAuth above, or empty (ambiguous / not
-    // yet known). The CardObject re-publishes a LATER authoritative value
+    // Initial Card1.CardType value: the pluginId of the strictly
+    // highest-priority candidate, arbitrated at the same deferred point as
+    // preReadAuth above, or empty (tied candidates / not yet known -- see
+    // CardTypeArbitration.h). The CardObject re-publishes a LATER authoritative value
     // (from a completed read) via PropertiesChanged -- this field only seeds
     // the value at construction.
     std::string cardType;

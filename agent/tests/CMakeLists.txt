@@ -160,6 +160,16 @@ target_link_libraries(AgentObjectPathTest PRIVATE
     GTest::gtest_main)
 add_test(NAME AgentObjectPathTest COMMAND AgentObjectPathTest)
 
+# Card1.CardType arbitration over the held-session candidate list
+# (CardTypeArbitration.h): lowest probe priority wins, a tie at that value stays
+# empty. Pure header-only (no session bus, no card).
+add_executable(CardTypeArbitrationTest CardTypeArbitrationTest.cpp)
+target_link_libraries(CardTypeArbitrationTest PRIVATE
+    LibreLinuxAgentCore
+    GTest::gtest
+    GTest::gtest_main)
+add_test(NAME CardTypeArbitrationTest COMMAND CardTypeArbitrationTest)
+
 add_executable(Card1MethodsXmlCodegenTest Card1MethodsXmlCodegenTest.cpp)
 target_link_libraries(Card1MethodsXmlCodegenTest PRIVATE
     LibreLinuxAgentCore
