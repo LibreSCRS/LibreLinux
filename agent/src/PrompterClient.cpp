@@ -11,6 +11,7 @@
 #include <sdbus-c++/ProxyInterfaces.h>
 #include <sdbus-c++/Types.h>
 #include <algorithm>
+#include <chrono>
 #include <map>
 #include <optional>
 #include <string>
@@ -193,7 +194,27 @@ public:
     {
         unregisterProxy();
     }
+
+    // The interactive calls below bypass the generated convenience methods:
+    // those run on the D-Bus DEFAULT method timeout (~25 s), which aborted
+    // real human-paced entries mid-typing. The raw proxy lets the call carry
+    // an explicit budget.
+    sdbus::IProxy& proxy()
+    {
+        return getProxy();
+    }
 };
+
+namespace {
+
+// Interactive prompts are answered at HUMAN speed: reading the MRZ off a
+// lifted passport, calendar date entry, careful PIN typing. The budget is
+// far beyond any legitimate entry yet still bounded, so a wedged prompter
+// cannot hold an agent worker forever. Prompt teardown stays EVENT-driven
+// (CancelCurrent on removal/cancel), never wall-clock-driven.
+constexpr std::chrono::minutes kInteractivePromptBudget{10};
+
+} // namespace
 
 PrompterClient::PrompterClient(std::shared_ptr<sdbus::IConnection> connection, std::string serviceName,
                                std::string objectPath)
@@ -252,12 +273,19 @@ PromptResult PrompterClient::request(std::string_view kind, const PromptOptions&
 {
     PromptResult result;
 
-    // The generated method returns std::tuple<status, secret_fd, user_message>
-    // — strings + sdbus::UnixFd — and may throw sdbus::Error on transport or
-    // bus failure. Any throw collapses to PromptStatus::Error + e.getMessage().
+    // The call returns std::tuple<status, secret_fd, user_message> — strings +
+    // sdbus::UnixFd — and may throw sdbus::Error on transport or bus failure.
+    // Any throw collapses to PromptStatus::Error + e.getMessage(). Issued raw
+    // (not via the generated convenience method) to carry the interactive
+    // budget.
     std::tuple<std::string, sdbus::UnixFd, std::string> reply;
     try {
-        reply = m_impl->RequestSecret(std::string{kind}, buildOptionsDict(options));
+        m_impl->proxy()
+            .callMethod("RequestSecret")
+            .onInterface(org::librescrs::Prompter1_proxy::INTERFACE_NAME)
+            .withTimeout(kInteractivePromptBudget)
+            .withArguments(std::string{kind}, buildOptionsDict(options))
+            .storeResultsTo(reply);
     } catch (const sdbus::Error& e) {
         log::warnf("PrompterClient: D-Bus call RequestSecret({}) failed: {}", kind, e.getMessage());
         result.status = PromptStatus::Error;
@@ -303,14 +331,20 @@ PinChangePromptResult PrompterClient::requestPinChange(const PromptOptions& opti
 {
     PinChangePromptResult result;
 
-    // The generated method returns std::tuple<status, primary_fd, secondary_fd,
+    // The call returns std::tuple<status, primary_fd, secondary_fd,
     // user_message> and may throw sdbus::Error on transport / bus failure. Any
     // throw collapses to PromptStatus::Error + e.getMessage(), matching the
-    // no-throw contract of the single-secret calls.
+    // no-throw contract of the single-secret calls. Issued raw to carry the
+    // interactive budget (a PIN change is the SLOWEST entry: two fields plus
+    // a confirmation).
     std::tuple<std::string, sdbus::UnixFd, sdbus::UnixFd, std::string> reply;
     try {
-        reply = m_impl->RequestSecrets(std::string{LibreLinux::PrompterWire::kKindChangePin},
-                                       buildChangePinOptionsDict(options));
+        m_impl->proxy()
+            .callMethod("RequestSecrets")
+            .onInterface(org::librescrs::Prompter1_proxy::INTERFACE_NAME)
+            .withTimeout(kInteractivePromptBudget)
+            .withArguments(std::string{LibreLinux::PrompterWire::kKindChangePin}, buildChangePinOptionsDict(options))
+            .storeResultsTo(reply);
     } catch (const sdbus::Error& e) {
         log::warnf("PrompterClient: D-Bus call RequestSecrets(change_pin) failed: {}", e.getMessage());
         result.status = PromptStatus::Error;

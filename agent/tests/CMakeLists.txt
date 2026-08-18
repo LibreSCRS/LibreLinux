@@ -474,6 +474,23 @@ target_link_libraries(PrompterClientPinChangeTest PRIVATE
 add_test(NAME PrompterClientPinChangeTest
     COMMAND ${DBUS_RUN_SESSION} -- $<TARGET_FILE:PrompterClientPinChangeTest>)
 
+# Human-paced prompt budget: the mock prompter replies only AFTER the D-Bus
+# default method timeout has elapsed; the client must still receive the
+# answer (interactive requests carry an explicit generous budget). A slow
+# test by design (~half a minute) — the only honest end-to-end proof of the
+# regression it pins (real MRZ entry aborted mid-typing at ~25 s).
+add_executable(PrompterClientInteractiveBudgetTest
+    PrompterClientInteractiveBudgetTest.cpp
+    ${_test_prompter_adaptor})
+target_include_directories(PrompterClientInteractiveBudgetTest PRIVATE ${LL_DBUS_GEN_DIR})
+target_link_libraries(PrompterClientInteractiveBudgetTest PRIVATE
+    LibreLinuxAgentCore
+    GTest::gtest
+    GTest::gtest_main)
+add_test(NAME PrompterClientInteractiveBudgetTest
+    COMMAND ${DBUS_RUN_SESSION} -- $<TARGET_FILE:PrompterClientInteractiveBudgetTest>)
+set_tests_properties(PrompterClientInteractiveBudgetTest PROPERTIES TIMEOUT 90)
+
 # Credentials1 D-Bus surface end-to-end: CardObject (Card1 + Credentials1) + a fake
 # CredentialManager seam + FakePrompterService on a private session bus. Reuses the
 # locally-generated Prompter1 adaptor artefact; needs the LM-internal detached
