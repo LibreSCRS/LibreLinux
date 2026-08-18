@@ -70,6 +70,11 @@ UMask=0077
 # ~/.cache/librescrs) and exports $CACHE_DIRECTORY, which the agent's
 # cache-root resolver consumes for the TSL/AIA caches.
 CacheDirectory=librescrs
+# The same, for the configuration the agent writes: without a writable
+# mount every persist under ProtectHome=read-only failed and nothing the
+# user configured survived a restart. systemd creates this under
+# $XDG_CONFIG_HOME and exports $CONFIGURATION_DIRECTORY.
+ConfigurationDirectory=librescrs
 
 [Install]
 WantedBy=graphical-session.target

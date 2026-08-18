@@ -20,23 +20,40 @@ std::optional<std::filesystem::path> xdgDir(const char* xdgVar, const char* home
     }
     return std::nullopt;
 }
+// systemd exports these as colon-separated lists; the first entry is ours.
+std::optional<std::filesystem::path> systemdDir(const char* var)
+{
+    const char* d = std::getenv(var);
+    if (d == nullptr || d[0] == '\0') {
+        return std::nullopt;
+    }
+    std::string_view v{d};
+    if (const auto colon = v.find(':'); colon != std::string_view::npos) {
+        v = v.substr(0, colon);
+    }
+    return std::filesystem::path{std::string{v}};
+}
 std::optional<std::filesystem::path> cacheDir()
 {
     // systemd CacheDirectory= exports $CACHE_DIRECTORY for the user unit; prefer
     // it so caches land in the unit's writable mount under ProtectHome=read-only.
-    if (const char* cd = std::getenv("CACHE_DIRECTORY"); cd != nullptr && cd[0] != '\0') {
-        // CACHE_DIRECTORY may be a colon-separated list; the first entry is ours.
-        std::string_view v{cd};
-        if (const auto colon = v.find(':'); colon != std::string_view::npos) {
-            v = v.substr(0, colon);
-        }
-        return std::filesystem::path{std::string{v}};
+    if (auto d = systemdDir("CACHE_DIRECTORY")) {
+        return d;
     }
     return xdgDir("XDG_CACHE_HOME", ".cache");
 }
 } // namespace
 std::filesystem::path resolveConfigFile()
 {
+    // Same rule as the cache root, and for the same reason: under the unit's
+    // ProtectHome=read-only sandbox $XDG_CONFIG_HOME is NOT writable, so every
+    // persist — the first-run seed and every Config1.SetValue a user makes —
+    // failed with "read-only file system" and the configuration silently did
+    // not survive a restart. ConfigurationDirectory= gives the unit a writable
+    // mount and exports this variable to name it.
+    if (auto d = systemdDir("CONFIGURATION_DIRECTORY")) {
+        return *d / "agent.conf";
+    }
     if (auto d = xdgDir("XDG_CONFIG_HOME", ".config")) {
         return *d / "agent.conf";
     }
