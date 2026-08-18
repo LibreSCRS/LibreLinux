@@ -4,6 +4,7 @@
 #include <LibreSCRS/Agent/backend/PromptTypes.h>
 #include <LibreSCRS/Agent/backend/PrompterClientBase.h>
 #include <sdbus-c++/IConnection.h>
+#include <chrono>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -12,6 +13,14 @@ namespace LibreSCRS::Agent {
 class PrompterClient : public LibreSCRS::Agent::Operations::PrompterClientBase
 {
 public:
+    // Interactive prompts are answered at HUMAN speed (reading the MRZ off a
+    // lifted passport, calendar entry, careful PIN typing), so the request
+    // calls carry this explicit budget instead of the D-Bus default method
+    // timeout (~25 s), which aborted real entries mid-typing. Far beyond any
+    // legitimate entry, still bounded so a wedged prompter cannot hold an
+    // agent worker forever; teardown stays event-driven (CancelCurrent).
+    static constexpr std::chrono::minutes kDefaultInteractiveBudget{10};
+
     // CO-OWNS the connection (shared_ptr, not a borrow): the per-reader crypto
     // worker pumps its blocking Prompter1.RequestSecret reply INLINE on this
     // connection, so a worker abandoned while still blocked in that call must keep
@@ -19,10 +28,12 @@ public:
     // A crypto seam value-captures a shared_ptr to this client (which shares the
     // connection), so the connection outlives any such zombie worker's in-flight
     // call. serviceName / objectPath default to the well-known names defined by the
-    // org.librescrs.Prompter1 interface.
+    // org.librescrs.Prompter1 interface. @p interactiveBudget is injectable for
+    // tests only — production call sites keep the default.
     explicit PrompterClient(std::shared_ptr<sdbus::IConnection> connection,
                             std::string serviceName = "org.librescrs.Prompter1",
-                            std::string objectPath = "/org/librescrs/Prompter1");
+                            std::string objectPath = "/org/librescrs/Prompter1",
+                            std::chrono::microseconds interactiveBudget = kDefaultInteractiveBudget);
 
     ~PrompterClient() override;
 
@@ -73,6 +84,9 @@ private:
     // BEFORE m_impl so it is destroyed AFTER it (the proxy unregisters against a
     // live connection).
     std::shared_ptr<sdbus::IConnection> m_connection;
+    // Per-call budget for the interactive request calls (see
+    // kDefaultInteractiveBudget); test-injectable via the constructor.
+    std::chrono::microseconds m_interactiveBudget;
     // Well-known prompter service name + object path, retained so cancelVia() can
     // build a one-shot proxy on the main connection with the same target.
     std::string m_serviceName;

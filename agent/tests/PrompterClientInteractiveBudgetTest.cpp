@@ -25,6 +25,7 @@
 #include <sdbus-c++/Types.h>
 #include <gtest/gtest.h>
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <map>
@@ -58,12 +59,13 @@ int makeSealedFd(std::string_view bytes)
 }
 
 // Prompter that behaves like a real human-paced dialog: the reply arrives
-// well after the D-Bus default method timeout has elapsed.
+// only after a configurable delay.
 class SlowMockPrompter final : public sdbus::AdaptorInterfaces<org::librescrs::Prompter1_adaptor>
 {
 public:
-    SlowMockPrompter(sdbus::IConnection& connection, sdbus::ObjectPath path)
-        : AdaptorInterfaces(connection, std::move(path))
+    SlowMockPrompter(sdbus::IConnection& connection, sdbus::ObjectPath path,
+                     std::chrono::seconds replyDelay = kReplyDelay)
+        : AdaptorInterfaces(connection, std::move(path)), m_replyDelay(replyDelay)
     {
         registerAdaptor();
     }
@@ -77,13 +79,20 @@ public:
     SlowMockPrompter(SlowMockPrompter&&) = delete;
     SlowMockPrompter& operator=(SlowMockPrompter&&) = delete;
 
+    // Number of CancelCurrent calls the mock has served (dispatched once the
+    // sleeping handler yields the event loop).
+    int cancelCount() const
+    {
+        return m_cancelCount.load();
+    }
+
 private:
     std::tuple<std::string, sdbus::UnixFd, std::string>
     RequestSecret(const std::string& /*kind*/, const std::map<std::string, sdbus::Variant>& /*options*/) override
     {
         // Blocking the adaptor's event-loop thread is exactly the shape of a
         // modal dialog waiting on the user.
-        std::this_thread::sleep_for(kReplyDelay);
+        std::this_thread::sleep_for(m_replyDelay);
         return std::make_tuple(std::string{"ok"}, sdbus::UnixFd{makeSealedFd(kSecretBytes), sdbus::adopt_fd},
                                std::string{});
     }
@@ -98,8 +107,11 @@ private:
 
     void CancelCurrent() override
     {
-        // No live dialog in the mock; cancel is a no-op here.
+        m_cancelCount.fetch_add(1);
     }
+
+    std::chrono::seconds m_replyDelay;
+    std::atomic<int> m_cancelCount{0};
 };
 
 } // namespace
@@ -122,6 +134,38 @@ TEST(PrompterClientInteractiveBudget, SurvivesHumanPacedReplyBeyondDbusDefaultTi
         << "a reply slower than the D-Bus default method timeout must still be received: " << result.userMessage;
     ASSERT_TRUE(result.secret.has_value());
     EXPECT_EQ(result.secret->view(), kSecretBytes);
+
+    clientConn->leaveEventLoop();
+    serverConn->leaveEventLoop();
+}
+
+// When the budget DOES expire, the user must not be left typing into a prompt
+// with no consumer: the client dismisses the orphaned dialog via
+// CancelCurrent. (The prompter cannot observe a caller-side timeout itself —
+// dismissal must come from the abandoning caller.)
+TEST(PrompterClientInteractiveBudget, BudgetExpiryDismissesTheOrphanedPrompt)
+{
+    auto serverConn = sdbus::createSessionBusConnection();
+    ASSERT_NE(serverConn, nullptr) << "private session bus (run under dbus-run-session)";
+    serverConn->requestName(sdbus::ServiceName{kMockServiceName});
+    // Reply after 5 s against a 2 s budget: the call must time out first.
+    SlowMockPrompter mock{*serverConn, sdbus::ObjectPath{kMockObjectPath}, std::chrono::seconds{5}};
+    serverConn->enterEventLoopAsync();
+
+    std::shared_ptr<sdbus::IConnection> clientConn = sdbus::createSessionBusConnection();
+    clientConn->enterEventLoopAsync();
+    PrompterClient client{clientConn, kMockServiceName, kMockObjectPath, std::chrono::seconds{2}};
+
+    const auto result = client.requestMrz({});
+    EXPECT_EQ(result.status, PromptStatus::Error) << "a 2 s budget must expire against a 5 s reply";
+
+    // The mock serves the queued CancelCurrent once its sleeping handler
+    // yields the loop; poll briefly for it.
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{15};
+    while (mock.cancelCount() == 0 && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds{100});
+    }
+    EXPECT_GE(mock.cancelCount(), 1) << "the abandoning caller must dismiss the orphaned prompt";
 
     clientConn->leaveEventLoop();
     serverConn->leaveEventLoop();

@@ -205,20 +205,10 @@ public:
     }
 };
 
-namespace {
-
-// Interactive prompts are answered at HUMAN speed: reading the MRZ off a
-// lifted passport, calendar date entry, careful PIN typing. The budget is
-// far beyond any legitimate entry yet still bounded, so a wedged prompter
-// cannot hold an agent worker forever. Prompt teardown stays EVENT-driven
-// (CancelCurrent on removal/cancel), never wall-clock-driven.
-constexpr std::chrono::minutes kInteractivePromptBudget{10};
-
-} // namespace
-
 PrompterClient::PrompterClient(std::shared_ptr<sdbus::IConnection> connection, std::string serviceName,
-                               std::string objectPath)
-    : m_connection(std::move(connection)), m_serviceName(std::move(serviceName)), m_objectPath(std::move(objectPath)),
+                               std::string objectPath, std::chrono::microseconds interactiveBudget)
+    : m_connection(std::move(connection)), m_interactiveBudget(interactiveBudget),
+      m_serviceName(std::move(serviceName)), m_objectPath(std::move(objectPath)),
       m_impl(std::make_unique<Impl>(*m_connection, m_serviceName, m_objectPath))
 {}
 
@@ -283,11 +273,16 @@ PromptResult PrompterClient::request(std::string_view kind, const PromptOptions&
         m_impl->proxy()
             .callMethod("RequestSecret")
             .onInterface(org::librescrs::Prompter1_proxy::INTERFACE_NAME)
-            .withTimeout(kInteractivePromptBudget)
+            .withTimeout(m_interactiveBudget)
             .withArguments(std::string{kind}, buildOptionsDict(options))
             .storeResultsTo(reply);
     } catch (const sdbus::Error& e) {
         log::warnf("PrompterClient: D-Bus call RequestSecret({}) failed: {}", kind, e.getMessage());
+        // The prompter may still be showing the dialog this call abandoned
+        // (budget expiry is the canonical case): dismiss it so the user is
+        // not left typing into a prompt with no consumer. The blocking call
+        // has already returned, so m_connection is free again; best-effort.
+        cancel();
         result.status = PromptStatus::Error;
         result.userMessage = e.getMessage();
         return result;
@@ -342,11 +337,14 @@ PinChangePromptResult PrompterClient::requestPinChange(const PromptOptions& opti
         m_impl->proxy()
             .callMethod("RequestSecrets")
             .onInterface(org::librescrs::Prompter1_proxy::INTERFACE_NAME)
-            .withTimeout(kInteractivePromptBudget)
+            .withTimeout(m_interactiveBudget)
             .withArguments(std::string{LibreLinux::PrompterWire::kKindChangePin}, buildChangePinOptionsDict(options))
             .storeResultsTo(reply);
     } catch (const sdbus::Error& e) {
         log::warnf("PrompterClient: D-Bus call RequestSecrets(change_pin) failed: {}", e.getMessage());
+        // Dismiss the possibly-orphaned change_pin dialog — same rationale as
+        // the single-secret path.
+        cancel();
         result.status = PromptStatus::Error;
         result.userMessage = e.getMessage();
         return result;
