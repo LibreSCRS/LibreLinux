@@ -111,12 +111,24 @@ jobs:
       # NOT LIBRELINUX_USER_INSTALL — that mode targets per-user XDG dirs for
       # dogfooding. CI builds the packaging layout (system prefix), which is
       # what distro packages ship.
-      - name: Configure (Release)
+      - name: Configure (Release, warnings as errors)
+        # LIBRELINUX_WERROR mirrors what the `release-strict` preset sets, but
+        # spelled out here because that preset also pins CMAKE_PREFIX_PATH to a
+        # developer's ~/.local prefix, which is not where this job installs the
+        # middleware. Keep the two in step.
+        #
+        # The option is not only a severity switch: pkcs11-module/CMakeLists.txt
+        # gives librescrs-pkcs11-agent its -Wall -Wextra inside the same
+        # condition, so with it off that target is built with no warning flags
+        # at all and nothing about it is checked. The three targets it covers
+        # (LibreLinuxAgentCore, librescrs-pkcs11-agent, librescrs-pinentry-kde)
+        # are the shipped ones; test executables keep warning-only builds.
         working-directory: LibreLinux
         run: |
           cmake -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-            -DCMAKE_PREFIX_PATH="$LM_PREFIX"
+            -DCMAKE_PREFIX_PATH="$LM_PREFIX" \
+            -DLIBRELINUX_WERROR=ON
 
       - name: Build (agent + prompter)
         working-directory: LibreLinux

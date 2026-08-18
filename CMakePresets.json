@@ -41,9 +41,10 @@
     }
   ],
   "buildPresets": [
-    { "name": "debug",   "configurePreset": "debug",   "jobs": 4 },
-    { "name": "release", "configurePreset": "release", "jobs": 4 },
-    { "name": "user",    "configurePreset": "user",    "jobs": 4 }
+    { "name": "debug",          "configurePreset": "debug",          "jobs": 4 },
+    { "name": "release",        "configurePreset": "release",        "jobs": 4 },
+    { "name": "release-strict", "configurePreset": "release-strict", "jobs": 4 },
+    { "name": "user",           "configurePreset": "user",           "jobs": 4 }
   ],
   "testPresets": [
     {
