@@ -1183,11 +1183,11 @@ TEST(CardOperationsIntegration, CapabilitiesResolvedFromHeldSessionForAidProbeOn
 // Card1.CardType + Card1.Atr. Mirrors PreReadAuthResolvedOnWorkerAndPublishedOnLoop's
 // harness exactly (same deferred-publish machinery resolves cardType alongside
 // caps/preReadAuth), then drives a REAL ReadIdentity through the SAME held
-// session's single candidate to prove the post-read authoritative update
+// session's ARBITRATED candidate to prove the post-read authoritative update
 // reaches an already-published CardObject via PropertiesChanged (not just at
 // construction time). Asserts:
 //   * Atr is the uppercase-hex ATR, published from the FIRST snapshot;
-//   * CardType is the single candidate's pluginId, ALSO from the FIRST
+//   * CardType is the arbitrated candidate's pluginId, ALSO from the FIRST
 //     snapshot (the deferred-resolve point, not a later push);
 //   * a completed ReadIdentity flips CardType to the read's authoritative
 //     CardData::cardType (deliberately a DIFFERENT string than the pluginId
@@ -1254,7 +1254,12 @@ public:
     std::vector<std::shared_ptr<const LibreSCRS::Plugin::CardPlugin>>
     resolveCandidates(std::span<const std::uint8_t>, LibreSCRS::SmartCard::CardSession&) override
     {
-        return {std::make_shared<CardTypeStubPlugin>(), std::make_shared<CardTypeStubPlugin>("contender-generic", 900)};
+        // The winner (priority 100) is deliberately NOT first. With it at the
+        // front, a revert of the arbitration to `candidates.front()` would
+        // still produce the right answer and this pin would not notice — and
+        // list order is precisely what the rule refuses to trust, because the
+        // registry sorts ATR matches and AID probes in two independent runs.
+        return {std::make_shared<CardTypeStubPlugin>("contender-generic", 900), std::make_shared<CardTypeStubPlugin>()};
     }
 };
 
@@ -1323,7 +1328,7 @@ TEST(CardOperationsIntegration, CardTypeAndAtrResolvedAtInsertionThenAuthoritati
             return v.get<std::string>();
         };
 
-        // Step 1: the deferred-resolve snapshot (single-candidate cardType +
+        // Step 1: the deferred-resolve snapshot (arbitrated cardType +
         // atrHex), before any read.
         std::string cardType = "<unset>";
         std::string atrProp = "<unset>";
@@ -1345,7 +1350,8 @@ TEST(CardOperationsIntegration, CardTypeAndAtrResolvedAtInsertionThenAuthoritati
         }
         EXPECT_EQ(atrProp, "3B7F9600") << "Atr must be the uppercase-hex ATR, published from insertion";
         EXPECT_EQ(cardType, kCardTypeAtInsertion)
-            << "CardType must be the single held-session candidate's pluginId, co-published with caps/preReadAuth";
+            << "CardType must be the strictly-highest-priority held-session candidate's pluginId (100 beats 900 "
+               "— arbitrated, not merely the only entry), co-published with caps/preReadAuth";
 
         // Step 2: a real ReadIdentity flips CardType to the read's
         // authoritative CardData::cardType via the property-update path.
