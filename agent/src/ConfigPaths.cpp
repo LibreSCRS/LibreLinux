@@ -31,6 +31,13 @@ std::optional<std::filesystem::path> systemdDir(const char* var)
     if (const auto colon = v.find(':'); colon != std::string_view::npos) {
         v = v.substr(0, colon);
     }
+    // A leading colon leaves the first entry EMPTY. Returning an engaged
+    // optional holding an empty path would make the caller build a
+    // CWD-relative "agent.conf" and skip the XDG fallback entirely, so treat
+    // an empty first entry as no answer at all.
+    if (v.empty()) {
+        return std::nullopt;
+    }
     return std::filesystem::path{std::string{v}};
 }
 std::optional<std::filesystem::path> cacheDir()

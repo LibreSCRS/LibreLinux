@@ -144,6 +144,20 @@ target_link_libraries(Operation1ErrorCodeXmlGuardTest PRIVATE
     GTest::gtest_main)
 add_test(NAME Operation1ErrorCodeXmlGuardTest COMMAND Operation1ErrorCodeXmlGuardTest)
 
+# Machine gate for the sandbox's writable directories: while the unit confines
+# the home directory read-only, it must declare a directory for each of the
+# agent's write roots, or the writes fail with EROFS at runtime and nothing the
+# user configures survives a restart. Reads the unit template from the source
+# tree (same pattern as the guard above). Needs no agent library — it reads a
+# file — so it links only gtest.
+add_executable(SandboxWritableDirsGuardTest SandboxWritableDirsGuardTest.cpp)
+target_compile_definitions(SandboxWritableDirsGuardTest PRIVATE
+    LIBRELINUX_AGENT_UNIT_IN="${CMAKE_CURRENT_SOURCE_DIR}/../data/librescrs-agent.service.in")
+target_link_libraries(SandboxWritableDirsGuardTest PRIVATE
+    GTest::gtest
+    GTest::gtest_main)
+add_test(NAME SandboxWritableDirsGuardTest COMMAND SandboxWritableDirsGuardTest)
+
 add_executable(Operation1XmlCodegenTest Operation1XmlCodegenTest.cpp)
 target_link_libraries(Operation1XmlCodegenTest PRIVATE
     LibreLinuxAgentCore

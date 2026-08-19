@@ -57,6 +57,27 @@ TEST(ConfigPaths, ConfigurationDirectoryFirstColonSegmentWins)
     EXPECT_EQ(resolveConfigFile(), std::filesystem::path{"/first/cfg/agent.conf"});
 }
 
+// A leading colon makes the first entry empty. Before this was handled the
+// resolver returned an engaged optional wrapping an empty path, so the config
+// file resolved to a bare "agent.conf" relative to the process working
+// directory and the XDG fallback was never reached.
+TEST(ConfigPaths, LeadingColonFallsBackToXdg)
+{
+    EnvGuard g;
+    ::setenv("XDG_CONFIG_HOME", "/tmp/llcfg", 1);
+    ::setenv("CONFIGURATION_DIRECTORY", ":/second/cfg", 1);
+    EXPECT_EQ(resolveConfigFile(), std::filesystem::path{"/tmp/llcfg/librescrs/agent.conf"});
+}
+
+// Same hole, same helper, reached through the cache root instead.
+TEST(ConfigPaths, LeadingColonInCacheDirectoryFallsBackToXdg)
+{
+    EnvGuard g;
+    ::setenv("XDG_CACHE_HOME", "/tmp/llcache", 1);
+    ::setenv("CACHE_DIRECTORY", ":/second/cache", 1);
+    EXPECT_EQ(resolveCacheRoot(), std::filesystem::path{"/tmp/llcache/librescrs"});
+}
+
 TEST(ConfigPaths, XdgConfigHomeWins)
 {
     EnvGuard g;
