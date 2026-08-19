@@ -330,7 +330,9 @@ protected:
     void doWork() override
     {
         setPhase(static_cast<std::uint32_t>(OperationPhase::AwaitingConsent));
-        SerializingPrompter gated{m_serializer, m_prompter, token()};
+        // The gate is keyed by card, as production keys it from the reader's card
+        // object; this test drives one op, so the key only has to be stable.
+        SerializingPrompter gated{m_serializer, m_prompter, token(), "card-typed-11"};
         static_cast<void>(gated.requestPin(PromptOptions{}));
         if (shutdownRequested()) {
             return; // teardown: skip the wire completion (as the real typed ops do)
