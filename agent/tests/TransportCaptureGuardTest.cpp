@@ -159,7 +159,7 @@ TEST(TransportTeardownGuard, QuiesceStopsInboundBeforeSeveringObservers)
 
     const auto stopPos = src.find("m_bridge->stop()");
     const auto severPos = src.find("setObservers({}, {}, {})");
-    const auto cancelPos = src.find("cancelVia(");
+    const auto cancelPos = src.find("m_prompter->cancel(");
     ASSERT_NE(stopPos, std::string::npos) << "quiesce() must stop the inbound monitor";
     ASSERT_NE(severPos, std::string::npos) << "quiesce() must sever the presence observers";
     ASSERT_NE(cancelPos, std::string::npos) << "quiesce() must cancel the pending prompt";

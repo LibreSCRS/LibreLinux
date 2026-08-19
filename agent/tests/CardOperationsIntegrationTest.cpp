@@ -330,7 +330,7 @@ TEST(CardOperationsIntegration, ReadIdentityHappyPathEmitsResultThenFinishedOk)
 
     // Agent-side state.
     OkReader reader;
-    PrompterClient prompterClient(agentBus, kPrompterServiceHappy, kPrompterObject);
+    PrompterClient prompterClient(kPrompterServiceHappy, kPrompterObject);
     CredentialCache credCache;
     CardReadCache readCache;
     PromptSerializer serializer;
@@ -456,7 +456,7 @@ TEST(CardOperationsIntegration, GroupSignalsStreamInOrderBeforeResult)
     prompterBus->enterEventLoopAsync();
 
     TwoGroupStreamingReader reader;
-    PrompterClient prompterClient(agentBus, kPrompterServiceGroupStream, kPrompterObject);
+    PrompterClient prompterClient(kPrompterServiceGroupStream, kPrompterObject);
     CredentialCache credCache;
     CardReadCache readCache;
     PromptSerializer serializer;
@@ -549,7 +549,7 @@ TEST(CardOperationsIntegration, ClientDisconnectCancelsInflightOp)
     prompterBus->enterEventLoopAsync();
 
     CancellableReader reader; // blocks on the token, honours cancel
-    PrompterClient prompterClient(agentBus, kPrompterServiceCancel, kPrompterObject);
+    PrompterClient prompterClient(kPrompterServiceCancel, kPrompterObject);
     CredentialCache credCache;
     CardReadCache readCache;
     PromptSerializer serializer;
@@ -735,7 +735,7 @@ TEST(CardOperationsIntegration, SustainedReadLoadKeepsDispatchThreadResponsive)
     prompterBus->enterEventLoopAsync();
 
     InstantReader reader;
-    PrompterClient prompterClient(agentBus, kPrompterServiceLoad, kPrompterObject);
+    PrompterClient prompterClient(kPrompterServiceLoad, kPrompterObject);
     CredentialCache credCache;
     CardReadCache readCache;
     PromptSerializer serializer;

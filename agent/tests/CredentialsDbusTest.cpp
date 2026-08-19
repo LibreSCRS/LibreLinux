@@ -256,7 +256,7 @@ struct Harness
         agentBus->enterEventLoopAsync();
         prompterBus->enterEventLoopAsync();
         prompterClientConn = sdbus::createSessionBusConnection(); // no async loop: worker pumps it inline
-        prompterClient = std::make_unique<PrompterClient>(prompterClientConn, prompterName, kPrompterObject);
+        prompterClient = std::make_unique<PrompterClient>(prompterName, kPrompterObject);
         mgr.setSessionFactoryForTest(fakeSessionFactory());
 
         CardOperationDeps deps;

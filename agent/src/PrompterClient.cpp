@@ -205,11 +205,9 @@ public:
     }
 };
 
-PrompterClient::PrompterClient(std::shared_ptr<sdbus::IConnection> connection, std::string serviceName,
-                               std::string objectPath, std::chrono::microseconds interactiveBudget)
-    : m_connection(std::move(connection)), m_interactiveBudget(interactiveBudget),
-      m_serviceName(std::move(serviceName)), m_objectPath(std::move(objectPath)),
-      m_impl(std::make_unique<Impl>(*m_connection, m_serviceName, m_objectPath))
+PrompterClient::PrompterClient(std::string serviceName, std::string objectPath,
+                               std::chrono::microseconds interactiveBudget)
+    : m_interactiveBudget(interactiveBudget), m_serviceName(std::move(serviceName)), m_objectPath(std::move(objectPath))
 {}
 
 PrompterClient::~PrompterClient() = default;
@@ -231,31 +229,19 @@ PromptResult PrompterClient::requestMrz(const PromptOptions& options)
 
 void PrompterClient::cancel() noexcept
 {
+    // Its own connection, like every call here: a cancel has to be deliverable
+    // while a worker is blocked in a request, and two operations cancelled at
+    // once must not drive one bus from two threads.
     try {
-        m_impl->CancelCurrent();
+        auto connection = sdbus::createSessionBusConnection();
+        Impl canceller(*connection, m_serviceName, m_objectPath);
+        canceller.CancelCurrent();
     } catch (const sdbus::Error& e) {
         log::warnf("PrompterClient: CancelCurrent failed: {}", e.getMessage());
     } catch (const std::exception& e) {
         log::warnf("PrompterClient: CancelCurrent threw: {}", e.what());
     } catch (...) {
         log::warn("PrompterClient: CancelCurrent failed with unknown exception");
-    }
-}
-
-void PrompterClient::cancelVia(sdbus::IConnection& connection) noexcept
-{
-    // One-shot proxy on the supplied (main) connection: NOT m_connection, which a
-    // wedged worker may be pumping inline for its blocking RequestSecret. See the
-    // header for why a cross-connection cancel still lands (PID-based correlation).
-    try {
-        Impl canceller(connection, m_serviceName, m_objectPath);
-        canceller.CancelCurrent();
-    } catch (const sdbus::Error& e) {
-        log::warnf("PrompterClient: cross-connection CancelCurrent failed: {}", e.getMessage());
-    } catch (const std::exception& e) {
-        log::warnf("PrompterClient: cross-connection CancelCurrent threw: {}", e.what());
-    } catch (...) {
-        log::warn("PrompterClient: cross-connection CancelCurrent failed with unknown exception");
     }
 }
 
@@ -270,7 +256,13 @@ PromptResult PrompterClient::request(std::string_view kind, const PromptOptions&
     // budget.
     std::tuple<std::string, sdbus::UnixFd, std::string> reply;
     try {
-        m_impl->proxy()
+        // One connection for this prompt alone, torn down with the call. The
+        // reply is pumped INLINE by this worker, so a shared connection would
+        // be driven by two threads the moment anything else spoke to the
+        // prompter. Declared before the proxy so it outlives it.
+        auto connection = sdbus::createSessionBusConnection();
+        Impl call(*connection, m_serviceName, m_objectPath);
+        call.proxy()
             .callMethod("RequestSecret")
             .onInterface(org::librescrs::Prompter1_proxy::INTERFACE_NAME)
             .withTimeout(m_interactiveBudget)
@@ -279,9 +271,8 @@ PromptResult PrompterClient::request(std::string_view kind, const PromptOptions&
     } catch (const sdbus::Error& e) {
         log::warnf("PrompterClient: D-Bus call RequestSecret({}) failed: {}", kind, e.getMessage());
         // The prompter may still be showing the dialog this call abandoned
-        // (budget expiry is the canonical case): dismiss it so the user is
-        // not left typing into a prompt with no consumer. The blocking call
-        // has already returned, so m_connection is free again; best-effort.
+        // (budget expiry is the canonical case): dismiss it so the user is not
+        // left typing into a prompt with no consumer. Best-effort.
         cancel();
         result.status = PromptStatus::Error;
         result.userMessage = e.getMessage();
@@ -334,7 +325,10 @@ PinChangePromptResult PrompterClient::requestPinChange(const PromptOptions& opti
     // a confirmation).
     std::tuple<std::string, sdbus::UnixFd, sdbus::UnixFd, std::string> reply;
     try {
-        m_impl->proxy()
+        // Own connection, same rationale as the single-secret path.
+        auto connection = sdbus::createSessionBusConnection();
+        Impl call(*connection, m_serviceName, m_objectPath);
+        call.proxy()
             .callMethod("RequestSecrets")
             .onInterface(org::librescrs::Prompter1_proxy::INTERFACE_NAME)
             .withTimeout(m_interactiveBudget)

@@ -126,7 +126,7 @@ TEST(PrompterClientInteractiveBudget, SurvivesHumanPacedReplyBeyondDbusDefaultTi
 
     std::shared_ptr<sdbus::IConnection> clientConn = sdbus::createSessionBusConnection();
     clientConn->enterEventLoopAsync();
-    PrompterClient client{clientConn, kMockServiceName, kMockObjectPath};
+    PrompterClient client{kMockServiceName, kMockObjectPath};
 
     const auto result = client.requestMrz({});
 
@@ -154,7 +154,7 @@ TEST(PrompterClientInteractiveBudget, BudgetExpiryDismissesTheOrphanedPrompt)
 
     std::shared_ptr<sdbus::IConnection> clientConn = sdbus::createSessionBusConnection();
     clientConn->enterEventLoopAsync();
-    PrompterClient client{clientConn, kMockServiceName, kMockObjectPath, std::chrono::seconds{2}};
+    PrompterClient client{kMockServiceName, kMockObjectPath, std::chrono::seconds{2}};
 
     const auto result = client.requestMrz({});
     EXPECT_EQ(result.status, PromptStatus::Error) << "a 2 s budget must expire against a 5 s reply";

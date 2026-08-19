@@ -195,7 +195,7 @@ protected:
 
         m_clientConn = sdbus::createSessionBusConnection();
         m_clientConn->enterEventLoopAsync();
-        m_client = std::make_unique<PrompterClient>(m_clientConn, kMockServiceName, kMockObjectPath);
+        m_client = std::make_unique<PrompterClient>(kMockServiceName, kMockObjectPath);
     }
 
     void TearDown() override

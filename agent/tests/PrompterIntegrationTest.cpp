@@ -132,16 +132,35 @@ public:
         return m_captured;
     }
 
+    // Unique bus name of each RequestSecret's sender, in arrival order, and of
+    // the last cancel. Which CONNECTION a call arrived on is the only
+    // observable difference between one shared bus and one per prompt.
+    std::vector<std::string> requestSenders() const
+    {
+        const std::lock_guard lock{m_mutex};
+        return m_requestSenders;
+    }
+    std::string cancelSender() const
+    {
+        const std::lock_guard lock{m_mutex};
+        return m_cancelSender;
+    }
+
 private:
     std::tuple<std::string, sdbus::UnixFd, std::string>
     RequestSecret(const std::string& kind, const std::map<std::string, sdbus::Variant>& options) override
     {
+        std::string sender;
+        if (const char* raw = getObject().getCurrentlyProcessedMessage().getSender()) {
+            sender = raw;
+        }
         MockBehavior behavior;
         {
             const std::lock_guard lock{m_mutex};
             m_captured.kind = kind;
             m_captured.options = options;
             m_captured.seen = true;
+            m_requestSenders.push_back(std::move(sender));
             behavior = m_behavior;
         }
 
@@ -168,12 +187,21 @@ private:
     void CancelCurrent() override
     {
         // The mock does not host a real dialog; tests that exercise the
-        // cancel path bind the behavior they want via setBehavior.
+        // cancel path bind the behavior they want via setBehavior. The sender
+        // is recorded so a test can pin WHICH connection the cancel came in on.
+        std::string sender;
+        if (const char* raw = getObject().getCurrentlyProcessedMessage().getSender()) {
+            sender = raw;
+        }
+        const std::lock_guard lock{m_mutex};
+        m_cancelSender = std::move(sender);
     }
 
     mutable std::mutex m_mutex;
     MockBehavior m_behavior;
     CapturedCall m_captured;
+    std::vector<std::string> m_requestSenders;
+    std::string m_cancelSender;
 };
 
 // Test fixture: spins up a fresh server + client connection per test so each
@@ -194,7 +222,7 @@ protected:
 
         m_clientConn = sdbus::createSessionBusConnection();
         m_clientConn->enterEventLoopAsync();
-        m_client = std::make_unique<PrompterClient>(m_clientConn, kMockServiceName, kMockObjectPath);
+        m_client = std::make_unique<PrompterClient>(kMockServiceName, kMockObjectPath);
     }
 
     void TearDown() override
@@ -651,4 +679,42 @@ TEST_F(PrompterIntegrationTest, ProductionReadOnEmrtdCandidateOffersMrzAlternati
         << "a travel-document card's CAN prompt must offer the MRZ alternative";
     EXPECT_EQ(captured.options.at(wire::kOptAltKinds).get<std::vector<std::string>>(),
               (std::vector<std::string>{wire::kKindMrz}));
+}
+
+// --- one connection per prompt -------------------------------------------
+//
+// The production prompter connection runs NO event loop (see AgentService):
+// a blocking RequestSecret pumps its reply inline on it. Sharing that
+// connection between the request and anything else puts two threads on one
+// sd_bus, which is why the cancel meant to close a dialog could not be
+// dispatched and the window stayed on screen with nobody reading it.
+//
+// Which CONNECTION a call arrived on is the observable difference, so these
+// pin it by the sender's unique bus name.
+
+TEST_F(PrompterIntegrationTest, EachRequestArrivesOnItsOwnConnection)
+{
+    m_mock->setBehavior(MockBehavior{.status = std::string{wire::kStatusOk}, .secretBytes = "1234"});
+
+    static_cast<void>(m_client->requestPin(PromptOptions{}));
+    static_cast<void>(m_client->requestPin(PromptOptions{}));
+
+    const auto senders = m_mock->requestSenders();
+    ASSERT_EQ(senders.size(), 2u);
+    EXPECT_FALSE(senders[0].empty());
+    EXPECT_NE(senders[0], senders[1]) << "both prompts went out on one shared bus connection";
+}
+
+TEST_F(PrompterIntegrationTest, ACancelNeverTravelsOnTheConnectionItsRequestUsed)
+{
+    m_mock->setBehavior(MockBehavior{.status = std::string{wire::kStatusOk}, .secretBytes = "1234"});
+    static_cast<void>(m_client->requestPin(PromptOptions{}));
+
+    m_client->cancel();
+
+    const auto senders = m_mock->requestSenders();
+    ASSERT_EQ(senders.size(), 1u);
+    const std::string cancelSender = m_mock->cancelSender();
+    EXPECT_FALSE(cancelSender.empty());
+    EXPECT_NE(cancelSender, senders[0]) << "the cancel rode the very connection its request had blocked";
 }

@@ -91,13 +91,8 @@ private:
     // (keepAlive'd through the frontend -> CardObject), so a typed op abandoned to
     // the process-lifetime zombie list keeps the connection alive until it drains —
     // its channel's adaptor emit + unregister then touch a LIVE connection instead
-    // of one freed with this host. Mirrors m_prompterConnection's co-own below.
+    // of one freed with this host.
     std::shared_ptr<sdbus::IConnection> m_connection;
-    // Dedicated outbound prompter bus (NOT m_connection): a per-reader worker makes
-    // a BLOCKING RequestSecret and pumps its reply inline on it. shared_ptr, co-owned
-    // by m_prompter, so a worker abandoned mid-prompt keeps it alive through the
-    // crypto seam's captured prompter share; outlives m_prompter (declared first).
-    std::shared_ptr<sdbus::IConnection> m_prompterConnection;
     // sd-event loop driving the bus connection AND the SIGTERM/SIGINT sources (so a
     // signal is honoured promptly even mid-slot); detached/freed in
     // teardownEventLoop() before the member chain unwinds.
@@ -112,8 +107,9 @@ private:
     // Client-authorization gate (Polkit, else Default), chosen in registerOnBus;
     // borrows m_connection only.
     std::unique_ptr<Authorizer> m_authorizer;
-    // Prompter1 client. shared_ptr so a crypto seam value-captures it to keep the
-    // prompter (and, through it, m_prompterConnection) alive for a zombie worker.
+    // Prompter1 client. shared_ptr so a crypto seam value-captures it and keeps
+    // the prompter alive for a zombie worker; the worker's bus connection lives
+    // in its own blocked call frame, so nothing else has to outlive it.
     std::shared_ptr<PrompterClient> m_prompter;
     // AgentTransport.post backing (built in installEventLoop). shared_ptr so an
     // abandoned deferred-publish worker keeps it alive through the sink it
@@ -132,9 +128,9 @@ private:
     // store, signing engine, rate limiter, lease manager, operation scheduler, and
     // PKCS#11 broker in one clean internal order. Borrows ONLY the [2] interfaces
     // (transport + authorizer + prompter) plus the injected resolver; emplaced in
-    // registerOnBus. Declared after m_prompter / m_prompterConnection so ~AgentCore
-    // joins/abandons its crypto workers while the prompter + its connection are
-    // still alive — the structural half of the crypto-worker shutdown keep-alive.
+    // registerOnBus. Declared after m_prompter so ~AgentCore joins/abandons its
+    // crypto workers while the prompter is still alive — the structural half of
+    // the crypto-worker shutdown keep-alive.
     std::optional<AgentCore> m_core;
 
     // ---- [4] the inbound frontend — constructed LAST, destroyed FIRST ----------

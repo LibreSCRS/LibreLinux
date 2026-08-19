@@ -103,20 +103,19 @@ void AgentService::quiesce() noexcept
     //    requestCryptoShutdown() cancels the agent-wide token FIRST, so a worker
     //    that unblocks bails at its flow's post-prompt gate and skips its completion
     //    rather than driving into a half-torn-down composition. Then loop the
-    //    cross-connection CancelCurrent — issued on the MAIN connection, never the
-    //    prompter connection a wedged worker is pumping inline (two threads must
-    //    never drive one sd_bus; the prompter correlates by the agent PID both
-    //    connections share) — until the prompt gate is empty or a bounded cap, so a
+    //    prompt cancel — which opens its own bus connection per call, so it is
+    //    deliverable while a worker is still blocked pumping its own request
+    //    inline — until the prompt gate is empty or a bounded cap, so a
     //    second/queued prompting worker JOINS rather than falling to the zombie
     //    path. Best-effort: if a prompt does not drain, the crypto seam's shared_ptr
     //    keep-alive keeps the worker UAF-safe.
     if (m_core) {
         m_core->requestCryptoShutdown();
     }
-    if (m_prompter && m_connection) {
+    if (m_prompter) {
         constexpr int kMaxDrainIterations = 40; // ~2 s cap at 50 ms/iteration
         for (int i = 0; i < kMaxDrainIterations; ++i) {
-            m_prompter->cancelVia(*m_connection);
+            m_prompter->cancel();
             if (!m_core || !m_core->promptSerializer().hasPendingPrompt()) {
                 break;
             }
@@ -260,13 +259,12 @@ bool AgentService::registerOnBus()
     }
 
     try {
-        // Prompter client — outbound proxy to org.librescrs.Prompter1, on its OWN
-        // dedicated connection (see m_prompterConnection in the header): the
-        // per-reader worker makes a BLOCKING RequestSecret and pumps its reply
-        // inline on it, so it MUST NOT share the main connection. Held as a
-        // shared_ptr the crypto seams co-own. No name claim / no event loop.
-        m_prompterConnection = sdbus::createSessionBusConnection();
-        m_prompter = std::make_shared<PrompterClient>(m_prompterConnection);
+        // Prompter client — outbound proxy to org.librescrs.Prompter1. It owns
+        // no connection: each call opens its own, because a per-reader worker
+        // makes a BLOCKING RequestSecret and pumps the reply inline, and
+        // sd-bus connections are not thread-safe. Held as a shared_ptr the
+        // crypto seams co-own, so a zombie worker's in-flight call stays valid.
+        m_prompter = std::make_shared<PrompterClient>();
 
         // [2] The slim AgentTransport wire. Built with NO registry: the core
         // registry it observes lives INSIDE m_core (constructed next), so the
