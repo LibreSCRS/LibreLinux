@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 // SPDX-FileCopyrightText: 2026 hirashix0
 #include "operations/SignBatchOperation.h"
+#include <LibreSCRS/Agent/operations/PromptSerializer.h>
 #include <LibreSCRS/Agent/OperationPhase.h> // OperationPhase enum
 #include <utility>
 
@@ -40,7 +41,14 @@ BatchSignResult toChannelRows(std::vector<BatchSignRow> rows)
 SignBatchOperation::SignBatchOperation(std::unique_ptr<OperationChannel> channel, Deps deps,
                                        std::shared_ptr<OperationState> state)
     : OperationBase(std::move(channel), std::move(state),
-                    [prompter = &deps.prompter]() noexcept { prompter->cancel(); }),
+                    [prompter = &deps.prompter, serializer = &deps.serializer, cardKey = deps.cardKey]() noexcept {
+                        // Dismiss THIS card's live prompt: more than one window
+                        // can stand, and the gate is the only thing that knows
+                        // which id is outstanding for this card.
+                        for (const auto& id : serializer->liveIdsFor(cardKey)) {
+                            prompter->cancel(id);
+                        }
+                    }),
       m_deps(std::move(deps))
 {}
 

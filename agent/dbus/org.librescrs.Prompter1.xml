@@ -20,6 +20,12 @@
                    "description" (s) explanatory text
                    "requester"   (s) human-readable client identity
                    "artifact"    (s) what the operation acts on (filename / hash)
+                   "prompt_id"   (s) the identity this prompt answers to for
+                                 the lifetime of the call — the value Cancel
+                                 names to dismiss it. Opaque: the prompter
+                                 stores it and never parses it. Absent only from
+                                 a caller that cannot address its prompts, whose
+                                 windows then cannot be dismissed by name.
                    "artifacts"   (as) UNTRUSTED per-document display names of a
                                  batch signing request; rendered client-supplied,
                                  in the description zone's plain-text treatment —
@@ -79,7 +85,8 @@
                  confirmation is validated inside the prompter and never
                  crosses this interface.
         options  optional metadata; recognises the RequestSecret display keys
-                 ("title", "description", "requester", "artifact") plus:
+                 ("title", "description", "requester", "artifact",
+                 "prompt_id") plus:
                    "primary_min_length" (u) bounds of the current-PIN field
                    "primary_max_length" (u)
                    "new_min_length"     (u) bounds of the new AND confirm fields
@@ -110,12 +117,19 @@
     </method>
 
     <!--
-      Dismiss whatever prompt is currently shown. The in-flight
-      RequestSecret or RequestSecrets call (if any) returns immediately
-      with status = "cancelled", an empty user_message, and — for
-      RequestSecrets — two zero-length sealed fds. Idempotent: calling
-      CancelCurrent when no prompt is active is a no-op.
+      Dismiss the ONE prompt named by prompt_id. Its in-flight RequestSecret or
+      RequestSecrets call returns immediately with status = "cancelled", an
+      empty user_message, and — for RequestSecrets — two zero-length sealed fds.
+      No other prompt is touched: more than one credential window can stand at
+      once, and dismissing "whatever is current" would close another reader's.
+
+      prompt_id is the opaque value the caller sent in the request's options
+      dictionary; the prompter never parses it. Idempotent: an id that names no
+      live prompt is a silent no-op, so a dismissal racing the user's own is
+      harmless.
     -->
-    <method name="CancelCurrent"/>
+    <method name="Cancel">
+      <arg name="prompt_id" type="s" direction="in"/>
+    </method>
   </interface>
 </node>

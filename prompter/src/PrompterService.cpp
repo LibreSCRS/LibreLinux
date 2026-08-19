@@ -34,6 +34,10 @@ std::atomic<PromptDialog*> PrompterService::s_activeDialog{nullptr};
 // Owner PID of the in-flight prompt (0 == idle). See header.
 std::atomic<pid_t> PrompterService::s_activeOwnerPid{0};
 
+// Id of the in-flight prompt (empty == idle / unaddressable caller).
+std::mutex PrompterService::s_activeMutex;
+std::string PrompterService::s_activePromptId;
+
 namespace {
 
 // Kind / option-key / status names live in common/PrompterWire.h (shared with
@@ -53,6 +57,7 @@ using PrompterWire::kOptNewMinLength;
 using PrompterWire::kOptPinLabel;
 using PrompterWire::kOptPrimaryMaxLength;
 using PrompterWire::kOptPrimaryMinLength;
+using PrompterWire::kOptPromptId;
 using PrompterWire::kOptRequester;
 using PrompterWire::kOptTitle;
 using PrompterWire::kStatusCancelled;
@@ -223,8 +228,12 @@ static_assert(DialogOutcome{}.fd == -1, "DialogOutcome::fd must default to the -
 // sees a consistent owner, and cleared AFTER the dialog slot.
 struct ActiveDialogScope
 {
-    ActiveDialogScope(PromptDialog& dlg, pid_t ownerPid)
+    ActiveDialogScope(PromptDialog& dlg, pid_t ownerPid, const std::string& promptId)
     {
+        {
+            const std::lock_guard lock{PrompterService::s_activeMutex};
+            PrompterService::s_activePromptId = promptId;
+        }
         PrompterService::s_activeOwnerPid.store(ownerPid, std::memory_order_release);
         PrompterService::s_activeDialog.store(&dlg, std::memory_order_release);
     }
@@ -232,12 +241,15 @@ struct ActiveDialogScope
     {
         PrompterService::s_activeDialog.store(nullptr, std::memory_order_release);
         PrompterService::s_activeOwnerPid.store(0, std::memory_order_release);
+        const std::lock_guard lock{PrompterService::s_activeMutex};
+        PrompterService::s_activePromptId.clear();
     }
     ActiveDialogScope(const ActiveDialogScope&) = delete;
     ActiveDialogScope& operator=(const ActiveDialogScope&) = delete;
 };
 
-DialogOutcome runDialog(PromptDialog::Kind kind, const PromptDialog::Options& opts, pid_t ownerPid)
+DialogOutcome runDialog(PromptDialog::Kind kind, const PromptDialog::Options& opts, pid_t ownerPid,
+                        const std::string& promptId)
 {
     // Stack-allocated dialog: deterministic teardown of the embedded
     // input widget right after we extract the fd, scrubbing residue from
@@ -245,7 +257,7 @@ DialogOutcome runDialog(PromptDialog::Kind kind, const PromptDialog::Options& op
     PromptDialog dlg(kind, opts);
     int code = 0;
     {
-        ActiveDialogScope scope(dlg, ownerPid);
+        ActiveDialogScope scope(dlg, ownerPid, promptId);
         code = dlg.exec();
     }
     if (code != QDialog::Accepted) {
@@ -272,12 +284,12 @@ struct MultiDialogOutcome
 static_assert(MultiDialogOutcome{}.primaryFd == -1 && MultiDialogOutcome{}.secondaryFd == -1,
               "MultiDialogOutcome fds must default to the -1 no-fd sentinel");
 
-MultiDialogOutcome runChangePinDialog(const PromptDialog::Options& opts, pid_t ownerPid)
+MultiDialogOutcome runChangePinDialog(const PromptDialog::Options& opts, pid_t ownerPid, const std::string& promptId)
 {
     PromptDialog dlg(PromptDialog::Kind::ChangePin, opts);
     int code = 0;
     {
-        ActiveDialogScope scope(dlg, ownerPid);
+        ActiveDialogScope scope(dlg, ownerPid, promptId);
         code = dlg.exec();
     }
     if (code != QDialog::Accepted) {
@@ -339,6 +351,9 @@ PrompterService::RequestSecret(const std::string& kind, const std::map<std::stri
         return std::make_tuple(std::string{kStatusError}, std::move(wrapped), std::string{});
     }
     PromptDialog::Options opts = buildOptions(options);
+    // Routing metadata, not chrome: the dialog never sees it. Absent means this
+    // caller cannot address its prompts, and a dismissal will find no match.
+    const std::string promptId = optionString(options, kOptPromptId);
 
     // THE conjunction, evaluated once and nowhere else: the alternative-kind
     // opt-in is meaningful only on a CAN request, and only for the alternative
@@ -356,7 +371,8 @@ PrompterService::RequestSecret(const std::string& kind, const std::map<std::stri
     auto* app = QCoreApplication::instance();
     DialogOutcome outcome;
     if (app && QThread::currentThread() != app->thread()) {
-        std::optional<DialogOutcome> hopped = runOnMain(app, [&]() { return runDialog(*parsedKind, opts, ownerPid); });
+        std::optional<DialogOutcome> hopped =
+            runOnMain(app, [&]() { return runDialog(*parsedKind, opts, ownerPid, promptId); });
         if (hopped) {
             outcome = std::move(*hopped);
         } else {
@@ -369,7 +385,7 @@ PrompterService::RequestSecret(const std::string& kind, const std::map<std::stri
     } else {
         // Already on the main thread (single-threaded test harness, or a
         // future synchronous dispatcher) — call directly.
-        outcome = runDialog(*parsedKind, opts, ownerPid);
+        outcome = runDialog(*parsedKind, opts, ownerPid, promptId);
     }
 
     // The ONLY site that mints the switched-to-MRZ status, gated on the very
@@ -412,12 +428,14 @@ PrompterService::RequestSecrets(const std::string& kind, const std::map<std::str
         return std::make_tuple(std::string{kStatusError}, std::move(primary), std::move(secondary), std::string{});
     }
     const PromptDialog::Options opts = buildMultiOptions(options);
+    const std::string promptId = optionString(options, kOptPromptId);
 
     // Hop to the Qt main thread — same discipline as RequestSecret.
     auto* app = QCoreApplication::instance();
     MultiDialogOutcome outcome;
     if (app && QThread::currentThread() != app->thread()) {
-        std::optional<MultiDialogOutcome> hopped = runOnMain(app, [&]() { return runChangePinDialog(opts, ownerPid); });
+        std::optional<MultiDialogOutcome> hopped =
+            runOnMain(app, [&]() { return runChangePinDialog(opts, ownerPid, promptId); });
         if (hopped) {
             outcome = std::move(*hopped);
         } else {
@@ -427,7 +445,7 @@ PrompterService::RequestSecrets(const std::string& kind, const std::map<std::str
             outcome = MultiDialogOutcome{std::string{kStatusError}, makeEmptySealedFd(), makeEmptySealedFd()};
         }
     } else {
-        outcome = runChangePinDialog(opts, ownerPid);
+        outcome = runChangePinDialog(opts, ownerPid, promptId);
     }
 
     sdbus::UnixFd primary{outcome.primaryFd, sdbus::adopt_fd};
@@ -435,12 +453,20 @@ PrompterService::RequestSecrets(const std::string& kind, const std::map<std::str
     return std::make_tuple(outcome.status, std::move(primary), std::move(secondary), std::string{});
 }
 
-void PrompterService::rejectActiveDialog() noexcept
+void PrompterService::rejectDialog(const std::string& promptId) noexcept
 {
     auto* dlg = s_activeDialog.load(std::memory_order_acquire);
     if (dlg == nullptr) {
-        // Idle prompter — documented no-op.
+        // No live prompt — documented no-op.
         return;
+    }
+    {
+        // Only the prompt this id names. A dismissal meant for one reader's
+        // window must never close another's.
+        const std::lock_guard lock{s_activeMutex};
+        if (!isNamedPrompt(s_activePromptId, promptId)) {
+            return;
+        }
     }
     // reject() must run on the GUI thread; CancelCurrent dispatches on the
     // sdbus-c++ worker. QueuedConnection posts an event to the dialog's
@@ -477,27 +503,26 @@ pid_t PrompterService::authorizeCaller(const char* method)
     return callerPid;
 }
 
-void PrompterService::CancelCurrent()
+void PrompterService::Cancel(const std::string& promptId)
 {
     // Same binary-identity gate as RequestSecret: a non-agent caller must not
     // be able to inject a cancel (a denial-of-service against a legitimate
-    // prompt). Unauthorised CancelCurrent is a silent no-op.
-    const pid_t callerPid = authorizeCaller("CancelCurrent");
+    // prompt). Unauthorised Cancel is a silent no-op.
+    const pid_t callerPid = authorizeCaller("Cancel");
     if (callerPid == 0) {
         return;
     }
 
-    // Ownership gate: only the caller that initiated the CURRENTLY-active
-    // prompt may cancel it. A CancelCurrent from a different (but still
-    // agent-authenticated) caller — or against an idle prompter — is a no-op.
-    // Reading the owner before dispatching keeps the check race-tolerant: if
-    // the dialog tears down between here and rejectActiveDialog(), the latter
-    // already no-ops on a null s_activeDialog.
+    // Ownership gate: only the caller that initiated the prompt may cancel it.
+    // A Cancel from a different (but still agent-authenticated) caller — or
+    // against an idle prompter — is a no-op. Reading the owner before
+    // dispatching keeps the check race-tolerant: if the dialog tears down
+    // between here and rejectDialog(), the latter already no-ops.
     const pid_t owner = s_activeOwnerPid.load(std::memory_order_acquire);
     if (!isActivePromptOwner(owner, callerPid)) {
         return;
     }
-    rejectActiveDialog();
+    rejectDialog(promptId);
 }
 
 bool PrompterService::isActivePromptOwner(pid_t ownerPid, pid_t callerPid) noexcept
@@ -505,9 +530,14 @@ bool PrompterService::isActivePromptOwner(pid_t ownerPid, pid_t callerPid) noexc
     return ownerPid != 0 && ownerPid == callerPid;
 }
 
-void PrompterService::cancelCurrentForTest() noexcept
+bool PrompterService::isNamedPrompt(const std::string& activeId, const std::string& requestedId) noexcept
 {
-    rejectActiveDialog();
+    return !activeId.empty() && activeId == requestedId;
+}
+
+void PrompterService::cancelForTest(const std::string& promptId) noexcept
+{
+    rejectDialog(promptId);
 }
 
 } // namespace LibreLinux::Prompter

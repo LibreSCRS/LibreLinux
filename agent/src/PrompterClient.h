@@ -56,14 +56,14 @@ public:
     // the single-secret calls this is synchronous, blocking, and no-throw.
     [[nodiscard]] PinChangePromptResult requestPinChange(const PromptOptions& options) override;
 
-    // Issues Prompter1.CancelCurrent so the prompter dismisses the modal it is
-    // showing. Invoked when an Operation in AwaitingConsent is cancelled (the
-    // user cancelled the read; the modal must go away), and during shutdown.
-    // Runs on its own one-shot connection like every other call here, so it is
-    // deliverable no matter which worker is blocked in a request and no matter
-    // how many operations are cancelled at once. Exceptions from the bus call
-    // are logged and swallowed.
-    void cancel() noexcept override;
+    // Issues Prompter1.Cancel so the prompter dismisses the ONE window
+    // @p promptId names. Invoked when an Operation in AwaitingConsent is
+    // cancelled (the user cancelled the read; that modal must go away), and
+    // during shutdown. Runs on its own one-shot connection like every other
+    // call here, so it is deliverable no matter which worker is blocked in a
+    // request and no matter how many operations are cancelled at once.
+    // Exceptions from the bus call are logged and swallowed.
+    void cancel(const std::string& promptId) noexcept override;
 
 private:
     // Single point of contact with the generated proxy; the public requestX

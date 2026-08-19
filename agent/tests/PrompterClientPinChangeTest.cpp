@@ -168,8 +168,9 @@ private:
                                std::string{"RequestSecret not scripted in this mock"});
     }
 
-    void CancelCurrent() override
+    void Cancel(const std::string& promptId) override
     {
+        (void)promptId;
         // No live dialog in the mock; cancel is a no-op here.
     }
 

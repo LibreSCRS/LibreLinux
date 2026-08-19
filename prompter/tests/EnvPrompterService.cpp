@@ -150,12 +150,13 @@ EnvPrompterService::RequestSecrets(const std::string& /*kind*/,
                            std::string{"change_pin is not supported by the env-driven test prompter"});
 }
 
-void EnvPrompterService::CancelCurrent()
+void EnvPrompterService::Cancel(const std::string& promptId)
 {
+    (void)promptId;
     // No real dialog is ever shown -- nothing to dismiss. Still gate on
     // caller identity for parity with the production contract (and so a
     // rejection is logged like every other method here).
-    (void)authorizeCaller("CancelCurrent");
+    (void)authorizeCaller("Cancel");
 }
 
 pid_t EnvPrompterService::authorizeCaller(const char* method)

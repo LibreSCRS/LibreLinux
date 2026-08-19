@@ -699,7 +699,9 @@ TEST_F(PrompterMultiFieldBusTest, UnauthorizedRequestSecretsReturnsBothZeroByteF
     // zero-byte-memfd no-secret encoding).
     ::setenv(kPeerEnv, "/usr/bin/true", 1);
 
-    auto reply = m_client->RequestSecrets(LibreLinux::PrompterWire::kKindChangePin, {});
+    auto reply = m_client->RequestSecrets(
+        LibreLinux::PrompterWire::kKindChangePin,
+        {{LibreLinux::PrompterWire::kOptPromptId, sdbus::Variant{std::string{"nonce:change"}}}});
     EXPECT_EQ(std::get<0>(reply), "unauthorized");
     const int primary = std::get<1>(reply).get();
     const int secondary = std::get<2>(reply).get();
@@ -733,12 +735,14 @@ TEST_F(PrompterMultiFieldBusTest, CancelledChangePinReturnsCancelledWithBothZero
     std::tuple<std::string, sdbus::UnixFd, sdbus::UnixFd, std::string> reply;
     std::atomic<bool> returned{false};
     std::thread driver([&] {
-        reply = m_client->RequestSecrets(LibreLinux::PrompterWire::kKindChangePin, {});
+        reply = m_client->RequestSecrets(
+            LibreLinux::PrompterWire::kKindChangePin,
+            {{LibreLinux::PrompterWire::kOptPromptId, sdbus::Variant{std::string{"nonce:change"}}}});
         returned.store(true);
     });
     std::thread watcher([&] {
         if (spinUntil(dialogIsLive, std::chrono::seconds{10})) {
-            PrompterService::cancelCurrentForTest();
+            PrompterService::cancelForTest("nonce:change");
         }
     });
 

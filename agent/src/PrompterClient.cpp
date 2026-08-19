@@ -87,6 +87,12 @@ ParsedStatus parseRequestSecretStatus(std::string_view raw, bool mrzAlternativeO
 std::map<std::string, sdbus::Variant> buildOptionsDict(const PromptOptions& options)
 {
     std::map<std::string, sdbus::Variant> dict;
+    // The identity this prompt answers to. Omitted when unstamped, exactly like
+    // every other optional key -- a prompter then simply has no name to dismiss
+    // it by.
+    if (!options.promptId.empty()) {
+        dict.emplace(LibreLinux::PrompterWire::kOptPromptId, sdbus::Variant{options.promptId});
+    }
     if (!options.title.empty()) {
         dict.emplace(LibreLinux::PrompterWire::kOptTitle, sdbus::Variant{options.title});
     }
@@ -145,6 +151,12 @@ std::map<std::string, sdbus::Variant> buildOptionsDict(const PromptOptions& opti
 std::map<std::string, sdbus::Variant> buildChangePinOptionsDict(const PromptOptions& options)
 {
     std::map<std::string, sdbus::Variant> dict;
+    // The identity this prompt answers to. Omitted when unstamped, exactly like
+    // every other optional key -- a prompter then simply has no name to dismiss
+    // it by.
+    if (!options.promptId.empty()) {
+        dict.emplace(LibreLinux::PrompterWire::kOptPromptId, sdbus::Variant{options.promptId});
+    }
     if (!options.title.empty()) {
         dict.emplace(LibreLinux::PrompterWire::kOptTitle, sdbus::Variant{options.title});
     }
@@ -227,7 +239,7 @@ PromptResult PrompterClient::requestMrz(const PromptOptions& options)
     return request(LibreLinux::PrompterWire::kKindMrz, options);
 }
 
-void PrompterClient::cancel() noexcept
+void PrompterClient::cancel(const std::string& promptId) noexcept
 {
     // Its own connection, like every call here: a cancel has to be deliverable
     // while a worker is blocked in a request, and two operations cancelled at
@@ -235,13 +247,13 @@ void PrompterClient::cancel() noexcept
     try {
         auto connection = sdbus::createSessionBusConnection();
         Impl canceller(*connection, m_serviceName, m_objectPath);
-        canceller.CancelCurrent();
+        canceller.Cancel(promptId);
     } catch (const sdbus::Error& e) {
-        log::warnf("PrompterClient: CancelCurrent failed: {}", e.getMessage());
+        log::warnf("PrompterClient: Cancel({}) failed: {}", promptId, e.getMessage());
     } catch (const std::exception& e) {
-        log::warnf("PrompterClient: CancelCurrent threw: {}", e.what());
+        log::warnf("PrompterClient: Cancel({}) threw: {}", promptId, e.what());
     } catch (...) {
-        log::warn("PrompterClient: CancelCurrent failed with unknown exception");
+        log::warn("PrompterClient: Cancel failed with unknown exception");
     }
 }
 
@@ -273,7 +285,7 @@ PromptResult PrompterClient::request(std::string_view kind, const PromptOptions&
         // The prompter may still be showing the dialog this call abandoned
         // (budget expiry is the canonical case): dismiss it so the user is not
         // left typing into a prompt with no consumer. Best-effort.
-        cancel();
+        cancel(options.promptId);
         result.status = PromptStatus::Error;
         result.userMessage = e.getMessage();
         return result;
@@ -338,7 +350,7 @@ PinChangePromptResult PrompterClient::requestPinChange(const PromptOptions& opti
         log::warnf("PrompterClient: D-Bus call RequestSecrets(change_pin) failed: {}", e.getMessage());
         // Dismiss the possibly-orphaned change_pin dialog — same rationale as
         // the single-secret path.
-        cancel();
+        cancel(options.promptId);
         result.status = PromptStatus::Error;
         result.userMessage = e.getMessage();
         return result;

@@ -38,6 +38,12 @@ inline constexpr const char* kKindMrz = "mrz";
 inline constexpr const char* kKindChangePin = "change_pin";
 
 // Option-dict keys (the a{sv} options argument of RequestSecret).
+// The identity this prompt answers to for the lifetime of the call: the value
+// Cancel names to dismiss THIS window and no other. Agent-minted and OPAQUE --
+// the prompter stores it and never parses it, so the agent can change its shape
+// without touching this side. More than one credential window can stand at
+// once, which is why a dismissal has to name one.
+inline constexpr const char* kOptPromptId = "prompt_id";
 inline constexpr const char* kOptTitle = "title";
 inline constexpr const char* kOptDescription = "description";
 inline constexpr const char* kOptRequester = "requester";

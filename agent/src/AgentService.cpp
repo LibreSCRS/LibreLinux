@@ -103,20 +103,24 @@ void AgentService::quiesce() noexcept
     //    requestCryptoShutdown() cancels the agent-wide token FIRST, so a worker
     //    that unblocks bails at its flow's post-prompt gate and skips its completion
     //    rather than driving into a half-torn-down composition. Then loop the
-    //    prompt cancel — which opens its own bus connection per call, so it is
-    //    deliverable while a worker is still blocked pumping its own request
-    //    inline — until the prompt gate is empty or a bounded cap, so a
-    //    second/queued prompting worker JOINS rather than falling to the zombie
-    //    path. Best-effort: if a prompt does not drain, the crypto seam's shared_ptr
+    //    dismissal of every id this agent raised — each on its own bus
+    //    connection, so it is deliverable while a worker is still blocked
+    //    pumping its own request inline — until the prompt gate is empty or a
+    //    bounded cap, so a second/queued prompting worker JOINS rather than
+    //    falling to the zombie path. Best-effort: if a prompt does not drain, the crypto seam's shared_ptr
     //    keep-alive keeps the worker UAF-safe.
     if (m_core) {
         m_core->requestCryptoShutdown();
     }
-    if (m_prompter) {
+    if (m_prompter && m_core) {
         constexpr int kMaxDrainIterations = 40; // ~2 s cap at 50 ms/iteration
         for (int i = 0; i < kMaxDrainIterations; ++i) {
-            m_prompter->cancel();
-            if (!m_core || !m_core->promptSerializer().hasPendingPrompt()) {
+            // Re-read the live set each round so the loop shrinks toward empty
+            // instead of dismissing "whatever is current" over and over.
+            for (const auto& id : m_core->promptSerializer().liveIds()) {
+                m_prompter->cancel(id);
+            }
+            if (!m_core->promptSerializer().hasPendingPrompt()) {
                 break;
             }
             std::this_thread::sleep_for(std::chrono::milliseconds{50});

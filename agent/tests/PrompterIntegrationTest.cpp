@@ -145,6 +145,13 @@ public:
         const std::lock_guard lock{m_mutex};
         return m_cancelSender;
     }
+    // Which prompt each dismissal named. "A cancel arrived" is not the same
+    // claim as "the right window was closed".
+    std::vector<std::string> cancelledIds() const
+    {
+        const std::lock_guard lock{m_mutex};
+        return m_cancelledIds;
+    }
 
 private:
     std::tuple<std::string, sdbus::UnixFd, std::string>
@@ -184,17 +191,19 @@ private:
                                std::string{"RequestSecrets not scripted in this mock"});
     }
 
-    void CancelCurrent() override
+    void Cancel(const std::string& promptId) override
     {
         // The mock does not host a real dialog; tests that exercise the
-        // cancel path bind the behavior they want via setBehavior. The sender
-        // is recorded so a test can pin WHICH connection the cancel came in on.
+        // cancel path bind the behavior they want via setBehavior. The id and
+        // the sender are recorded so a test can pin WHICH prompt was named and
+        // WHICH connection the dismissal came in on.
         std::string sender;
         if (const char* raw = getObject().getCurrentlyProcessedMessage().getSender()) {
             sender = raw;
         }
         const std::lock_guard lock{m_mutex};
         m_cancelSender = std::move(sender);
+        m_cancelledIds.push_back(promptId);
     }
 
     mutable std::mutex m_mutex;
@@ -202,6 +211,7 @@ private:
     CapturedCall m_captured;
     std::vector<std::string> m_requestSenders;
     std::string m_cancelSender;
+    std::vector<std::string> m_cancelledIds;
 };
 
 // Test fixture: spins up a fresh server + client connection per test so each
@@ -710,11 +720,51 @@ TEST_F(PrompterIntegrationTest, ACancelNeverTravelsOnTheConnectionItsRequestUsed
     m_mock->setBehavior(MockBehavior{.status = std::string{wire::kStatusOk}, .secretBytes = "1234"});
     static_cast<void>(m_client->requestPin(PromptOptions{}));
 
-    m_client->cancel();
+    m_client->cancel("nonce:probe");
 
     const auto senders = m_mock->requestSenders();
     ASSERT_EQ(senders.size(), 1u);
     const std::string cancelSender = m_mock->cancelSender();
     EXPECT_FALSE(cancelSender.empty());
     EXPECT_NE(cancelSender, senders[0]) << "the cancel rode the very connection its request had blocked";
+}
+
+// The id the agent stamped is the id the prompter is told to dismiss. Without
+// it a dismissal has no addressee, and with more than one window standing the
+// prompter would have to guess -- which is the defect this replaces.
+TEST_F(PrompterIntegrationTest, TheRequestCarriesItsPromptIdOnTheWire)
+{
+    m_mock->setBehavior(MockBehavior{.status = std::string{wire::kStatusOk}, .secretBytes = "1234"});
+
+    PromptOptions options;
+    options.promptId = "nonce:41";
+    static_cast<void>(m_client->requestCan(options));
+
+    const auto captured = m_mock->captured();
+    ASSERT_TRUE(captured.seen);
+    ASSERT_TRUE(captured.options.contains(wire::kOptPromptId)) << "the prompt reached the helper with no addressee";
+    EXPECT_EQ(captured.options.at(wire::kOptPromptId).get<std::string>(), "nonce:41");
+}
+
+TEST_F(PrompterIntegrationTest, ADismissalNamesThePromptItMeans)
+{
+    m_client->cancel("nonce:41");
+    m_client->cancel("nonce:42");
+
+    const auto ids = m_mock->cancelledIds();
+    ASSERT_EQ(ids.size(), 2u);
+    EXPECT_EQ(ids[0], "nonce:41");
+    EXPECT_EQ(ids[1], "nonce:42");
+}
+
+TEST_F(PrompterIntegrationTest, AnUnstampedPromptSendsNoAddressee)
+{
+    // Absent rather than empty-string: the key follows the same omit-when-unset
+    // convention as every other optional option, so a helper cannot mistake an
+    // empty addressee for a real one.
+    m_mock->setBehavior(MockBehavior{.status = std::string{wire::kStatusOk}, .secretBytes = "1234"});
+
+    static_cast<void>(m_client->requestPin(PromptOptions{}));
+
+    EXPECT_FALSE(m_mock->captured().options.contains(wire::kOptPromptId));
 }

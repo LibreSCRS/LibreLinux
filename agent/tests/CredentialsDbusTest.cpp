@@ -113,7 +113,10 @@ private:
         return std::make_tuple(std::string{"ok"}, sdbus::UnixFd{makeSealedMemfd("111111"), sdbus::adopt_fd},
                                sdbus::UnixFd{makeSealedMemfd("222222"), sdbus::adopt_fd}, std::string{});
     }
-    void CancelCurrent() override {}
+    void Cancel(const std::string& promptId) override
+    {
+        (void)promptId;
+    }
 };
 
 // Scriptable CredentialManager seam (test double). Ignores the session/candidates

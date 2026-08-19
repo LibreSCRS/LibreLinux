@@ -340,15 +340,15 @@ TEST_F(PrompterAuthIntegrationTest, UnauthorizedCancelCurrentIsRejectedNoop)
     // returns 0 and the method returns BEFORE ever consulting s_activeOwnerPid
     // or dispatching reject(). Driven over the real bus against an idle
     // prompter, which also exercises the getCredsPid() augmentation on the
-    // CancelCurrent path (the rejection is logged with the resolved PID).
+    // Cancel path (the rejection is logged with the resolved PID).
     ::setenv(kPeerEnv, "/usr/bin/true", 1);
 
     int argc = 1;
     const char* argv[] = {"prompter-auth-test"};
     QApplication app(argc, const_cast<char**>(argv));
 
-    EXPECT_NO_THROW(m_cancelClient->CancelCurrent())
-        << "an unauthorized CancelCurrent must be a clean no-op, never an error";
+    EXPECT_NO_THROW(m_cancelClient->Cancel("nonce:unauthorized"))
+        << "an unauthorized dismissal must be a clean no-op, never an error";
     EXPECT_EQ(LibreLinux::Prompter::PrompterService::s_activeDialog.load(), nullptr);
     EXPECT_EQ(LibreLinux::Prompter::PrompterService::s_activeOwnerPid.load(), 0);
 }
@@ -374,7 +374,8 @@ TEST_F(PrompterAuthIntegrationTest, AuthorizedRequestSecretRunsDialogWithCallerA
     std::string status;
     std::atomic<bool> returned{false};
     std::thread driver([&] {
-        auto result = m_client->RequestSecret("pin", {});
+        auto result = m_client->RequestSecret(
+            "pin", {{LibreLinux::PrompterWire::kOptPromptId, sdbus::Variant{std::string{"nonce:auth"}}}});
         status = std::get<0>(result);
         returned.store(true);
     });
@@ -392,12 +393,12 @@ TEST_F(PrompterAuthIntegrationTest, AuthorizedRequestSecretRunsDialogWithCallerA
         // Unwind the in-flight RequestSecret. A bus-issued CancelCurrent cannot
         // be processed here: the single sd-bus dispatcher thread is blocked
         // inside RequestSecret (it marshals to the Qt main thread under
-        // BlockingQueuedConnection), so a CancelCurrent reply would never arrive
+        // BlockingQueuedConnection), so a Cancel reply would never arrive
         // until the prompt resolved -> deadlock. We instead dispatch reject()
         // straight to the dialog via the in-process seam; the bus-level
-        // CancelCurrent identity gate is covered by the unauthorized-cancel
-        // case and the ownership gate by the ownership-predicate units.
-        LibreLinux::Prompter::PrompterService::cancelCurrentForTest();
+        // Cancel identity gate is covered by the unauthorized-cancel case and
+        // the ownership gate by the ownership-predicate units.
+        LibreLinux::Prompter::PrompterService::cancelForTest("nonce:auth");
     });
 
     // Quit from WITHIN the main loop once RequestSecret has unwound: poll the

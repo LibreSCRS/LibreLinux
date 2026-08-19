@@ -13,6 +13,7 @@
 #include <atomic>
 #include <filesystem>
 #include <map>
+#include <mutex>
 #include <string>
 #include <tuple>
 
@@ -49,10 +50,10 @@ public:
     PrompterService(const PrompterService&) = delete;
     PrompterService& operator=(const PrompterService&) = delete;
 
-    // Test seam: dispatch to the active dialog without a D-Bus round trip.
-    // Same code path CancelCurrent() takes; called by PrompterCancelTest to
-    // pin the idle-prompter no-op contract.
-    static void cancelCurrentForTest() noexcept;
+    // Test seam: dispatch to the named dialog without a D-Bus round trip.
+    // Same code path Cancel() takes; called by PrompterCancelTest to pin the
+    // no-live-prompt no-op contract.
+    static void cancelForTest(const std::string& promptId) noexcept;
 
     // Pure ownership predicate consulted by CancelCurrent AFTER the caller has
     // passed the binary-identity gate: only the caller that initiated the
@@ -63,6 +64,16 @@ public:
     // distinct authenticated caller is unit-testable without a second real PID
     // on the bus (two same-user binaries share the test process's PID).
     [[nodiscard]] static bool isActivePromptOwner(pid_t ownerPid, pid_t callerPid) noexcept;
+
+    // Pure addressing predicate, the id counterpart of isActivePromptOwner
+    // above and factored out for the same reason: more than one credential
+    // window can stand, so a dismissal has to name one, and getting this wrong
+    // closes another reader's dialog. @returns true iff @p activeId is a real
+    // addressee (non-empty) AND equals @p requestedId. An unaddressable prompt
+    // (empty activeId, from a caller that sent no id) is never dismissable by
+    // name -- refusing is correct: there is nothing to distinguish it from any
+    // other unaddressable prompt.
+    [[nodiscard]] static bool isNamedPrompt(const std::string& activeId, const std::string& requestedId) noexcept;
 
     // Visible to PromptDialog::ActiveScope (file-scope helper inside
     // PrompterService.cpp). Tracks the dialog currently being exec'd so
@@ -83,6 +94,12 @@ public:
     // under the same store/clear discipline; 0 means "no owner / idle".
     static std::atomic<pid_t> s_activeOwnerPid;
 
+    // Id of the CURRENTLY-active prompt, so a dismissal that names a different
+    // one cannot close it. Guarded by the same mutex the scope publishes under:
+    // a std::string cannot be read atomically the way the two slots above can.
+    static std::mutex s_activeMutex;
+    static std::string s_activePromptId;
+
 private:
     // Generated adaptor — dispatched on the sdbus-c++ worker thread.
     std::tuple<std::string, sdbus::UnixFd, std::string>
@@ -95,14 +112,15 @@ private:
     std::tuple<std::string, sdbus::UnixFd, sdbus::UnixFd, std::string>
     RequestSecrets(const std::string& kind, const std::map<std::string, sdbus::Variant>& options) override;
 
-    // Agent-driven dismissal: consults s_activeDialog and posts reject()
-    // via QueuedConnection when a dialog is currently exec'ing. Idempotent
-    // no-op when called against an idle prompter. Gated on caller identity
-    // (must be the agent binary) AND prompt ownership (must be the caller
-    // that started the active prompt).
-    void CancelCurrent() override;
+    // Agent-driven dismissal of the ONE prompt @p promptId names: posts
+    // reject() via QueuedConnection when that prompt is the one currently
+    // exec'ing. An id that names no live prompt is a silent no-op, so a
+    // dismissal racing the user's own is harmless. Gated on caller identity
+    // (must be the agent binary) AND prompt ownership (must be the caller that
+    // started that prompt).
+    void Cancel(const std::string& promptId) override;
 
-    static void rejectActiveDialog() noexcept;
+    static void rejectDialog(const std::string& promptId) noexcept;
 
     // Resolve the in-flight D-Bus caller's PID from the message credentials,
     // then verify the backing executable is the expected agent binary.

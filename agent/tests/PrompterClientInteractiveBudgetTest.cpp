@@ -105,8 +105,9 @@ private:
                                std::string{"RequestSecrets not scripted in this mock"});
     }
 
-    void CancelCurrent() override
+    void Cancel(const std::string& promptId) override
     {
+        (void)promptId;
         m_cancelCount.fetch_add(1);
     }
 

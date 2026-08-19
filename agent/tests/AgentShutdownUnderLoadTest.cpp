@@ -111,9 +111,11 @@ public:
     {
         return PromptResult{PromptStatus::Cancelled, std::nullopt, ""};
     }
-    // Models Prompter1.CancelCurrent landing: the pending RequestSecret returns.
-    void cancel() noexcept override
+    // Models an addressed Prompter1.Cancel landing: the pending RequestSecret
+    // returns. The id is immaterial here -- this fake hosts one prompt.
+    void cancel(const std::string& promptId) noexcept override
     {
+        (void)promptId;
         m_latch.release();
     }
 
@@ -221,9 +223,12 @@ TEST(AgentQuiesce, CancelDrainsWedgedCryptoWorkersSoTeardownIsBounded)
     // The captured shares mean the composition is no longer the sole owner.
     EXPECT_GE(prompter.use_count(), 2);
 
-    // Quiesce cancel: dismiss the modal so every pending RequestSecret returns and
-    // the wedged workers unwedge (the JOIN path, not abandon).
-    prompter->cancel();
+    // Quiesce cancel: the dismissal lands so each pending RequestSecret returns
+    // and the wedged workers unwedge (the JOIN path, not abandon). These workers
+    // call the prompter directly, without the gate that mints ids, so the id is
+    // a stand-in here -- what this case measures is the unwedging, not the
+    // addressing (AddressedCancelTest covers that).
+    prompter->cancel("shutdown-drain");
 
     const auto returnedDeadline = std::chrono::steady_clock::now() + 5s;
     while (returned.load(std::memory_order_acquire) < kWedgedReaders &&
@@ -304,7 +309,10 @@ public:
     }
     // Models a prompter that does NOT dismiss on CancelCurrent — so the worker
     // stays wedged and is abandoned (the pathological zombie path).
-    void cancel() noexcept override {}
+    void cancel(const std::string& promptId) noexcept override
+    {
+        (void)promptId;
+    }
 
 private:
     Latch& m_latch;
@@ -322,7 +330,12 @@ class PromptingOp final : public OperationBase
 public:
     PromptingOp(std::unique_ptr<OperationChannel> ch, std::shared_ptr<OperationState> st, PromptSerializer& serializer,
                 PrompterClientBase& prompter)
-        : OperationBase(std::move(ch), std::move(st), [p = &prompter]() noexcept { p->cancel(); }),
+        : OperationBase(std::move(ch), std::move(st),
+                        [p = &prompter, sz = &serializer]() noexcept {
+                            for (const auto& id : sz->liveIds()) {
+                                p->cancel(id);
+                            }
+                        }),
           m_serializer(serializer), m_prompter(prompter)
     {}
 

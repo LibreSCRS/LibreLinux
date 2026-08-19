@@ -156,7 +156,10 @@ private:
                                sdbus::UnixFd{secondary, sdbus::adopt_fd}, std::string{});
     }
 
-    void CancelCurrent() override {}
+    void Cancel(const std::string& promptId) override
+    {
+        (void)promptId;
+    }
 };
 
 // Fake session factory — same shape as the other suites. The session is

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 // SPDX-FileCopyrightText: 2026 hirashix0
 #include "operations/ReadIdentityOperation.h"
+#include <LibreSCRS/Agent/operations/PromptSerializer.h>
 #include <utility>
 
 namespace LibreSCRS::Agent::Operations {
@@ -13,7 +14,14 @@ ReadIdentityOperation::ReadIdentityOperation(std::unique_ptr<OperationChannel> c
                     // AwaitingConsent. Capture the prompter pointer (the
                     // owning instance outlives the op via AgentService's
                     // declaration order).
-                    [prompter = &deps.prompter]() noexcept { prompter->cancel(); }),
+                    [prompter = &deps.prompter, serializer = &deps.serializer, cardKey = deps.cardKey]() noexcept {
+                        // Dismiss THIS card's live prompt: more than one window
+                        // can stand, and the gate is the only thing that knows
+                        // which id is outstanding for this card.
+                        for (const auto& id : serializer->liveIdsFor(cardKey)) {
+                            prompter->cancel(id);
+                        }
+                    }),
       m_deps(std::move(deps))
 {}
 

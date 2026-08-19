@@ -238,11 +238,11 @@ TEST_F(EnvPrompterServiceTest, RequestSecretsAlwaysRefuses)
     EXPECT_EQ(readAll(std::get<2>(result).get()), "");
 }
 
-// --- CancelCurrent: nothing to dismiss, must never throw --------------------
+// --- Cancel: nothing to dismiss, must never throw ---------------------------
 
-TEST_F(EnvPrompterServiceTest, CancelCurrentIsANoOpAndNeverThrows)
+TEST_F(EnvPrompterServiceTest, CancelIsANoOpAndNeverThrows)
 {
-    EXPECT_NO_THROW(m_client->CancelCurrent());
+    EXPECT_NO_THROW(m_client->Cancel("nonce:1"));
 }
 
 // --- Same trust boundary as the production prompter -------------------------

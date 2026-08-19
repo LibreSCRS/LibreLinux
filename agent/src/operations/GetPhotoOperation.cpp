@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 // SPDX-FileCopyrightText: 2026 hirashix0
 #include "operations/GetPhotoOperation.h"
+#include <LibreSCRS/Agent/operations/PromptSerializer.h>
 #include <utility>
 
 namespace LibreSCRS::Agent::Operations {
@@ -10,7 +11,14 @@ GetPhotoOperation::GetPhotoOperation(std::unique_ptr<OperationChannel> channel, 
     : OperationBase(std::move(channel), std::move(state),
                     // See ReadIdentityOperation::ReadIdentityOperation
                     // for the rationale.
-                    [prompter = &deps.prompter]() noexcept { prompter->cancel(); }),
+                    [prompter = &deps.prompter, serializer = &deps.serializer, cardKey = deps.cardKey]() noexcept {
+                        // Dismiss THIS card's live prompt: more than one window
+                        // can stand, and the gate is the only thing that knows
+                        // which id is outstanding for this card.
+                        for (const auto& id : serializer->liveIdsFor(cardKey)) {
+                            prompter->cancel(id);
+                        }
+                    }),
       m_deps(std::move(deps))
 {}
 

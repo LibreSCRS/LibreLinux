@@ -74,7 +74,7 @@ private:
     std::tuple<std::string, sdbus::UnixFd, sdbus::UnixFd, std::string>
     RequestSecrets(const std::string& kind, const std::map<std::string, sdbus::Variant>& options) override;
 
-    void CancelCurrent() override;
+    void Cancel(const std::string& promptId) override;
 
     // Resolves the in-flight caller's PID and checks it against the expected
     // agent binary (see CallerAuthorizer). Returns 0 (and logs, no secret

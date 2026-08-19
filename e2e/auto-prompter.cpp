@@ -219,10 +219,10 @@ private:
                 sdbus::UnixFd{sealedFd(std::string_view{replacement}), sdbus::adopt_fd}, std::string{}};
     }
 
-    void CancelCurrent() override
+    void Cancel(const std::string& promptId) override
     {
         // No dialog to dismiss — clean no-op.
-        std::fprintf(stderr, "[auto-prompter] CancelCurrent (no-op)\n");
+        std::fprintf(stderr, "[auto-prompter] Cancel id=%s (no-op)\n", promptId.c_str());
     }
 };
 
