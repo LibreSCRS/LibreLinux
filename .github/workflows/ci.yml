@@ -172,7 +172,7 @@ jobs:
         working-directory: LibreLinux
         env:
           QT_QPA_PLATFORM: offscreen
-        run: dbus-run-session -- ctest --test-dir build --output-on-failure
+        run: dbus-run-session -- ctest --test-dir build --output-on-failure --no-tests=error
 
       # --- Thread-sanitizer gate for the agent concurrency invariants -------
       # The reader-map / ReaderObject-field locking (BusExporter::m_readersMutex
@@ -195,4 +195,4 @@ jobs:
             -DCMAKE_CXX_FLAGS="-fsanitize=thread -g" \
             -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=thread"
           cmake --build build-tsan --target BusExporterReaderRaceTest ReaderRemoveDrainTest AgentShutdownUnderLoadTest TypedChannelWedgeDrainTest SignSeamWedgeDrainTest TransportCaptureGuardTest -j4
-          dbus-run-session -- ctest --test-dir build-tsan -R "BusExporterReaderRace|ReaderRemoveDrain|AgentShutdownUnderLoad|TypedChannelWedgeDrain|SignSeamWedgeDrain|TransportCaptureGuard" --output-on-failure
+          dbus-run-session -- ctest --test-dir build-tsan -R "BusExporterReaderRace|ReaderRemoveDrain|AgentShutdownUnderLoad|TypedChannelWedgeDrain|SignSeamWedgeDrain|TransportCaptureGuard" --output-on-failure --no-tests=error

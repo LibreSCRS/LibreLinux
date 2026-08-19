@@ -47,6 +47,10 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    env:
+      # The release key's PRIMARY fingerprint, named once so the import check
+      # and the signature check cannot pin different keys across a rotation.
+      EXPECTED_FPR: '6B05889AC9A6A7188DF639B06F27A989C2031D16'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -63,22 +67,34 @@ jobs:
             exit 1
           fi
           gpg --import KEYS
-          EXPECTED_FPR='6B05889AC9A6A7188DF639B06F27A989C2031D16'
           gpg --list-keys --with-colons "$EXPECTED_FPR" | grep -q "^pub" \
             || { echo "::error::Public key import failed or fingerprint mismatch"; exit 1; }
 
       - name: Verify tag signature
         # verify-tag alone accepts a good signature by ANY key in the keyring,
-        # so the signer is pinned by fingerprint through --raw: VALIDSIG names
-        # the key that actually signed, not merely one that could have. The
-        # ref name moves through the environment, never inline into the
+        # so the signer is pinned by fingerprint through --raw's VALIDSIG line.
+        #
+        # Field order is the whole trick here. VALIDSIG's FIRST field is the
+        # fingerprint of the key that physically signed, and this project signs
+        # with a subkey (the primary is certify-only, `cSC`), so the first field
+        # is the SUBKEY. The primary — the identity worth pinning, because it
+        # outlives every subkey rotation — is VALIDSIG's LAST field. Matching
+        # the primary right after "VALIDSIG" therefore rejects every genuinely
+        # signed tag, and pinning the subkey instead would break at the next
+        # rotation; match the primary in the trailing position.
+        #
+        # Anchored, and deliberately not a bare fingerprint grep: gpg also
+        # emits KEY_CONSIDERED with the primary's fingerprint, and it does so
+        # even for a BADSIG, so a loose match would accept a forged tag.
+        #
+        # The ref name moves through the environment, never inline into the
         # script — a git ref may carry shell metacharacters and the tag
         # filter's trailing * accepts an arbitrary suffix.
         env:
           TAG: ${{ github.ref_name }}
         run: |
-          EXPECTED_FPR='6B05889AC9A6A7188DF639B06F27A989C2031D16'
-          git verify-tag --raw "$TAG" 2>&1 | grep -q "VALIDSIG $EXPECTED_FPR" \
+          git verify-tag --raw "$TAG" 2>&1 \
+            | grep -qE "^\[GNUPG:\] VALIDSIG [0-9A-F]{40} .* ${EXPECTED_FPR}\$" \
             || { echo "::error::Tag $TAG is not signed by the LibreSCRS release key"; exit 1; }
 
   release:
