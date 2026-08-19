@@ -27,6 +27,7 @@
 #include <LibreSCRS/Agent/cache/CredentialCache.h>
 #include <LibreSCRS/Agent/cache/CredentialSnapshotCache.h>
 #include "PrompterClient.h"
+#include "PrompterWire.h"
 #include <LibreSCRS/Agent/operations/CardPluginRouting.h> // CandidateList
 #include <LibreSCRS/Agent/operations/OperationManager.h>
 #include <LibreSCRS/Agent/operations/PromptSerializer.h>
@@ -115,6 +116,13 @@ private:
         result.returnResults(std::string{"ok"}, sdbus::UnixFd{makeSealedMemfd("111111"), sdbus::adopt_fd},
                              sdbus::UnixFd{makeSealedMemfd("222222"), sdbus::adopt_fd}, std::string{});
     }
+    // On the same contract as the production prompter, so an agent driving this
+    // mock is not refused by the capability guard.
+    uint32_t ProtocolVersion() override
+    {
+        return LibreLinux::PrompterWire::kProtocolVersion;
+    }
+
     void Cancel(const std::string& promptId) override
     {
         (void)promptId;

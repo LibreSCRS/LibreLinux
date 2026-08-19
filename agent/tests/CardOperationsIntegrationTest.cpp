@@ -30,6 +30,7 @@
 #include <LibreSCRS/Agent/presence/ObjectRegistry.h>
 #include <LibreSCRS/Agent/presence/PresenceModel.h>
 #include "PrompterClient.h"
+#include "PrompterWire.h"
 #include <LibreSCRS/Agent/config/ConfigStore.h>
 #include "dbus/CardObject.h"
 #include <LibreSCRS/Agent/operations/OperationManager.h>
@@ -170,6 +171,13 @@ private:
         const int secondary = makeSealedMemfd("222222");
         return std::make_tuple(std::string{"ok"}, sdbus::UnixFd{primary, sdbus::adopt_fd},
                                sdbus::UnixFd{secondary, sdbus::adopt_fd}, std::string{});
+    }
+
+    // On the same contract as the production prompter, so an agent driving this
+    // mock is not refused by the capability guard.
+    uint32_t ProtocolVersion() override
+    {
+        return LibreLinux::PrompterWire::kProtocolVersion;
     }
 
     void Cancel(const std::string& promptId) override

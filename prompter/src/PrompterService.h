@@ -92,6 +92,12 @@ private:
     // AND per-window ownership (must be the caller that raised it).
     void Cancel(const std::string& promptId) override;
 
+    // The contract this binary implements (PrompterWire::kProtocolVersion).
+    // The agent reads it once and refuses to raise a prompt it could not
+    // dismiss -- this helper outlives agent restarts, so a mismatch is routine
+    // rather than exotic.
+    uint32_t ProtocolVersion() override;
+
     static void dismissOnGuiThread(const std::string& promptId, pid_t callerPid) noexcept;
 
     // Resolve the in-flight D-Bus caller's PID from the message credentials,

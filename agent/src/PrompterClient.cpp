@@ -2,7 +2,8 @@
 // SPDX-FileCopyrightText: 2026 hirashix0
 #include "PrompterClient.h"
 #include <LibreSCRS/Agent/backend/Logging.h>
-#include "PrompterWire.h" // shared Prompter1 kind / option-key / status vocabulary
+#include "PrompterCapability.h" // the version guard in front of every prompt
+#include "PrompterWire.h"       // shared Prompter1 kind / option-key / status vocabulary
 #include "SecretMemfdReader.h"
 #include "org.librescrs.Prompter1_proxy.h"
 #include <LibreSCRS/Auth/PaceSecretKind.h>
@@ -311,9 +312,44 @@ void PrompterClient::cancel(const std::string& promptId) noexcept
     }
 }
 
+bool PrompterClient::prompterIsUsable()
+{
+    const std::lock_guard lock{m_capabilityMutex};
+    if (m_capability.has_value()) {
+        return *m_capability;
+    }
+    std::optional<std::uint32_t> reported;
+    try {
+        auto connection = sdbus::createSessionBusConnection();
+        Impl probe(*connection, m_serviceName, m_objectPath);
+        reported = probe.ProtocolVersion();
+    } catch (const std::exception& e) {
+        // An older helper publishes no such property, so the read throws. That
+        // is exactly the case being caught, not an unexpected error.
+        log::warnf("PrompterClient: cannot read the prompter's protocol version: {}", e.what());
+    } catch (...) {
+        log::warn("PrompterClient: cannot read the prompter's protocol version");
+    }
+    m_capability = PrompterCapability::usable(reported);
+    if (!*m_capability) {
+        log::warn("PrompterClient: the credential window helper is out of date; refusing to raise a prompt it "
+                  "could not dismiss");
+    }
+    return *m_capability;
+}
+
 PromptResult PrompterClient::request(std::string_view kind, const PromptOptions& options)
 {
     PromptResult result;
+
+    // Refuse BEFORE any window is raised. A helper that cannot be told to
+    // dismiss a prompt would leave it standing with nobody able to close it --
+    // the defect this design removes, returning through a mismatched pair.
+    if (!prompterIsUsable()) {
+        result.status = PromptStatus::Error;
+        result.userMessage = "the credential window helper is out of date";
+        return result;
+    }
 
     // The call returns std::tuple<status, secret_fd, user_message> — strings +
     // sdbus::UnixFd — and may throw sdbus::Error on transport or bus failure.
@@ -382,6 +418,13 @@ PromptResult PrompterClient::request(std::string_view kind, const PromptOptions&
 PinChangePromptResult PrompterClient::requestPinChange(const PromptOptions& options)
 {
     PinChangePromptResult result;
+
+    // Same refusal as the single-secret path, for the same reason.
+    if (!prompterIsUsable()) {
+        result.status = PromptStatus::Error;
+        result.userMessage = "the credential window helper is out of date";
+        return result;
+    }
 
     // The call returns std::tuple<status, primary_fd, secondary_fd,
     // user_message> and may throw sdbus::Error on transport / bus failure. Any

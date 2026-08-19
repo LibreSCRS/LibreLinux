@@ -15,6 +15,7 @@
 // other fd is caught by SealFailureOnSecondaryFdLeaksNoPartialSecret.
 
 #include "PrompterClient.h"
+#include "PrompterWire.h"
 #include "org.librescrs.Prompter1_adaptor.h"
 
 #include "SealedMemfdCreator.h" // shared sealed-memfd creator (matches the producer)
@@ -182,6 +183,13 @@ private:
     {
         return std::make_tuple(std::string{"error"}, sdbus::UnixFd{makeSealedFd(""), sdbus::adopt_fd},
                                std::string{"RequestSecret not scripted in this mock"});
+    }
+
+    // On the same contract as the production prompter, so an agent driving this
+    // mock is not refused by the capability guard.
+    uint32_t ProtocolVersion() override
+    {
+        return LibreLinux::PrompterWire::kProtocolVersion;
     }
 
     void Cancel(const std::string& promptId) override

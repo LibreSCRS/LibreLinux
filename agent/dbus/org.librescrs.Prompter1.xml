@@ -153,6 +153,18 @@
       live prompt is a silent no-op, so a dismissal racing the user's own is
       harmless.
     -->
+    <!--
+      The Prompter1 contract this binary implements. The agent reads it ONCE on
+      first use and refuses to raise a prompt it could not dismiss, rather than
+      leaving a window hanging with nobody able to close it.
+
+      This exists because the prompter is a long-lived user unit and survives an
+      agent restart, so a new agent routinely meets an older helper. A helper
+      whose version is below what the agent needs is refused loudly, never
+      emulated: there is no compatibility shim.
+    -->
+    <property name="ProtocolVersion" type="u" access="read"/>
+
     <method name="Cancel">
       <arg name="prompt_id" type="s" direction="in"/>
     </method>

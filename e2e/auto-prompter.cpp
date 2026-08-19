@@ -235,6 +235,11 @@ private:
                 sdbus::UnixFd{sealedFd(std::string_view{replacement}), sdbus::adopt_fd}, std::string{}};
     }
 
+    uint32_t ProtocolVersion() override
+    {
+        return LibreLinux::PrompterWire::kProtocolVersion;
+    }
+
     void Cancel(const std::string& promptId) override
     {
         // No dialog to dismiss — clean no-op.

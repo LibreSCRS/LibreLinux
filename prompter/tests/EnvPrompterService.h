@@ -88,6 +88,10 @@ private:
 
     void Cancel(const std::string& promptId) override;
 
+    // On the same contract as the production prompter, so an agent driving this
+    // harness is not refused by the capability guard.
+    uint32_t ProtocolVersion() override;
+
     // Resolves the in-flight caller's PID and checks it against the expected
     // agent binary (see CallerAuthorizer). Returns 0 (and logs, no secret
     // material) on any rejection.

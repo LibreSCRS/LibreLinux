@@ -16,6 +16,7 @@
 // test (~half a minute) — it is the only honest end-to-end proof.
 
 #include "PrompterClient.h"
+#include "PrompterWire.h"
 
 #include <LibreSCRS/Agent/operations/PromptPolicy.h>
 #include "org.librescrs.Prompter1_adaptor.h"
@@ -131,6 +132,13 @@ private:
         return std::make_tuple(std::string{"error"}, sdbus::UnixFd{makeSealedFd(""), sdbus::adopt_fd},
                                sdbus::UnixFd{makeSealedFd(""), sdbus::adopt_fd},
                                std::string{"RequestSecrets not scripted in this mock"});
+    }
+
+    // On the same contract as the production prompter, so an agent driving this
+    // mock is not refused by the capability guard.
+    uint32_t ProtocolVersion() override
+    {
+        return LibreLinux::PrompterWire::kProtocolVersion;
     }
 
     void Cancel(const std::string& promptId) override

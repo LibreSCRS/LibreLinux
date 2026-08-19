@@ -140,6 +140,20 @@ public:
         const std::lock_guard lock{m_mutex};
         return m_requestSenders;
     }
+    // Model an older helper. The real one publishes no property at all, which
+    // the client sees as a failed read; reporting a lower number is the same
+    // decision through a path a mock can actually take.
+    void reportProtocolVersion(std::uint32_t version)
+    {
+        const std::lock_guard lock{m_mutex};
+        m_reportedVersion = version;
+    }
+    int protocolVersionReads() const
+    {
+        const std::lock_guard lock{m_mutex};
+        return m_versionReads;
+    }
+
     std::string cancelSender() const
     {
         const std::lock_guard lock{m_mutex};
@@ -207,6 +221,16 @@ private:
                                std::string{"RequestSecrets not scripted in this mock"});
     }
 
+    // On the same contract as the production prompter, so an agent driving this
+    // mock is not refused by the capability guard. Scriptable so a test can
+    // model the older helper that outlived its agent.
+    uint32_t ProtocolVersion() override
+    {
+        const std::lock_guard lock{m_mutex};
+        ++m_versionReads;
+        return m_reportedVersion;
+    }
+
     void Cancel(const std::string& promptId) override
     {
         // The mock does not host a real dialog; tests that exercise the
@@ -228,6 +252,8 @@ private:
     std::vector<std::string> m_requestSenders;
     std::string m_cancelSender;
     std::vector<std::string> m_cancelledIds;
+    std::uint32_t m_reportedVersion{LibreLinux::PrompterWire::kProtocolVersion};
+    int m_versionReads{0};
 };
 
 // Test fixture: spins up a fresh server + client connection per test so each
@@ -838,4 +864,46 @@ TEST_F(PrompterIntegrationTest, AReplyWordThisAgentCannotParseFailsClosed)
     EXPECT_NE(result.status, PromptStatus::Ok);
     EXPECT_EQ(result.status, PromptStatus::Error);
     EXPECT_FALSE(result.secret.has_value());
+}
+
+// --- refusing a helper that cannot be addressed -----------------------------
+
+TEST_F(PrompterIntegrationTest, AnOutOfDateHelperGetsNoWindowRaised)
+{
+    // The refusal has to come BEFORE the request: raising a window nobody can
+    // dismiss is the failure, so answering "error" after showing one would not
+    // be an improvement.
+    m_mock->reportProtocolVersion(LibreLinux::PrompterWire::kProtocolVersion - 1);
+    m_mock->setBehavior(MockBehavior{.status = std::string{wire::kStatusOk}, .secretBytes = "1234"});
+
+    const PromptResult result = m_client->requestPin(PromptOptions{});
+
+    EXPECT_EQ(result.status, PromptStatus::Error);
+    EXPECT_FALSE(result.secret.has_value());
+    EXPECT_FALSE(m_mock->captured().seen) << "a prompt was raised on a helper that could not dismiss it";
+}
+
+TEST_F(PrompterIntegrationTest, AnOutOfDateHelperIsRefusedTheChangePinModalToo)
+{
+    m_mock->reportProtocolVersion(LibreLinux::PrompterWire::kProtocolVersion - 1);
+
+    const PinChangePromptResult result = m_client->requestPinChange(PromptOptions{});
+
+    EXPECT_EQ(result.status, PromptStatus::Error);
+    EXPECT_FALSE(result.current.has_value());
+    EXPECT_FALSE(result.newPin.has_value());
+}
+
+TEST_F(PrompterIntegrationTest, TheVersionIsReadOnceRatherThanBeforeEveryPrompt)
+{
+    // A property round trip in front of every dialog would put a synchronous
+    // call between the holder and their prompt, for an answer that cannot
+    // change without the helper being replaced.
+    m_mock->setBehavior(MockBehavior{.status = std::string{wire::kStatusOk}, .secretBytes = "1234"});
+
+    static_cast<void>(m_client->requestPin(PromptOptions{}));
+    static_cast<void>(m_client->requestPin(PromptOptions{}));
+    static_cast<void>(m_client->requestCan(PromptOptions{}));
+
+    EXPECT_EQ(m_mock->protocolVersionReads(), 1);
 }

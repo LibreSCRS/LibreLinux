@@ -4,6 +4,8 @@
 #include <LibreSCRS/Agent/backend/PromptTypes.h>
 #include <LibreSCRS/Agent/backend/PrompterClientBase.h>
 #include <chrono>
+#include <mutex>
+#include <optional>
 #include <string>
 #include <string_view>
 namespace LibreSCRS::Agent {
@@ -69,6 +71,15 @@ private:
     // Single point of contact with the generated proxy; the public requestX
     // wrappers forward the kind discriminator unchanged.
     [[nodiscard]] PromptResult request(std::string_view kind, const PromptOptions& options);
+
+    // True iff the prompter on the bus implements a contract this agent can
+    // drive. Read ONCE and remembered: a property round trip in front of every
+    // dialog would put a synchronous call between the holder and their prompt,
+    // and the answer cannot change without the helper being replaced.
+    [[nodiscard]] bool prompterIsUsable();
+
+    std::mutex m_capabilityMutex;
+    std::optional<bool> m_capability;
 
     // Per-call budget for the interactive request calls (see
     // kDefaultInteractiveBudget); test-injectable via the constructor.

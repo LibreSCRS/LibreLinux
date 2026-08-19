@@ -45,6 +45,14 @@ target_link_libraries(ReaderIdentitySeamTest PRIVATE
     GTest::gtest_main)
 add_test(NAME ReaderIdentitySeamTest COMMAND ReaderIdentitySeamTest)
 
+# The version guard in front of every prompt: pure policy over a single read.
+add_executable(PrompterCapabilityTest PrompterCapabilityTest.cpp)
+target_link_libraries(PrompterCapabilityTest PRIVATE
+    LibreLinuxAgentCore
+    GTest::gtest
+    GTest::gtest_main)
+add_test(NAME PrompterCapabilityTest COMMAND PrompterCapabilityTest)
+
 # Pure helpers of the polkit authorizer (no live polkit daemon required).
 add_executable(PolkitAuthorizerTest PolkitAuthorizerTest.cpp)
 target_link_libraries(PolkitAuthorizerTest PRIVATE

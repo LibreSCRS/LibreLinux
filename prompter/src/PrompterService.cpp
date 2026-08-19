@@ -505,6 +505,11 @@ pid_t PrompterService::authorizeCaller(const char* method)
     return callerPid;
 }
 
+uint32_t PrompterService::ProtocolVersion()
+{
+    return PrompterWire::kProtocolVersion;
+}
+
 void PrompterService::Cancel(const std::string& promptId)
 {
     // Same binary-identity gate as RequestSecret: a non-agent caller must not
