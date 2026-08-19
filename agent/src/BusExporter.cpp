@@ -82,6 +82,25 @@ std::optional<BusExporter::ReaderCard> BusExporter::resolveReaderCard(const std:
     return ReaderCard{.readerName = entry.name, .cardKey = entry.cardPath};
 }
 
+BusExporter::PresenceRoster BusExporter::presenceRoster() const
+{
+    // ONE lock for the WHOLE roster, not one per entry: a torn read could pair
+    // reader A's name with reader B's card path, which is exactly the
+    // mis-naming a per-reader dialog label exists to prevent.
+    const std::lock_guard guard(m_presenceMutex);
+    PresenceRoster out;
+    out.readerNames.reserve(m_presence.size());
+    out.cardPaths.reserve(m_presence.size());
+    for (const auto& [path, entry] : m_presence) {
+        out.readerNames.push_back(entry.name);
+        // "/" is the no-card sentinel of the wire property; normalise it to
+        // empty so a caller cannot accidentally match on it.
+        const bool holdsCard = entry.hasCard && !entry.cardPath.empty() && entry.cardPath != "/";
+        out.cardPaths.push_back(holdsCard ? entry.cardPath : std::string{});
+    }
+    return out;
+}
+
 void BusExporter::setMaterializer(Materializer materializer)
 {
     m_materializer = std::move(materializer);

@@ -36,6 +36,15 @@ target_link_libraries(CallerIdentityTest PRIVATE
     GTest::gtest_main)
 add_test(NAME CallerIdentityTest COMMAND CallerIdentityTest)
 
+# The card-path -> reader inverse behind a prompt's reader label. Pure: drives
+# the seam over a hand-built presence snapshot, no bus and no reader.
+add_executable(ReaderIdentitySeamTest ReaderIdentitySeamTest.cpp)
+target_link_libraries(ReaderIdentitySeamTest PRIVATE
+    LibreLinuxAgentCore
+    GTest::gtest
+    GTest::gtest_main)
+add_test(NAME ReaderIdentitySeamTest COMMAND ReaderIdentitySeamTest)
+
 # Pure helpers of the polkit authorizer (no live polkit daemon required).
 add_executable(PolkitAuthorizerTest PolkitAuthorizerTest.cpp)
 target_link_libraries(PolkitAuthorizerTest PRIVATE

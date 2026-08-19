@@ -72,6 +72,18 @@ public:
     };
     [[nodiscard]] std::optional<ReaderCard> resolveReaderCard(const std::string& readerPath) const;
 
+    // The whole reader roster and the card each one currently holds, taken in
+    // ONE lock and index-aligned. A prompt's reader label needs both: which
+    // reader holds a given card, and the full set — a dual-interface unit is
+    // only distinguishable across the set, so a per-reader query could not tell
+    // its two slots apart. An entry with no card carries an empty card path.
+    struct PresenceRoster
+    {
+        std::vector<std::string> readerNames;
+        std::vector<std::string> cardPaths;
+    };
+    [[nodiscard]] PresenceRoster presenceRoster() const;
+
     // The callbacks the AgentFrontend registers so each typed presence delta
     // (forwarded from the AgentTransport overrides) materialises/withdraws its
     // real exported sdbus object. Mirrors the ObjectRegistry observer triple. Set

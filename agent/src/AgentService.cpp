@@ -286,6 +286,11 @@ bool AgentService::registerOnBus()
         m_core.emplace(m_resolver, *m_exporter, *m_authorizer, m_prompter, m_configFile, m_cacheRoot,
                        makeResolveReaderCard(*m_exporter), makeResolveCardKey(*m_exporter));
 
+        // Which reader holds a card, for the prompt chrome. Set once here,
+        // before any operation can run: two dialogs can stand at once, so each
+        // has to name the reader it belongs to.
+        m_core->promptSerializer().setReaderIdentityResolver(makeResolveReaderIdentity(*m_exporter));
+
         // Wire the core registry's presence observers to the transport (the natural
         // presence sink). Done now that both exist; at teardown the core (holding
         // the registry) is destroyed BEFORE the transport with the monitor already
