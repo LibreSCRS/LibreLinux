@@ -19,6 +19,7 @@
 #include <unistd.h> // close
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <optional>
@@ -55,6 +56,7 @@ using PrompterWire::kOptArtifact;
 using PrompterWire::kOptArtifacts;
 using PrompterWire::kOptAttempt;
 using PrompterWire::kOptCardLabel;
+using PrompterWire::kOptDeadlineMs;
 using PrompterWire::kOptDescription;
 using PrompterWire::kOptLastError;
 using PrompterWire::kOptMaxLength;
@@ -71,6 +73,7 @@ using PrompterWire::kStatusCancelled;
 using PrompterWire::kStatusError;
 using PrompterWire::kStatusOk;
 using PrompterWire::kStatusOkMrz;
+using PrompterWire::kStatusTimeout;
 using PrompterWire::kStatusUnauthorized;
 
 // Lift a stringly-typed option, tolerating either a real string variant
@@ -237,7 +240,8 @@ void answerSecrets(SecretsResult& result, std::string status, int primaryFd, int
 //
 // Runs on the Qt main thread.
 void raiseWindow(PromptDialog::Kind kind, const PromptDialog::Options& opts, pid_t ownerPid,
-                 const std::string& promptId, bool offerMrzSwitch, const std::shared_ptr<SecretResult>& result)
+                 const std::string& promptId, bool offerMrzSwitch, std::chrono::milliseconds entryBudget,
+                 const std::shared_ptr<SecretResult>& result)
 {
     auto* dlg = new PromptDialog(kind, opts);
     const auto handle = registry().add(dlg, ownerPid, promptId);
@@ -256,7 +260,9 @@ void raiseWindow(PromptDialog::Kind kind, const PromptDialog::Options& opts, pid
             return;
         }
         if (code != QDialog::Accepted) {
-            answerSecret(*result, kStatusCancelled, makeEmptySealedFd());
+            // The clock and the holder are different events, and a client that
+            // conflates them tells the holder they cancelled what expired.
+            answerSecret(*result, dlg->expired() ? kStatusTimeout : kStatusCancelled, makeEmptySealedFd());
         } else if (const int fd = dlg->captureSecretFd(); fd < 0) {
             answerSecret(*result, kStatusError, makeEmptySealedFd());
         } else {
@@ -270,13 +276,16 @@ void raiseWindow(PromptDialog::Kind kind, const PromptDialog::Options& opts, pid
         dlg->deleteLater();
     });
 
+    // Armed BEFORE show(): the timer starts from the show event, so the
+    // holder's time begins when the window is actually on screen.
+    dlg->setEntryDeadline(entryBudget);
     // Shown, not exec'd, and without taking focus (see PromptDialog's ctor).
     dlg->show();
     dlg->announce();
 }
 
 void raiseChangePinWindow(const PromptDialog::Options& opts, pid_t ownerPid, const std::string& promptId,
-                          const std::shared_ptr<SecretsResult>& result)
+                          std::chrono::milliseconds entryBudget, const std::shared_ptr<SecretsResult>& result)
 {
     auto* dlg = new PromptDialog(PromptDialog::Kind::ChangePin, opts);
     const auto handle = registry().add(dlg, ownerPid, promptId);
@@ -291,7 +300,8 @@ void raiseChangePinWindow(const PromptDialog::Options& opts, pid_t ownerPid, con
             return;
         }
         if (code != QDialog::Accepted) {
-            answerSecrets(*result, kStatusCancelled, makeEmptySealedFd(), makeEmptySealedFd());
+            answerSecrets(*result, dlg->expired() ? kStatusTimeout : kStatusCancelled, makeEmptySealedFd(),
+                          makeEmptySealedFd());
             dlg->deleteLater();
             return;
         }
@@ -311,6 +321,7 @@ void raiseChangePinWindow(const PromptDialog::Options& opts, pid_t ownerPid, con
         dlg->deleteLater();
     });
 
+    dlg->setEntryDeadline(entryBudget);
     dlg->show();
     dlg->announce();
 }
@@ -362,6 +373,9 @@ void PrompterService::RequestSecret(SecretResult&& result, std::string kind,
     // Routing metadata, not chrome: the dialog never sees it. Absent means this
     // caller cannot address its prompts, and a dismissal will find no match.
     const std::string promptId = optionString(options, kOptPromptId);
+    // A DURATION, not an absolute time: no shared clock between the two
+    // processes. 0 (or absent) means no deadline, never an instant expiry.
+    const std::chrono::milliseconds entryBudget{optionUInt(options, kOptDeadlineMs, 0u)};
 
     // THE conjunction, evaluated once and nowhere else: the alternative-kind
     // opt-in is meaningful only on a CAN request, and only for the alternative
@@ -378,8 +392,8 @@ void PrompterService::RequestSecret(SecretResult&& result, std::string kind,
     // thread. POST, never block: holding this thread is what stopped a second
     // reader's prompt from being served at all.
     auto* app = QCoreApplication::instance();
-    const auto raise = [kind = *parsedKind, opts, ownerPid, promptId, offerMrzSwitch, reply] {
-        raiseWindow(kind, opts, ownerPid, promptId, offerMrzSwitch, reply);
+    const auto raise = [kind = *parsedKind, opts, ownerPid, promptId, offerMrzSwitch, entryBudget, reply] {
+        raiseWindow(kind, opts, ownerPid, promptId, offerMrzSwitch, entryBudget, reply);
     };
     if (app == nullptr || QThread::currentThread() == app->thread()) {
         // Already on the main thread (single-threaded test harness, or a
@@ -415,9 +429,12 @@ void PrompterService::RequestSecrets(SecretsResult&& result, std::string kind,
 
     const PromptDialog::Options opts = buildMultiOptions(options);
     const std::string promptId = optionString(options, kOptPromptId);
+    const std::chrono::milliseconds entryBudget{optionUInt(options, kOptDeadlineMs, 0u)};
 
     auto* app = QCoreApplication::instance();
-    const auto raise = [opts, ownerPid, promptId, reply] { raiseChangePinWindow(opts, ownerPid, promptId, reply); };
+    const auto raise = [opts, ownerPid, promptId, entryBudget, reply] {
+        raiseChangePinWindow(opts, ownerPid, promptId, entryBudget, reply);
+    };
     if (app == nullptr || QThread::currentThread() == app->thread()) {
         raise();
         return;

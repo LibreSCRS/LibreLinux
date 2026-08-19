@@ -26,6 +26,12 @@
                                  stores it and never parses it. Absent only from
                                  a caller that cannot address its prompts, whose
                                  windows then cannot be dismissed by name.
+                   "deadline_ms" (u) how long the holder gets, measured from
+                                 the moment the window is SHOWN. A DURATION,
+                                 not an absolute time, so no shared clock is
+                                 needed and transport latency is not charged to
+                                 the human. Absent or 0 means no deadline; a
+                                 prompter must never read 0 as instant expiry.
                    "artifacts"   (as) UNTRUSTED per-document display names of a
                                  batch signing request; rendered client-supplied,
                                  in the description zone's plain-text treatment —
@@ -52,7 +58,12 @@
                                  other kind the key has no effect.
 
       Outputs:
-        status        "ok" | "ok_mrz" | "cancelled" | "error" | "unauthorized"
+        status        "ok" | "ok_mrz" | "cancelled" | "timeout" | "error" |
+                      "unauthorized"
+                      ("timeout" is answered when, and only when, the window
+                      closed itself because "deadline_ms" elapsed with no entry.
+                      It is deliberately NOT "cancelled": the holder did not
+                      dismiss anything.
                       ("unauthorized" is the fail-closed rejection of a caller
                       whose peer credentials are not the agent — a non-agent
                       process trying to drive the prompter directly; the agent,
@@ -87,7 +98,7 @@
                  crosses this interface.
         options  optional metadata; recognises the RequestSecret display keys
                  ("title", "description", "requester", "artifact",
-                 "prompt_id") plus:
+                 "prompt_id", "deadline_ms") plus:
                    "primary_min_length" (u) bounds of the current-PIN field
                    "primary_max_length" (u)
                    "new_min_length"     (u) bounds of the new AND confirm fields
@@ -97,7 +108,7 @@
 
       Outputs:
         status        same vocabulary as RequestSecret ("ok" | "cancelled" |
-                      "error" | "unauthorized")
+                      "timeout" | "error" | "unauthorized")
         primary_fd    sealed memfd with the CURRENT secret; zero-length
                       whenever status is not "ok"
         secondary_fd  sealed memfd with the NEW secret; zero-length whenever

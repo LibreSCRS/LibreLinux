@@ -29,6 +29,7 @@ using LibreLinux::PrompterWire::kKindMrz;
 using LibreLinux::PrompterWire::kStatusCancelled;
 using LibreLinux::PrompterWire::kStatusOk;
 using LibreLinux::PrompterWire::kStatusOkMrz;
+using LibreLinux::PrompterWire::kStatusTimeout;
 using LibreLinux::PrompterWire::kStatusUnauthorized;
 
 PromptStatus parseStatus(std::string_view raw)
@@ -38,6 +39,11 @@ PromptStatus parseStatus(std::string_view raw)
     }
     if (raw == kStatusCancelled) {
         return PromptStatus::Cancelled;
+    }
+    // The window closed itself on its own deadline. Never folded into
+    // Cancelled: the holder dismissed nothing.
+    if (raw == kStatusTimeout) {
+        return PromptStatus::Timeout;
     }
     // "unauthorized" is the prompter's fail-closed rejection of a NON-agent
     // caller. The agent is the only authorized caller, so it never legitimately
@@ -92,6 +98,12 @@ std::map<std::string, sdbus::Variant> buildOptionsDict(const PromptOptions& opti
     // it by.
     if (!options.promptId.empty()) {
         dict.emplace(LibreLinux::PrompterWire::kOptPromptId, sdbus::Variant{options.promptId});
+    }
+    // A DURATION the prompter starts when it shows the window, so what elapses
+    // is exactly what the holder sees counting down. Omitted at 0 like every
+    // other optional key -- 0 must never read as an instant expiry.
+    if (options.deadlineMs > 0) {
+        dict.emplace(LibreLinux::PrompterWire::kOptDeadlineMs, sdbus::Variant{options.deadlineMs});
     }
     if (!options.title.empty()) {
         dict.emplace(LibreLinux::PrompterWire::kOptTitle, sdbus::Variant{options.title});
@@ -156,6 +168,12 @@ std::map<std::string, sdbus::Variant> buildChangePinOptionsDict(const PromptOpti
     // it by.
     if (!options.promptId.empty()) {
         dict.emplace(LibreLinux::PrompterWire::kOptPromptId, sdbus::Variant{options.promptId});
+    }
+    // A DURATION the prompter starts when it shows the window, so what elapses
+    // is exactly what the holder sees counting down. Omitted at 0 like every
+    // other optional key -- 0 must never read as an instant expiry.
+    if (options.deadlineMs > 0) {
+        dict.emplace(LibreLinux::PrompterWire::kOptDeadlineMs, sdbus::Variant{options.deadlineMs});
     }
     if (!options.title.empty()) {
         dict.emplace(LibreLinux::PrompterWire::kOptTitle, sdbus::Variant{options.title});

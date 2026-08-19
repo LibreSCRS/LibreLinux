@@ -784,3 +784,58 @@ TEST_F(PrompterIntegrationTest, AnUnstampedPromptSendsNoAddressee)
 
     EXPECT_FALSE(m_mock->captured().options.contains(wire::kOptPromptId));
 }
+
+// --- the entry deadline and its reply word ---------------------------------
+
+TEST_F(PrompterIntegrationTest, TheRequestCarriesItsEntryDeadlineOnTheWire)
+{
+    // The helper enforces the deadline and closes its own window, so a deadline
+    // that never reached it leaves a window standing with nobody reading it --
+    // which is the defect the deadline exists to remove.
+    m_mock->setBehavior(MockBehavior{.status = std::string{wire::kStatusOk}, .secretBytes = "1234"});
+
+    PromptOptions options;
+    options.deadlineMs = 120'000;
+    static_cast<void>(m_client->requestCan(options));
+
+    const auto captured = m_mock->captured();
+    ASSERT_TRUE(captured.seen);
+    ASSERT_TRUE(captured.options.contains(wire::kOptDeadlineMs)) << "the prompt reached the helper with no deadline";
+    EXPECT_EQ(captured.options.at(wire::kOptDeadlineMs).get<std::uint32_t>(), 120'000u);
+}
+
+TEST_F(PrompterIntegrationTest, AnUnsetDeadlineIsOmittedRatherThanSentAsZero)
+{
+    // 0 is the "unset" sentinel and a helper must never read it as an instant
+    // expiry; omitting it keeps that impossible rather than merely documented.
+    m_mock->setBehavior(MockBehavior{.status = std::string{wire::kStatusOk}, .secretBytes = "1234"});
+
+    static_cast<void>(m_client->requestPin(PromptOptions{}));
+
+    EXPECT_FALSE(m_mock->captured().options.contains(wire::kOptDeadlineMs));
+}
+
+TEST_F(PrompterIntegrationTest, AnExpiredWindowIsNotReportedAsAUserCancellation)
+{
+    m_mock->setBehavior(MockBehavior{.status = std::string{wire::kStatusTimeout}});
+
+    const PromptResult result = m_client->requestCan(PromptOptions{});
+
+    EXPECT_EQ(result.status, PromptStatus::Timeout);
+    EXPECT_NE(result.status, PromptStatus::Cancelled) << "the holder dismissed nothing; the clock ran out";
+    EXPECT_FALSE(result.secret.has_value());
+}
+
+TEST_F(PrompterIntegrationTest, AReplyWordThisAgentCannotParseFailsClosed)
+{
+    // A helper that answers vocabulary this agent does not know must never be
+    // read as success: that would hand a flow an empty secret and call it a
+    // collected one.
+    m_mock->setBehavior(MockBehavior{.status = std::string{"something-a-future-helper-invents"}});
+
+    const PromptResult result = m_client->requestPin(PromptOptions{});
+
+    EXPECT_NE(result.status, PromptStatus::Ok);
+    EXPECT_EQ(result.status, PromptStatus::Error);
+    EXPECT_FALSE(result.secret.has_value());
+}

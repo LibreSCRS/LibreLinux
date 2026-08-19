@@ -6,10 +6,12 @@
 #include <QString>
 #include <QStringList>
 
+#include <chrono>
 #include <functional>
 
 class QDialogButtonBox;
 class QLabel;
+class QTimer;
 class QPushButton;
 
 namespace LibreLinux::Prompter {
@@ -142,6 +144,24 @@ public:
     /// error while the confirmation differs from the new PIN.
     void accept() override;
 
+    /// Start the entry clock. The holder's time begins when the window is on
+    /// screen, not when the request was marshalled.
+    void showEvent(QShowEvent* event) override;
+
+    /// Arm this window's own entry deadline. @p budget is a DURATION; it starts
+    /// when the window is SHOWN, so what elapses is exactly what the holder
+    /// watches count down and transport latency is not charged to them. A zero
+    /// (or absent) budget means NO deadline -- never an instant expiry.
+    ///
+    /// The window enforces it itself and closes on expiry. That is the belt
+    /// against a dismissal that never arrives, which is precisely today's
+    /// defect: a window left standing with nobody reading it.
+    void setEntryDeadline(std::chrono::milliseconds budget);
+
+    /// True once this window closed itself on its deadline rather than being
+    /// answered or dismissed.
+    [[nodiscard]] bool expired() const;
+
     /// Ask for the window's share of attention WITHOUT taking focus: a
     /// taskbar/notification hint, never an activation. A window that opened
     /// behind others would otherwise run its whole entry deadline in silence
@@ -185,6 +205,17 @@ private:
     QLabel* m_retryError = nullptr;        // null unless Options::attempt > 0
     SecretFdPair m_captured;
     int m_announcements = 0;
+
+    // The window's own entry clock. m_deadlineTimer fires once and closes the
+    // window; m_countdownTimer only repaints the remaining time. Both are
+    // started from showEvent, never from the constructor -- the holder's time
+    // begins when they can see the window.
+    QTimer* m_deadlineTimer = nullptr;
+    QTimer* m_countdownTimer = nullptr;
+    QLabel* m_countdownLabel = nullptr;
+    std::chrono::milliseconds m_entryBudget{0};
+    std::chrono::steady_clock::time_point m_shownAt{};
+    bool m_expired = false;
 };
 
 } // namespace LibreLinux::Prompter

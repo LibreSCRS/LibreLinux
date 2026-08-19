@@ -13,6 +13,8 @@
 
 #include <QApplication>
 #include <QDialogButtonBox>
+#include <QShowEvent>
+#include <QTimer>
 #include <QFontMetrics>
 #include <QGroupBox>
 #include <QLabel>
@@ -57,6 +59,17 @@ InputWidgetBase* widgetFor(PromptDialog::Kind kind, const PromptDialog::Options&
 // constant with). The only source of a `last_error` today is the eMRTD read
 // flows' AuthFailed path (CredentialCache::markCredentialWrong).
 constexpr const char* kErrorPreReadAuthFailed = "librescrs.error.preRead.authFailed";
+
+// The remaining entry time as M:SS. Language-neutral BY DESIGN and not an
+// oversight: the macOS prompter has no localisation at all, so a worded
+// countdown would read identically only on Linux. A glyph plus digits behaves
+// the same on both.
+QString formatRemaining(std::chrono::milliseconds remaining)
+{
+    const auto total = std::chrono::duration_cast<std::chrono::seconds>(remaining).count();
+    const auto clamped = total < 0 ? 0 : total;
+    return QStringLiteral("%1:%2").arg(clamped / 60).arg(clamped % 60, 2, 10, QLatin1Char('0'));
+}
 
 // Localized inline text for the retry-context error line shown above the
 // input widget on a re-prompt (opts.attempt > 0). An unrecognised or empty
@@ -331,6 +344,15 @@ void PromptDialog::buildLayout(const Options& opts)
         layout->addWidget(m_switchButton);
     }
 
+    // The entry clock, shown only once a deadline is armed (setEntryDeadline).
+    // A window that closes itself must say so while it still can -- one that
+    // just vanished mid-entry would be the confusion this replaces.
+    m_countdownLabel = new QLabel(this);
+    m_countdownLabel->setObjectName(QStringLiteral("countdownLabel"));
+    m_countdownLabel->setTextFormat(Qt::PlainText);
+    m_countdownLabel->hide();
+    layout->addWidget(m_countdownLabel);
+
     m_buttons->setStandardButtons(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
     layout->addWidget(m_buttons);
     connect(m_buttons, &QDialogButtonBox::accepted, this, &QDialog::accept);
@@ -350,6 +372,54 @@ void PromptDialog::wireValidity()
     // would touch the freed button; scoping it to the button severs it first.
     connect(m_widget, &InputWidgetBase::validityChanged, okButton,
             [this, okButton]() { okButton->setEnabled(m_widget->isValid()); });
+}
+
+void PromptDialog::setEntryDeadline(std::chrono::milliseconds budget)
+{
+    m_entryBudget = budget;
+    if (budget <= std::chrono::milliseconds::zero()) {
+        // No deadline. Zero is the "unset" sentinel and must never be read as
+        // an instant expiry -- a window that closed the moment it appeared
+        // would be worse than one that never closes.
+        return;
+    }
+    m_countdownLabel->show();
+    m_countdownLabel->setText(QStringLiteral("\u23F1 %1").arg(formatRemaining(budget)));
+
+    m_deadlineTimer = new QTimer(this);
+    m_deadlineTimer->setSingleShot(true);
+    connect(m_deadlineTimer, &QTimer::timeout, this, [this] {
+        // Record BEFORE closing: reject() runs the completion synchronously
+        // through finished(), which reads this to pick the reply word.
+        m_expired = true;
+        reject();
+    });
+
+    m_countdownTimer = new QTimer(this);
+    m_countdownTimer->setInterval(1000);
+    connect(m_countdownTimer, &QTimer::timeout, this, [this] {
+        const auto elapsed =
+            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - m_shownAt);
+        m_countdownLabel->setText(QStringLiteral("\u23F1 %1").arg(formatRemaining(m_entryBudget - elapsed)));
+    });
+}
+
+bool PromptDialog::expired() const
+{
+    return m_expired;
+}
+
+void PromptDialog::showEvent(QShowEvent* event)
+{
+    QDialog::showEvent(event);
+    if (m_deadlineTimer == nullptr || m_deadlineTimer->isActive()) {
+        return;
+    }
+    // The holder's time starts HERE, not when the request was marshalled: what
+    // elapses is exactly what they watch count down.
+    m_shownAt = std::chrono::steady_clock::now();
+    m_deadlineTimer->start(m_entryBudget);
+    m_countdownTimer->start();
 }
 
 void PromptDialog::announce()

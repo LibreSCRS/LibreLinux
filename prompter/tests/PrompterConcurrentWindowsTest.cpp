@@ -26,6 +26,7 @@
 #include "org.librescrs.Prompter1_proxy.h"
 
 #include <QApplication>
+#include <QLabel>
 #include <QTimer>
 
 #include <unistd.h> // getpid
@@ -38,6 +39,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <map>
@@ -86,6 +88,12 @@ std::map<std::string, sdbus::Variant> optionsWithId(const char* promptId)
     return {{wire::kOptPromptId, sdbus::Variant{std::string{promptId}}}};
 }
 
+std::map<std::string, sdbus::Variant> optionsWithDeadline(const char* promptId, std::uint32_t deadlineMs)
+{
+    return {{wire::kOptPromptId, sdbus::Variant{std::string{promptId}}},
+            {wire::kOptDeadlineMs, sdbus::Variant{deadlineMs}}};
+}
+
 // Pump the Qt event loop on THIS thread until @p pred holds or @p budget
 // elapses. The windows are raised by functors posted to this thread, so
 // spinning without pumping would wait for something that cannot happen.
@@ -127,11 +135,16 @@ struct DrivenRequest
 
     void start(const char* kind, const char* promptId)
     {
+        startWith(kind, optionsWithId(promptId));
+    }
+
+    void startWith(const char* kind, std::map<std::string, sdbus::Variant> options)
+    {
         connection = sdbus::createSessionBusConnection();
         connection->enterEventLoopAsync();
         client = std::make_unique<Prompter1Client>(*connection, kServiceName, kObjectPath);
-        driver = std::thread([this, kind, promptId] {
-            reply = client->RequestSecret(kind, optionsWithId(promptId));
+        driver = std::thread([this, kind, options = std::move(options)] {
+            reply = client->RequestSecret(kind, options);
             answered.store(true, std::memory_order_release);
         });
     }
@@ -314,4 +327,96 @@ int main(int argc, char** argv)
     QApplication app(argc, argv);
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();
+}
+
+// --- the window's own entry deadline ---------------------------------------
+
+TEST_F(PrompterConcurrentWindowsTest, ExpiryClosesOnlyTheWindowWhoseTimeRanOut)
+{
+    // Requirement: when the entry time expires, THAT window closes. A window
+    // left standing with nobody reading it is what the holder reported, and it
+    // is what the window's own clock is the belt against -- it closes even when
+    // the agent's dismissal never arrives.
+    DrivenRequest quick;
+    DrivenRequest slow;
+    quick.startWith(wire::kKindPin, optionsWithDeadline("nonce:quick", 120));
+    slow.startWith(wire::kKindMrz, optionsWithDeadline("nonce:slow", 60000));
+    ASSERT_TRUE(pumpUntil([] { return PrompterService::registryForTest().size() == 2; }, std::chrono::seconds{5}));
+
+    ASSERT_TRUE(pumpUntil([&] { return quick.answered.load(std::memory_order_acquire); }, std::chrono::seconds{5}))
+        << "the window never closed on its own deadline";
+    EXPECT_EQ(std::get<0>(quick.reply), wire::kStatusTimeout) << "expiry must not be reported as the holder cancelling";
+    EXPECT_FALSE(slow.answered.load(std::memory_order_acquire)) << "expiry closed a window whose time had not run out";
+    EXPECT_EQ(PrompterService::registryForTest().size(), 1u);
+
+    m_cancelClient->Cancel("nonce:slow");
+    static_cast<void>(
+        pumpUntil([&] { return slow.answered.load(std::memory_order_acquire); }, std::chrono::seconds{5}));
+    quick.join();
+    slow.join();
+}
+
+TEST_F(PrompterConcurrentWindowsTest, ADismissedWindowIsStillReportedAsCancelledNotExpired)
+{
+    DrivenRequest pin;
+    pin.startWith(wire::kKindPin, optionsWithDeadline("nonce:pin", 60000));
+    ASSERT_TRUE(pumpUntil([] { return PrompterService::registryForTest().size() == 1; }, std::chrono::seconds{5}));
+
+    m_cancelClient->Cancel("nonce:pin");
+    ASSERT_TRUE(pumpUntil([&] { return pin.answered.load(std::memory_order_acquire); }, std::chrono::seconds{5}));
+    EXPECT_EQ(std::get<0>(pin.reply), wire::kStatusCancelled);
+    pin.join();
+}
+
+TEST_F(PrompterConcurrentWindowsTest, AZeroDeadlineMeansNoDeadlineNotAnInstantExpiry)
+{
+    // 0 is the "unset" sentinel. A window that closed the moment it appeared
+    // would be worse than one that never closes.
+    DrivenRequest pin;
+    pin.startWith(wire::kKindPin, optionsWithDeadline("nonce:pin", 0));
+    ASSERT_TRUE(pumpUntil([] { return PrompterService::registryForTest().size() == 1; }, std::chrono::seconds{5}));
+
+    static_cast<void>(pumpUntil([] { return false; }, std::chrono::milliseconds{400}));
+    EXPECT_FALSE(pin.answered.load(std::memory_order_acquire)) << "a zero deadline expired the window instantly";
+
+    m_cancelClient->Cancel("nonce:pin");
+    static_cast<void>(pumpUntil([&] { return pin.answered.load(std::memory_order_acquire); }, std::chrono::seconds{5}));
+    pin.join();
+}
+
+TEST_F(PrompterConcurrentWindowsTest, ADeadlinedWindowShowsItsRemainingTime)
+{
+    // A window that vanishes mid-entry with no warning is the confusion this
+    // replaces, so the remaining time is on screen while it runs.
+    DrivenRequest pin;
+    pin.startWith(wire::kKindPin, optionsWithDeadline("nonce:pin", 65000));
+    ASSERT_TRUE(pumpUntil([] { return PrompterService::registryForTest().size() == 1; }, std::chrono::seconds{5}));
+
+    PromptDialog* window = windowNamed("nonce:pin");
+    ASSERT_NE(window, nullptr);
+    auto* countdown = window->findChild<QLabel*>(QStringLiteral("countdownLabel"));
+    ASSERT_NE(countdown, nullptr);
+    EXPECT_TRUE(countdown->isVisible());
+    EXPECT_TRUE(countdown->text().contains(QStringLiteral("1:05"))) << countdown->text().toStdString();
+
+    m_cancelClient->Cancel("nonce:pin");
+    static_cast<void>(pumpUntil([&] { return pin.answered.load(std::memory_order_acquire); }, std::chrono::seconds{5}));
+    pin.join();
+}
+
+TEST_F(PrompterConcurrentWindowsTest, AWindowWithNoDeadlineShowsNoCountdown)
+{
+    DrivenRequest pin;
+    pin.startWith(wire::kKindPin, optionsWithDeadline("nonce:pin", 0));
+    ASSERT_TRUE(pumpUntil([] { return PrompterService::registryForTest().size() == 1; }, std::chrono::seconds{5}));
+
+    PromptDialog* window = windowNamed("nonce:pin");
+    ASSERT_NE(window, nullptr);
+    auto* countdown = window->findChild<QLabel*>(QStringLiteral("countdownLabel"));
+    ASSERT_NE(countdown, nullptr);
+    EXPECT_FALSE(countdown->isVisible());
+
+    m_cancelClient->Cancel("nonce:pin");
+    static_cast<void>(pumpUntil([&] { return pin.answered.load(std::memory_order_acquire); }, std::chrono::seconds{5}));
+    pin.join();
 }

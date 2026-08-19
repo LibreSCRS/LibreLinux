@@ -16,6 +16,8 @@
 // test (~half a minute) — it is the only honest end-to-end proof.
 
 #include "PrompterClient.h"
+
+#include <LibreSCRS/Agent/operations/PromptPolicy.h>
 #include "org.librescrs.Prompter1_adaptor.h"
 
 #include "SealedMemfdCreator.h"
@@ -38,6 +40,16 @@
 #include <utility>
 
 using namespace LibreSCRS::Agent;
+
+// m-5: every prompt deadline must stay strictly BELOW the transport's own call
+// budget. If one ever exceeded it, the D-Bus call would time out FIRST and
+// leave the window standing with no consumer -- reproducing exactly the defect
+// the deadline exists to remove. Pinned here, beside the budget it constrains,
+// rather than left to whoever next edits a number.
+static_assert(LibreSCRS::Agent::Operations::kLongestDeadline <
+                  std::chrono::duration_cast<std::chrono::milliseconds>(
+                      LibreSCRS::Agent::PrompterClient::kDefaultInteractiveBudget),
+              "every prompt deadline must stay strictly below the interactive call budget");
 
 namespace {
 

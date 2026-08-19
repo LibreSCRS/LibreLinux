@@ -44,6 +44,13 @@ inline constexpr const char* kKindChangePin = "change_pin";
 // without touching this side. More than one credential window can stand at
 // once, which is why a dismissal has to name one.
 inline constexpr const char* kOptPromptId = "prompt_id";
+// How long the holder gets, from the moment the window is SHOWN. A DURATION in
+// milliseconds, not an absolute time, so the two processes need no shared clock
+// and transport latency is not charged to the human. Absent or 0 means "no
+// deadline set" -- a prompter must never read that as an instant expiry. The
+// prompter enforces it and closes its own window, so a window cannot be left
+// standing by a dismissal that never arrived.
+inline constexpr const char* kOptDeadlineMs = "deadline_ms";
 inline constexpr const char* kOptTitle = "title";
 inline constexpr const char* kOptDescription = "description";
 inline constexpr const char* kOptRequester = "requester";
@@ -113,6 +120,11 @@ inline constexpr const char* kStatusOk = "ok";
 // unknown status -- fail closed to an error, never as a successful CAN.
 inline constexpr const char* kStatusOkMrz = "ok_mrz";
 inline constexpr const char* kStatusCancelled = "cancelled";
+// The window closed itself because kOptDeadlineMs elapsed with no entry.
+// DISTINCT from kStatusCancelled on purpose: a holder who dismissed a dialog
+// and a holder whose time ran out did different things, and a client that
+// conflates them tells the second one they cancelled something.
+inline constexpr const char* kStatusTimeout = "timeout";
 inline constexpr const char* kStatusError = "error";
 // Returned to a caller that fails the prompter's binary-identity gate; pairs
 // with a zero-byte sealed memfd so no dialog shows and no secret can be
