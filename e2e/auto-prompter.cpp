@@ -235,6 +235,11 @@ private:
                 sdbus::UnixFd{sealedFd(std::string_view{replacement}), sdbus::adopt_fd}, std::string{}};
     }
 
+    void Reset() override
+    {
+        std::fprintf(stderr, "[auto-prompter] Reset (no-op)\n");
+    }
+
     uint32_t ProtocolVersion() override
     {
         return LibreLinux::PrompterWire::kProtocolVersion;

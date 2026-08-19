@@ -164,6 +164,13 @@ void EnvPrompterService::RequestSecrets(sdbus::Result<std::string, sdbus::UnixFd
     result.returnResults(std::get<0>(reply), std::get<1>(reply), std::get<2>(reply), std::get<3>(reply));
 }
 
+void EnvPrompterService::Reset()
+{
+    // Nothing to sweep -- this prompter raises no windows. Still gate on caller
+    // identity for parity with the production contract.
+    (void)authorizeCaller("Reset");
+}
+
 uint32_t EnvPrompterService::ProtocolVersion()
 {
     return PrompterWire::kProtocolVersion;

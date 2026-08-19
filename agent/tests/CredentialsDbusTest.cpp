@@ -116,6 +116,9 @@ private:
         result.returnResults(std::string{"ok"}, sdbus::UnixFd{makeSealedMemfd("111111"), sdbus::adopt_fd},
                              sdbus::UnixFd{makeSealedMemfd("222222"), sdbus::adopt_fd}, std::string{});
     }
+    // No window is raised here, so the startup sweep has nothing to do.
+    void Reset() override {}
+
     // On the same contract as the production prompter, so an agent driving this
     // mock is not refused by the capability guard.
     uint32_t ProtocolVersion() override

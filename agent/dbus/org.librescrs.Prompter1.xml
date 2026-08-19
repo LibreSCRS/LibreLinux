@@ -163,6 +163,27 @@
       whose version is below what the agent needs is refused loudly, never
       emulated: there is no compatibility shim.
     -->
+    <!--
+      Close EVERY window this helper is showing, whoever raised it. The agent
+      calls it once at startup: a helper outlives an agent restart, and the new
+      agent can neither answer nor dismiss windows its predecessor raised, so a
+      holder would watch a dead dialog count down for the rest of its entry time.
+
+      Deliberately NOT gated on per-window ownership, unlike Cancel: an orphan's
+      owner is a process that no longer exists, so a per-owner sweep would clear
+      nothing. The binary-identity gate still applies.
+
+      Each closed window answers its own caller with status = "cancelled".
+      Idempotent: resetting an idle helper is a no-op.
+
+      This is a cleanup, not a guarantee. On the one upgrade where orphans are
+      most likely the running helper is the OLD one, which understands neither
+      this method nor Cancel; there the call simply fails and the version guard
+      refuses new prompts. Each window's own entry deadline remains the only
+      universal backstop.
+    -->
+    <method name="Reset"/>
+
     <property name="ProtocolVersion" type="u" access="read"/>
 
     <method name="Cancel">

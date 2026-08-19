@@ -505,6 +505,39 @@ pid_t PrompterService::authorizeCaller(const char* method)
     return callerPid;
 }
 
+void PrompterService::dismissEveryWindowOnGuiThread() noexcept
+{
+    // Runs on the Qt main thread, like every other window action. The entries
+    // are LEFT in place: each window's reject() emits finished, and that
+    // completion is the one path that takes its entry and answers it.
+    for (const auto handle : registry().handles()) {
+        if (const auto entry = registry().find(handle)) {
+            QMetaObject::invokeMethod(entry->window, "reject", Qt::QueuedConnection);
+        }
+    }
+}
+
+void PrompterService::Reset()
+{
+    // Binary-identity gate only. NOT the per-window owner gate: an orphan's
+    // owner is a process that no longer exists, so requiring ownership would
+    // clear exactly the windows this exists to clear.
+    if (authorizeCaller("Reset") == 0) {
+        return;
+    }
+    auto* app = QCoreApplication::instance();
+    if (app == nullptr || QThread::currentThread() == app->thread()) {
+        dismissEveryWindowOnGuiThread();
+        return;
+    }
+    static_cast<void>(postToMain(app, [] { dismissEveryWindowOnGuiThread(); }));
+}
+
+void PrompterService::resetForTest() noexcept
+{
+    dismissEveryWindowOnGuiThread();
+}
+
 uint32_t PrompterService::ProtocolVersion()
 {
     return PrompterWire::kProtocolVersion;

@@ -312,6 +312,21 @@ void PrompterClient::cancel(const std::string& promptId) noexcept
     }
 }
 
+void PrompterClient::resetPrompter() noexcept
+{
+    try {
+        auto connection = sdbus::createSessionBusConnection();
+        Impl resetter(*connection, m_serviceName, m_objectPath);
+        resetter.Reset();
+    } catch (const sdbus::Error& e) {
+        log::warnf("PrompterClient: Reset failed: {}", e.getMessage());
+    } catch (const std::exception& e) {
+        log::warnf("PrompterClient: Reset threw: {}", e.what());
+    } catch (...) {
+        log::warn("PrompterClient: Reset failed with unknown exception");
+    }
+}
+
 bool PrompterClient::prompterIsUsable()
 {
     const std::lock_guard lock{m_capabilityMutex};

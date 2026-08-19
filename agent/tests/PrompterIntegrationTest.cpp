@@ -148,6 +148,11 @@ public:
         const std::lock_guard lock{m_mutex};
         m_reportedVersion = version;
     }
+    int resets() const
+    {
+        const std::lock_guard lock{m_mutex};
+        return m_resets;
+    }
     int protocolVersionReads() const
     {
         const std::lock_guard lock{m_mutex};
@@ -221,6 +226,13 @@ private:
                                std::string{"RequestSecrets not scripted in this mock"});
     }
 
+    // No window is raised here, so the startup sweep has nothing to do.
+    void Reset() override
+    {
+        const std::lock_guard lock{m_mutex};
+        ++m_resets;
+    }
+
     // On the same contract as the production prompter, so an agent driving this
     // mock is not refused by the capability guard. Scriptable so a test can
     // model the older helper that outlived its agent.
@@ -254,6 +266,7 @@ private:
     std::vector<std::string> m_cancelledIds;
     std::uint32_t m_reportedVersion{LibreLinux::PrompterWire::kProtocolVersion};
     int m_versionReads{0};
+    int m_resets{0};
 };
 
 // Test fixture: spins up a fresh server + client connection per test so each
@@ -906,4 +919,13 @@ TEST_F(PrompterIntegrationTest, TheVersionIsReadOnceRatherThanBeforeEveryPrompt)
     static_cast<void>(m_client->requestCan(PromptOptions{}));
 
     EXPECT_EQ(m_mock->protocolVersionReads(), 1);
+}
+
+TEST_F(PrompterIntegrationTest, TheAgentSweepsTheHelperOnceWhenItStarts)
+{
+    // Modelled at the client seam rather than through AgentService: what has to
+    // hold is that the call exists, lands, and is issued once.
+    EXPECT_EQ(m_mock->resets(), 0);
+    m_client->resetPrompter();
+    EXPECT_EQ(m_mock->resets(), 1);
 }

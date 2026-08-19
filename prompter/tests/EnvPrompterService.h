@@ -90,6 +90,9 @@ private:
 
     // On the same contract as the production prompter, so an agent driving this
     // harness is not refused by the capability guard.
+    // No window is ever raised here, so there is nothing to sweep.
+    void Reset() override;
+
     uint32_t ProtocolVersion() override;
 
     // Resolves the in-flight caller's PID and checks it against the expected

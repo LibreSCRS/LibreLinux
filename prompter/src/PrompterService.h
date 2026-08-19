@@ -59,6 +59,10 @@ public:
     // Same code path Cancel() takes past the authorisation gate.
     static void cancelForTest(const std::string& promptId) noexcept;
 
+    // Test seam: sweep every window without a D-Bus round trip. Same code path
+    // Reset() takes past the authorisation gate.
+    static void resetForTest() noexcept;
+
     // Test seam: the live-window registry, so a test can assert which windows
     // stand without a display server or a second process.
     [[nodiscard]] static PromptRegistry& registryForTest() noexcept;
@@ -96,9 +100,15 @@ private:
     // The agent reads it once and refuses to raise a prompt it could not
     // dismiss -- this helper outlives agent restarts, so a mismatch is routine
     // rather than exotic.
+    // Close every window this helper is showing, whoever raised it -- an
+    // orphan's owner is a process that no longer exists, so a per-owner sweep
+    // would clear nothing. The binary-identity gate still applies.
+    void Reset() override;
+
     uint32_t ProtocolVersion() override;
 
     static void dismissOnGuiThread(const std::string& promptId, pid_t callerPid) noexcept;
+    static void dismissEveryWindowOnGuiThread() noexcept;
 
     // Resolve the in-flight D-Bus caller's PID from the message credentials,
     // then verify the backing executable is the expected agent binary.

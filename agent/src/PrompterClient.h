@@ -67,6 +67,14 @@ public:
     // Exceptions from the bus call are logged and swallowed.
     void cancel(const std::string& promptId) noexcept override;
 
+    // Ask the helper to close every window it is showing. Called ONCE at agent
+    // startup: the helper outlives an agent restart, and this agent can neither
+    // answer nor dismiss the windows its predecessor raised, so a holder would
+    // otherwise watch a dead dialog count down for the rest of its entry time.
+    // Best-effort and noexcept -- an older helper does not have the method, and
+    // the version guard refuses new prompts in that case anyway.
+    void resetPrompter() noexcept;
+
 private:
     // Single point of contact with the generated proxy; the public requestX
     // wrappers forward the kind discriminator unchanged.

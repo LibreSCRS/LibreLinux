@@ -134,6 +134,9 @@ private:
                                std::string{"RequestSecrets not scripted in this mock"});
     }
 
+    // No window is raised here, so the startup sweep has nothing to do.
+    void Reset() override {}
+
     // On the same contract as the production prompter, so an agent driving this
     // mock is not refused by the capability guard.
     uint32_t ProtocolVersion() override

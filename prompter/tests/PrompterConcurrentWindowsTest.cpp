@@ -420,3 +420,38 @@ TEST_F(PrompterConcurrentWindowsTest, AWindowWithNoDeadlineShowsNoCountdown)
     static_cast<void>(pumpUntil([&] { return pin.answered.load(std::memory_order_acquire); }, std::chrono::seconds{5}));
     pin.join();
 }
+
+// --- clearing orphans an earlier agent left behind --------------------------
+
+TEST_F(PrompterConcurrentWindowsTest, TheSweepClosesEveryStandingWindow)
+{
+    // Owner-INDEPENDENCE is not observable here: everything in this process
+    // shares one PID, so an owner-gated sweep would pass this case. That claim
+    // is pinned where it can be -- PromptRegistry::handles() over entries with
+    // different owners (PromptRegistryTest). What this shows is the sweep
+    // reaching several standing windows over the real bus.
+    DrivenRequest pin;
+    DrivenRequest can;
+    pin.start(wire::kKindPin, "nonce:pin");
+    can.start(wire::kKindCan, "nonce:can");
+    ASSERT_TRUE(pumpUntil([] { return PrompterService::registryForTest().size() == 2; }, std::chrono::seconds{5}));
+
+    m_cancelClient->Reset();
+
+    ASSERT_TRUE(pumpUntil(
+        [&] { return pin.answered.load(std::memory_order_acquire) && can.answered.load(std::memory_order_acquire); },
+        std::chrono::seconds{5}))
+        << "a window survived the sweep";
+    EXPECT_TRUE(PrompterService::registryForTest().empty());
+    EXPECT_EQ(std::get<0>(pin.reply), wire::kStatusCancelled);
+    EXPECT_EQ(std::get<0>(can.reply), wire::kStatusCancelled);
+    pin.join();
+    can.join();
+}
+
+TEST_F(PrompterConcurrentWindowsTest, SweepingAnIdleHelperIsASilentNoOp)
+{
+    EXPECT_NO_THROW(m_cancelClient->Reset());
+    EXPECT_NO_THROW(m_cancelClient->Reset());
+    EXPECT_TRUE(PrompterService::registryForTest().empty());
+}

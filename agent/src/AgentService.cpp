@@ -270,6 +270,13 @@ bool AgentService::registerOnBus()
         // crypto seams co-own, so a zombie worker's in-flight call stays valid.
         m_prompter = std::make_shared<PrompterClient>();
 
+        // Clear windows a PREVIOUS agent left behind. The helper outlives an
+        // agent restart and this process can neither answer nor dismiss its
+        // predecessor's prompts, so without this the holder watches a dead
+        // dialog count down. Best-effort: an older helper has no such method,
+        // and the capability guard refuses to raise prompts on one anyway.
+        m_prompter->resetPrompter();
+
         // [2] The slim AgentTransport wire. Built with NO registry: the core
         // registry it observes lives INSIDE m_core (constructed next), so the
         // registry->transport observers are wired below via observePresenceFrom

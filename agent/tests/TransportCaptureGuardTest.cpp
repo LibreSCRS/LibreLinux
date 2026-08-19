@@ -166,3 +166,18 @@ TEST(TransportTeardownGuard, QuiesceStopsInboundBeforeSeveringObservers)
     EXPECT_LT(stopPos, severPos) << "the inbound monitor must be stopped before the core observers are severed";
     EXPECT_LT(severPos, cancelPos) << "the observers must be severed before the pending prompt is cancelled";
 }
+
+// Startup guard: the agent must sweep the helper's orphan windows when it comes
+// up. A helper outlives an agent restart, so without this a holder watches a
+// dead dialog from the previous life count down for the rest of its entry time.
+TEST(AgentStartupGuard, TheAgentSweepsThePrompterWhenItStarts)
+{
+    const std::string src = slurp(LIBRELINUX_AGENTSERVICE_CPP);
+    ASSERT_FALSE(src.empty()) << "AgentService source path not wired";
+
+    const auto constructPos = src.find("std::make_shared<PrompterClient>()");
+    const auto resetPos = src.find("m_prompter->resetPrompter()");
+    ASSERT_NE(constructPos, std::string::npos);
+    ASSERT_NE(resetPos, std::string::npos) << "the agent never clears the helper's orphan windows at startup";
+    EXPECT_LT(constructPos, resetPos) << "the sweep must follow the client it is issued through";
+}
