@@ -87,8 +87,17 @@ public:
     }
 
 private:
+    void RequestSecret(sdbus::Result<std::string, sdbus::UnixFd, std::string>&& result, std::string kind,
+                       std::map<std::string, sdbus::Variant> options) override
+    {
+        // No window is raised here, so the reply is built and sent at once;
+        // the adaptor is asynchronous for the production prompter's sake.
+        auto reply = buildSecretReply(kind, options);
+        result.returnResults(std::get<0>(reply), std::get<1>(reply), std::get<2>(reply));
+    }
+
     std::tuple<std::string, sdbus::UnixFd, std::string>
-    RequestSecret(const std::string& /*kind*/, const std::map<std::string, sdbus::Variant>& /*options*/) override
+    buildSecretReply(const std::string& /*kind*/, const std::map<std::string, sdbus::Variant>& /*options*/)
     {
         // Blocking the adaptor's event-loop thread is exactly the shape of a
         // modal dialog waiting on the user.
@@ -97,8 +106,15 @@ private:
                                std::string{});
     }
 
+    void RequestSecrets(sdbus::Result<std::string, sdbus::UnixFd, sdbus::UnixFd, std::string>&& result,
+                        std::string kind, std::map<std::string, sdbus::Variant> options) override
+    {
+        auto reply = buildSecretsReply(kind, options);
+        result.returnResults(std::get<0>(reply), std::get<1>(reply), std::get<2>(reply), std::get<3>(reply));
+    }
+
     std::tuple<std::string, sdbus::UnixFd, sdbus::UnixFd, std::string>
-    RequestSecrets(const std::string& /*kind*/, const std::map<std::string, sdbus::Variant>& /*options*/) override
+    buildSecretsReply(const std::string& /*kind*/, const std::map<std::string, sdbus::Variant>& /*options*/)
     {
         return std::make_tuple(std::string{"error"}, sdbus::UnixFd{makeSealedFd(""), sdbus::adopt_fd},
                                sdbus::UnixFd{makeSealedFd(""), sdbus::adopt_fd},

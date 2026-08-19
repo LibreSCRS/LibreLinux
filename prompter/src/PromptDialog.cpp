@@ -11,6 +11,7 @@
 
 #include <KLocalizedString>
 
+#include <QApplication>
 #include <QDialogButtonBox>
 #include <QFontMetrics>
 #include <QGroupBox>
@@ -174,9 +175,13 @@ PromptDialog::PromptDialog(Kind kind, const Options& opts, QWidget* parent, Chan
         m_changePinWidget = static_cast<ChangePinInputWidget*>(m_widget);
     }
     setWindowTitle(opts.title.isEmpty() ? defaultTitle(kind) : opts.title);
-    // Modal application-wide: this is a credentials prompt; it MUST take
-    // input focus and block the requesting flow until resolved.
-    setModal(true);
+    // NOT modal, and it does not take focus. Two readers can drive two
+    // credential prompts at once, so an application-modal window would stack
+    // the second behind the first, and one that grabbed focus would collect the
+    // remaining digits of a PIN being typed into the other card's field.
+    setModal(false);
+    setWindowModality(Qt::NonModal);
+    setAttribute(Qt::WA_ShowWithoutActivating, true);
 
     buildLayout(opts);
     wireValidity();
@@ -345,6 +350,19 @@ void PromptDialog::wireValidity()
     // would touch the freed button; scoping it to the button severs it first.
     connect(m_widget, &InputWidgetBase::validityChanged, okButton,
             [this, okButton]() { okButton->setEnabled(m_widget->isValid()); });
+}
+
+void PromptDialog::announce()
+{
+    ++m_announcements;
+    // A taskbar/urgency hint, not an activation: it asks to be noticed without
+    // stealing what the holder is typing.
+    QApplication::alert(this);
+}
+
+int PromptDialog::announcementsRequested() const
+{
+    return m_announcements;
 }
 
 bool PromptDialog::mrzChosen() const

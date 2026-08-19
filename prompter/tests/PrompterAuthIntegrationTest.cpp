@@ -172,10 +172,22 @@ void fillMrzSpecimen(QWidget& root)
     expiry->setDate(kSpecimenDateOfExpiry);
 }
 
-// True once the prompter has published a live dialog.
+// True once the prompter has a live window registered.
 bool dialogIsLive()
 {
-    return LibreLinux::Prompter::PrompterService::s_activeDialog.load() != nullptr;
+    return !LibreLinux::Prompter::PrompterService::registryForTest().empty();
+}
+
+// The single live window, or nullptr. These cases raise exactly one at a time.
+LibreLinux::Prompter::PromptDialog* liveDialog()
+{
+    auto& reg = LibreLinux::Prompter::PrompterService::registryForTest();
+    const auto handles = reg.handles();
+    if (handles.empty()) {
+        return nullptr;
+    }
+    const auto entry = reg.find(handles.front());
+    return entry ? entry->window : nullptr;
 }
 
 // Spin until @p pred() holds or @p budget elapses; returns pred()'s final value.
@@ -228,10 +240,9 @@ protected:
         m_clientConn->leaveEventLoop();
         m_service.reset();
         m_serverConn->leaveEventLoop();
-        // Defensive: a failed authorized-path test could leave the static slots
-        // populated; reset so subsequent cases start clean.
-        LibreLinux::Prompter::PrompterService::s_activeDialog.store(nullptr);
-        LibreLinux::Prompter::PrompterService::s_activeOwnerPid.store(0);
+        // Defensive: a failed authorized-path case could leave a window
+        // registered; clear so subsequent cases start clean.
+        static_cast<void>(LibreLinux::Prompter::PrompterService::registryForTest().takeAll());
         ::unsetenv(kPeerEnv);
     }
 
@@ -257,7 +268,7 @@ protected:
             if (!spinUntil(dialogIsLive, std::chrono::seconds{10})) {
                 return; // no dialog appeared; the caller's assertions fail below
             }
-            auto* dlg = LibreLinux::Prompter::PrompterService::s_activeDialog.load();
+            auto* dlg = liveDialog();
             if (dlg != nullptr) {
                 QMetaObject::invokeMethod(dlg, [dlg, &onDialog]() { onDialog(dlg); }, Qt::QueuedConnection);
             }
@@ -309,8 +320,8 @@ TEST_F(PrompterAuthIntegrationTest, UnauthorizedRequestSecretReturnsZeroByteUnau
     EXPECT_EQ(status, "unauthorized") << "a non-agent caller must be rejected";
     ASSERT_GE(fd, 0) << "the wire signature still carries a real fd";
     EXPECT_EQ(fdSize(fd), 0) << "the rejection fd must be a zero-byte sealed memfd (no secret)";
-    EXPECT_EQ(LibreLinux::Prompter::PrompterService::s_activeDialog.load(), nullptr)
-        << "no dialog may be constructed for an unauthorized caller";
+    EXPECT_TRUE(LibreLinux::Prompter::PrompterService::registryForTest().empty())
+        << "no window may be constructed for an unauthorized caller";
 }
 
 // --- Authorized RequestSecret, unrecognized kind --------------------------
@@ -328,10 +339,10 @@ TEST_F(PrompterAuthIntegrationTest, AuthorizedRequestSecretUnknownKindReturnsErr
     ASSERT_GE(std::get<1>(result).get(), 0) << "the wire signature still carries a real fd";
     EXPECT_EQ(fdSize(std::get<1>(result).get()), 0) << "no secret bytes for an unknown kind";
     EXPECT_TRUE(std::get<2>(result).empty()) << "user_message must not carry a bare English literal";
-    EXPECT_EQ(LibreLinux::Prompter::PrompterService::s_activeDialog.load(), nullptr) << "no dialog for an unknown kind";
+    EXPECT_TRUE(LibreLinux::Prompter::PrompterService::registryForTest().empty()) << "no window for an unknown kind";
 }
 
-// --- Unauthorized CancelCurrent -------------------------------------------
+// --- Unauthorized dismissal -----------------------------------------------
 
 TEST_F(PrompterAuthIntegrationTest, UnauthorizedCancelCurrentIsRejectedNoop)
 {
@@ -349,8 +360,8 @@ TEST_F(PrompterAuthIntegrationTest, UnauthorizedCancelCurrentIsRejectedNoop)
 
     EXPECT_NO_THROW(m_cancelClient->Cancel("nonce:unauthorized"))
         << "an unauthorized dismissal must be a clean no-op, never an error";
-    EXPECT_EQ(LibreLinux::Prompter::PrompterService::s_activeDialog.load(), nullptr);
-    EXPECT_EQ(LibreLinux::Prompter::PrompterService::s_activeOwnerPid.load(), 0);
+    EXPECT_TRUE(LibreLinux::Prompter::PrompterService::registryForTest().empty());
+    EXPECT_EQ(LibreLinux::Prompter::PrompterService::registryForTest().size(), 0u);
 }
 
 // --- Authorized caller -----------------------------------------------------
@@ -386,9 +397,15 @@ TEST_F(PrompterAuthIntegrationTest, AuthorizedRequestSecretRunsDialogWithCallerA
         if (!spinUntil(dialogIsLive, std::chrono::seconds{10})) {
             return; // dialog never appeared; main asserts on sawDialog==false
         }
-        // A live dialog proves the authorized path reached UI construction;
-        // capture the owner PID the prompter recorded for the in-flight prompt.
-        ownerWhileLive.store(LibreLinux::Prompter::PrompterService::s_activeOwnerPid.load());
+        // A live window proves the authorized path reached UI construction;
+        // capture the owner PID the prompter recorded for it.
+        auto& reg = LibreLinux::Prompter::PrompterService::registryForTest();
+        const auto handles = reg.handles();
+        if (!handles.empty()) {
+            if (const auto entry = reg.find(handles.front())) {
+                ownerWhileLive.store(entry->ownerPid);
+            }
+        }
         sawDialog.store(true);
         // Unwind the in-flight RequestSecret. A bus-issued CancelCurrent cannot
         // be processed here: the single sd-bus dispatcher thread is blocked
@@ -424,8 +441,8 @@ TEST_F(PrompterAuthIntegrationTest, AuthorizedRequestSecretRunsDialogWithCallerA
         << "the in-flight prompt's owner PID must be the caller's (this process)";
     EXPECT_NE(status, "unauthorized") << "an authorized caller must reach the dialog, not the auth-reject path";
     // Slots cleared after the dialog unwinds.
-    EXPECT_EQ(LibreLinux::Prompter::PrompterService::s_activeDialog.load(), nullptr);
-    EXPECT_EQ(LibreLinux::Prompter::PrompterService::s_activeOwnerPid.load(), 0);
+    EXPECT_TRUE(LibreLinux::Prompter::PrompterService::registryForTest().empty());
+    EXPECT_EQ(LibreLinux::Prompter::PrompterService::registryForTest().size(), 0u);
 }
 
 // --- The alternative-kind opt-in and the status it can mint -----------------

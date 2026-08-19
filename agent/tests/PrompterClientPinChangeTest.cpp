@@ -137,8 +137,15 @@ private:
         return sealed ? makeSealedFd(bytes) : makeUnsealedFd(bytes);
     }
 
+    void RequestSecrets(sdbus::Result<std::string, sdbus::UnixFd, sdbus::UnixFd, std::string>&& result,
+                        std::string kind, std::map<std::string, sdbus::Variant> options) override
+    {
+        auto reply = buildSecretsReply(kind, options);
+        result.returnResults(std::get<0>(reply), std::get<1>(reply), std::get<2>(reply), std::get<3>(reply));
+    }
+
     std::tuple<std::string, sdbus::UnixFd, sdbus::UnixFd, std::string>
-    RequestSecrets(const std::string& kind, const std::map<std::string, sdbus::Variant>& options) override
+    buildSecretsReply(const std::string& kind, const std::map<std::string, sdbus::Variant>& options)
     {
         MultiBehavior behavior;
         {
@@ -161,8 +168,17 @@ private:
 
     // Single-secret variant — not scripted by this suite; a fixed "error" reply
     // with the zero-byte no-secret encoding satisfies the adaptor's pure virtual.
+    void RequestSecret(sdbus::Result<std::string, sdbus::UnixFd, std::string>&& result, std::string kind,
+                       std::map<std::string, sdbus::Variant> options) override
+    {
+        // No window is raised here, so the reply is built and sent at once;
+        // the adaptor is asynchronous for the production prompter's sake.
+        auto reply = buildSecretReply(kind, options);
+        result.returnResults(std::get<0>(reply), std::get<1>(reply), std::get<2>(reply));
+    }
+
     std::tuple<std::string, sdbus::UnixFd, std::string>
-    RequestSecret(const std::string& /*kind*/, const std::map<std::string, sdbus::Variant>& /*options*/) override
+    buildSecretReply(const std::string& /*kind*/, const std::map<std::string, sdbus::Variant>& /*options*/)
     {
         return std::make_tuple(std::string{"error"}, sdbus::UnixFd{makeSealedFd(""), sdbus::adopt_fd},
                                std::string{"RequestSecret not scripted in this mock"});

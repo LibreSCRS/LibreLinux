@@ -136,8 +136,17 @@ public:
     FakePrompterService& operator=(FakePrompterService&&) = delete;
 
 private:
+    void RequestSecret(sdbus::Result<std::string, sdbus::UnixFd, std::string>&& result, std::string kind,
+                       std::map<std::string, sdbus::Variant> options) override
+    {
+        // No window is raised here, so the reply is built and sent at once;
+        // the adaptor is asynchronous for the production prompter's sake.
+        auto reply = buildSecretReply(kind, options);
+        result.returnResults(std::get<0>(reply), std::get<1>(reply), std::get<2>(reply));
+    }
+
     std::tuple<std::string, sdbus::UnixFd, std::string>
-    RequestSecret(const std::string& /*kind*/, const std::map<std::string, sdbus::Variant>& /*options*/) override
+    buildSecretReply(const std::string& /*kind*/, const std::map<std::string, sdbus::Variant>& /*options*/)
     {
         const int fd = makeSealedMemfd("111111");
         return std::make_tuple(std::string{"ok"}, sdbus::UnixFd{fd, sdbus::adopt_fd}, std::string{});
@@ -147,8 +156,15 @@ private:
     // "111111" as the current secret (matching RequestSecret above) and
     // "222222" as the new one — so broker-side suites can drive the full
     // change flow against deterministic prompter output.
+    void RequestSecrets(sdbus::Result<std::string, sdbus::UnixFd, sdbus::UnixFd, std::string>&& result,
+                        std::string kind, std::map<std::string, sdbus::Variant> options) override
+    {
+        auto reply = buildSecretsReply(kind, options);
+        result.returnResults(std::get<0>(reply), std::get<1>(reply), std::get<2>(reply), std::get<3>(reply));
+    }
+
     std::tuple<std::string, sdbus::UnixFd, sdbus::UnixFd, std::string>
-    RequestSecrets(const std::string& /*kind*/, const std::map<std::string, sdbus::Variant>& /*options*/) override
+    buildSecretsReply(const std::string& /*kind*/, const std::map<std::string, sdbus::Variant>& /*options*/)
     {
         const int primary = makeSealedMemfd("111111");
         const int secondary = makeSealedMemfd("222222");

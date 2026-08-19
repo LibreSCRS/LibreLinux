@@ -30,28 +30,3 @@ TEST(PrompterCancel, CancelNamingNoLivePromptIsNoop)
     LibreLinux::Prompter::PrompterService::cancelForTest("");
     SUCCEED();
 }
-
-// --- addressing ------------------------------------------------------------
-//
-// The id counterpart of the ownership gate, unit-tested for the same reason it
-// was factored out: dismissing the wrong window is invisible in a bus test that
-// only ever has one dialog, and is exactly the failure this replaces.
-
-TEST(PrompterCancel, ADismissalMatchingTheLivePromptIsAccepted)
-{
-    EXPECT_TRUE(LibreLinux::Prompter::PrompterService::isNamedPrompt("nonce:7", "nonce:7"));
-}
-
-TEST(PrompterCancel, ADismissalNamingADifferentPromptIsRefused)
-{
-    EXPECT_FALSE(LibreLinux::Prompter::PrompterService::isNamedPrompt("nonce:7", "nonce:8"));
-}
-
-TEST(PrompterCancel, AnUnaddressablePromptIsNeverDismissedByName)
-{
-    // A caller that sent no id left nothing to distinguish its window from any
-    // other; refusing is correct, and a prompt in that state is what the
-    // capability guard exists to stop being raised at all.
-    EXPECT_FALSE(LibreLinux::Prompter::PrompterService::isNamedPrompt("", ""));
-    EXPECT_FALSE(LibreLinux::Prompter::PrompterService::isNamedPrompt("", "nonce:7"));
-}

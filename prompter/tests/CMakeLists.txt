@@ -48,6 +48,8 @@ qt_add_executable(PrompterCancelTest
     PrompterCancelTest.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/PrompterService.h
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/PrompterService.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/PromptRegistry.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/PromptRegistry.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/CallerAuthorizer.h
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/CallerAuthorizer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/PromptDialog.h
@@ -162,6 +164,8 @@ qt_add_executable(PrompterAuthIntegrationTest
     PrompterAuthIntegrationTest.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/PrompterService.h
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/PrompterService.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/PromptRegistry.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/PromptRegistry.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/CallerAuthorizer.h
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/CallerAuthorizer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/PromptDialog.h
@@ -367,6 +371,8 @@ qt_add_executable(PrompterMultiFieldTest
     PrompterMultiFieldTest.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/PrompterService.h
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/PrompterService.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/PromptRegistry.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/PromptRegistry.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/CallerAuthorizer.h
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/CallerAuthorizer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/PromptDialog.h
@@ -520,3 +526,70 @@ target_link_libraries(EnvPrompterServiceTest PRIVATE
 # needed at all — every call in this prompter is synchronous.
 add_test(NAME EnvPrompterServiceTest
     COMMAND ${DBUS_RUN_SESSION} -- $<TARGET_FILE:EnvPrompterServiceTest>)
+
+# The credential-window registry: pure addressing rules, no bus and no display.
+add_executable(PromptRegistryTest
+    PromptRegistryTest.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/PromptRegistry.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/PromptRegistry.cpp)
+
+target_include_directories(PromptRegistryTest PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src)
+
+target_link_libraries(PromptRegistryTest PRIVATE
+    GTest::gtest
+    GTest::gtest_main)
+
+add_test(NAME PromptRegistryTest COMMAND PromptRegistryTest)
+
+# Two credential windows at once, over a real bus: the case the whole redesign
+# exists for. Reuses the same PrompterService sources the daemon compiles, and
+# provides its own main() so the widgets get a QApplication.
+qt_add_executable(PrompterConcurrentWindowsTest
+    PrompterConcurrentWindowsTest.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/PrompterService.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/PrompterService.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/PromptRegistry.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/PromptRegistry.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/CallerAuthorizer.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/CallerAuthorizer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/PromptDialog.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/PromptDialog.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/InputWidgetBase.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/InputWidgetBase.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/PinInputWidget.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/PinInputWidget.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/CanInputWidget.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/CanInputWidget.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/MrzInputWidget.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/MrzInputWidget.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/ChangePinInputWidget.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/ChangePinInputWidget.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/SecretMemfd.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/SecretMemfd.cpp
+    ${_gen_header}
+    ${_test_prompter_proxy})
+
+target_include_directories(PrompterConcurrentWindowsTest PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src
+    ${_gen_dir}
+    ${_test_gen_dir})
+
+target_compile_definitions(PrompterConcurrentWindowsTest PRIVATE
+    LIBRELINUX_TESTING
+    LIBRESCRS_AGENT_BINARY_PATH="${LIBRESCRS_AGENT_BINARY_PATH}")
+
+target_link_libraries(PrompterConcurrentWindowsTest PRIVATE
+    Qt6::Core
+    Qt6::Gui
+    Qt6::Widgets
+    Qt6::Test
+    KF6::I18n
+    SDBusCpp::sdbus-c++
+    LibreMiddleware::Secure
+    GTest::gtest)
+
+add_test(NAME PrompterConcurrentWindowsTest
+    COMMAND ${DBUS_RUN_SESSION} -- $<TARGET_FILE:PrompterConcurrentWindowsTest>)
+set_tests_properties(PrompterConcurrentWindowsTest PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")

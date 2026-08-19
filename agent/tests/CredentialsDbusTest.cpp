@@ -101,17 +101,19 @@ public:
     FakePrompterService& operator=(FakePrompterService&&) = delete;
 
 private:
-    std::tuple<std::string, sdbus::UnixFd, std::string>
-    RequestSecret(const std::string&, const std::map<std::string, sdbus::Variant>&) override
+    // Asynchronous on the server side (the production prompter returns while
+    // its window stands); this fake raises none, so it answers at once.
+    void RequestSecret(sdbus::Result<std::string, sdbus::UnixFd, std::string>&& result, std::string,
+                       std::map<std::string, sdbus::Variant>) override
     {
-        return std::make_tuple(std::string{"ok"}, sdbus::UnixFd{makeSealedMemfd("111111"), sdbus::adopt_fd},
-                               std::string{});
+        result.returnResults(std::string{"ok"}, sdbus::UnixFd{makeSealedMemfd("111111"), sdbus::adopt_fd},
+                             std::string{});
     }
-    std::tuple<std::string, sdbus::UnixFd, sdbus::UnixFd, std::string>
-    RequestSecrets(const std::string&, const std::map<std::string, sdbus::Variant>&) override
+    void RequestSecrets(sdbus::Result<std::string, sdbus::UnixFd, sdbus::UnixFd, std::string>&& result, std::string,
+                        std::map<std::string, sdbus::Variant>) override
     {
-        return std::make_tuple(std::string{"ok"}, sdbus::UnixFd{makeSealedMemfd("111111"), sdbus::adopt_fd},
-                               sdbus::UnixFd{makeSealedMemfd("222222"), sdbus::adopt_fd}, std::string{});
+        result.returnResults(std::string{"ok"}, sdbus::UnixFd{makeSealedMemfd("111111"), sdbus::adopt_fd},
+                             sdbus::UnixFd{makeSealedMemfd("222222"), sdbus::adopt_fd}, std::string{});
     }
     void Cancel(const std::string& promptId) override
     {

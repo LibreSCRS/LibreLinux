@@ -61,6 +61,8 @@ qt_add_executable(librescrs-pinentry-kde
     src/PromptDialog.cpp
     src/PrompterService.h
     src/PrompterService.cpp
+    src/PromptRegistry.h
+    src/PromptRegistry.cpp
     src/CallerAuthorizer.h
     src/CallerAuthorizer.cpp
     src/SecretMemfd.h

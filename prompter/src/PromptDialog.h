@@ -33,7 +33,11 @@ class InputWidgetBase;
 /// afterwards via @ref takeSecretFdPair. The confirm entry never leaves the
 /// dialog — @ref SecretFdPair deliberately has no third slot.
 ///
-/// External cancellation contract: PrompterService::CancelCurrent dispatches
+/// Non-modal by design (see the constructor): more than one credential window
+/// can stand at once, and a window that took focus would collect the rest of a
+/// secret the holder was typing into ANOTHER card's field.
+///
+/// External cancellation contract: PrompterService's dismissal dispatches
 /// QMetaObject::invokeMethod(dlg, "reject", Qt::QueuedConnection) from the
 /// D-Bus worker thread. The inherited @c QDialog::reject is a public slot
 /// reachable through Qt's meta-object system; PromptDialogRejectTest pins
@@ -138,6 +142,17 @@ public:
     /// error while the confirmation differs from the new PIN.
     void accept() override;
 
+    /// Ask for the window's share of attention WITHOUT taking focus: a
+    /// taskbar/notification hint, never an activation. A window that opened
+    /// behind others would otherwise run its whole entry deadline in silence
+    /// and read to the holder as "nothing happened".
+    void announce();
+
+    /// How many times @ref announce was called. The EFFECT is only observable
+    /// on a real desktop, but the mechanism is assertable offscreen -- and a
+    /// window that announces nothing is the failure mode worth catching.
+    [[nodiscard]] int announcementsRequested() const;
+
     /// True while the MRZ form is the ACTIVE input widget — either because the
     /// prompt asked for an MRZ outright, or because a CAN prompt offered the
     /// switch (@ref Options::offerMrzSwitch) and the user took it. The service
@@ -169,6 +184,7 @@ private:
     QLabel* m_kindHint = nullptr;          // null unless Options::offerMrzSwitch
     QLabel* m_retryError = nullptr;        // null unless Options::attempt > 0
     SecretFdPair m_captured;
+    int m_announcements = 0;
 };
 
 } // namespace LibreLinux::Prompter

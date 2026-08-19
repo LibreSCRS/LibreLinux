@@ -142,8 +142,17 @@ public:
     AutoPrompter& operator=(AutoPrompter&&) = delete;
 
 private:
+    void RequestSecret(sdbus::Result<std::string, sdbus::UnixFd, std::string>&& result, std::string kind,
+                       std::map<std::string, sdbus::Variant> options) override
+    {
+        // No window is raised here, so the reply is built and sent at once;
+        // the adaptor is asynchronous for the production prompter's sake.
+        auto reply = buildSecretReply(kind, options);
+        result.returnResults(std::get<0>(reply), std::get<1>(reply), std::get<2>(reply));
+    }
+
     std::tuple<std::string, sdbus::UnixFd, std::string>
-    RequestSecret(const std::string& kind, const std::map<std::string, sdbus::Variant>& options) override
+    buildSecretReply(const std::string& kind, const std::map<std::string, sdbus::Variant>& options)
     {
         // SAFETY GATE: no gate file -> never release anything.
         if (!gateOpen()) {
@@ -192,8 +201,15 @@ private:
     // file, then BOTH env vars, and nothing is released unless both are present.
     // Answering with a half-filled pair would let a change run with a fabricated
     // second secret, so the check is all-or-nothing.
+    void RequestSecrets(sdbus::Result<std::string, sdbus::UnixFd, sdbus::UnixFd, std::string>&& result,
+                        std::string kind, std::map<std::string, sdbus::Variant> options) override
+    {
+        auto reply = buildSecretsReply(kind, options);
+        result.returnResults(std::get<0>(reply), std::get<1>(reply), std::get<2>(reply), std::get<3>(reply));
+    }
+
     std::tuple<std::string, sdbus::UnixFd, sdbus::UnixFd, std::string>
-    RequestSecrets(const std::string& kind, const std::map<std::string, sdbus::Variant>& /*options*/) override
+    buildSecretsReply(const std::string& kind, const std::map<std::string, sdbus::Variant>& /*options*/)
     {
         const auto refuse = [&](const char* reason) {
             logDecision(kind, false, reason);

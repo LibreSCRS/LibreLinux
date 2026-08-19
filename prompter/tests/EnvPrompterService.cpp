@@ -71,7 +71,7 @@ EnvPrompterService::~EnvPrompterService()
 }
 
 std::tuple<std::string, sdbus::UnixFd, std::string>
-EnvPrompterService::RequestSecret(const std::string& kind, const std::map<std::string, sdbus::Variant>& options)
+EnvPrompterService::buildSecretReply(const std::string& kind, const std::map<std::string, sdbus::Variant>& options)
 {
     const pid_t ownerPid = authorizeCaller("RequestSecret");
     if (ownerPid == 0) {
@@ -135,8 +135,8 @@ EnvPrompterService::RequestSecret(const std::string& kind, const std::map<std::s
 }
 
 std::tuple<std::string, sdbus::UnixFd, sdbus::UnixFd, std::string>
-EnvPrompterService::RequestSecrets(const std::string& /*kind*/,
-                                   const std::map<std::string, sdbus::Variant>& /*options*/)
+EnvPrompterService::buildSecretsReply(const std::string& /*kind*/,
+                                      const std::map<std::string, sdbus::Variant>& /*options*/)
 {
     const pid_t ownerPid = authorizeCaller("RequestSecrets");
     sdbus::UnixFd primary{makeEmptySealedFd(), sdbus::adopt_fd};
@@ -148,6 +148,20 @@ EnvPrompterService::RequestSecrets(const std::string& /*kind*/,
     // change_pin is not modelled by this env-driven prompter (see header).
     return std::make_tuple(std::string{PrompterWire::kStatusError}, std::move(primary), std::move(secondary),
                            std::string{"change_pin is not supported by the env-driven test prompter"});
+}
+
+void EnvPrompterService::RequestSecret(sdbus::Result<std::string, sdbus::UnixFd, std::string>&& result,
+                                       std::string kind, std::map<std::string, sdbus::Variant> options)
+{
+    auto reply = buildSecretReply(kind, options);
+    result.returnResults(std::get<0>(reply), std::get<1>(reply), std::get<2>(reply));
+}
+
+void EnvPrompterService::RequestSecrets(sdbus::Result<std::string, sdbus::UnixFd, sdbus::UnixFd, std::string>&& result,
+                                        std::string kind, std::map<std::string, sdbus::Variant> options)
+{
+    auto reply = buildSecretsReply(kind, options);
+    result.returnResults(std::get<0>(reply), std::get<1>(reply), std::get<2>(reply), std::get<3>(reply));
 }
 
 void EnvPrompterService::Cancel(const std::string& promptId)

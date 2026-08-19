@@ -28,15 +28,22 @@
 
 namespace LibreLinux::Prompter {
 
-// Single-instance dialog tracker (see header for the no-singleton rationale).
-std::atomic<PromptDialog*> PrompterService::s_activeDialog{nullptr};
+namespace {
+// The windows currently on screen. One per process by construction (the
+// prompter hosts exactly one Prompter1 object), GUI-thread confined, and NOT a
+// singleton handed out to arbitrary callers: PrompterService is its only user
+// and reaches it through the accessor below.
+PromptRegistry& registry()
+{
+    static PromptRegistry instance;
+    return instance;
+}
+} // namespace
 
-// Owner PID of the in-flight prompt (0 == idle). See header.
-std::atomic<pid_t> PrompterService::s_activeOwnerPid{0};
-
-// Id of the in-flight prompt (empty == idle / unaddressable caller).
-std::mutex PrompterService::s_activeMutex;
-std::string PrompterService::s_activePromptId;
+PromptRegistry& PrompterService::registryForTest() noexcept
+{
+    return registry();
+}
 
 namespace {
 
@@ -180,133 +187,132 @@ PromptDialog::Options buildMultiOptions(const std::map<std::string, sdbus::Varia
     return out;
 }
 
-// Run @p fn on the Qt main thread (the thread @p target lives on) and
-// block until it returns. Used to flip from the sdbus-c++ worker thread
-// back into the GUI thread; the D-Bus caller is itself already blocked on
-// the method reply, so the additional thread-block here changes nothing
-// observable.
+// POST @p fn to the Qt main thread and return at once. Nothing is held: the
+// whole point of the asynchronous handler is that a human typing into one
+// window cannot stall the next request.
+//
+// @returns false when the functor could NOT be delivered (the GUI thread is
+// gone / the app is tearing down). It then never ran, so the caller must fail
+// closed rather than leave a D-Bus call with no answer.
 template <class Fn>
-auto runOnMain(QObject* target, Fn&& fn) -> std::optional<decltype(fn())>
+bool postToMain(QObject* target, Fn&& fn)
 {
-    using Ret = decltype(fn());
-    std::optional<Ret> result;
-    // invokeMethod returns false when the functor could NOT be delivered (the
-    // target thread is absent / the app is tearing down). In that case the
-    // functor never ran, so `result` stays disengaged and the caller must fail
-    // closed rather than adopt a default-constructed (sentinel-fd) outcome.
-    const bool ran = QMetaObject::invokeMethod(target, [&]() { result = fn(); }, Qt::BlockingQueuedConnection);
-    if (!ran) {
-        return std::nullopt;
-    }
-    return result;
+    return QMetaObject::invokeMethod(target, std::forward<Fn>(fn), Qt::QueuedConnection);
 }
 
-struct DialogOutcome
+// Send a reply on @p result, adopting @p fd. The fd MUST be a real descriptor
+// (a possibly empty sealed memfd), never the -1 sentinel and never 0: the wire
+// encoder cannot send -1, and adopting 0 would close stdin.
+//
+// A throw means the caller is gone. The window is already closed and its entry
+// already taken by the time this runs, so swallowing is what prevents a leak
+// rather than what causes one.
+void answerSecret(SecretResult& result, std::string status, int fd) noexcept
 {
-    std::string status;
-    // Defaults to the -1 "no fd" sentinel (matching SecretFdPair), NOT 0:
-    // a default-constructed outcome (e.g. a failed main-thread hop) must never
-    // be adopted as fd 0 (stdin). Set to a real (possibly empty-sealed) memfd
-    // on every reachable return.
-    int fd{-1};
-    // Which form the user actually submitted on (see PromptDialog::mrzChosen).
-    // Reported, never decided, here: the handler combines it with the offer it
-    // made to pick the reply status. False on every non-accept path.
-    bool mrzChosen{false};
-};
-
-// The fd MUST default to the -1 "no fd" sentinel, never 0 (a live descriptor —
-// stdin): a default-constructed outcome from a failed main-thread hop is later
-// adopted by sdbus::UnixFd, and adopting 0 would close stdin. This locks the
-// invariant at compile time — an omitted / 0 initializer fails the build.
-static_assert(DialogOutcome{}.fd == -1, "DialogOutcome::fd must default to the -1 no-fd sentinel");
-
-// Publishes the dialog so PrompterService::CancelCurrent (running on the
-// sdbus-c++ worker thread) can post a queued reject() to the GUI thread.
-// Stored before exec() and cleared after the event loop returns. The owner
-// PID is published FIRST so a CancelCurrent that observes a live dialog also
-// sees a consistent owner, and cleared AFTER the dialog slot.
-struct ActiveDialogScope
-{
-    ActiveDialogScope(PromptDialog& dlg, pid_t ownerPid, const std::string& promptId)
-    {
-        {
-            const std::lock_guard lock{PrompterService::s_activeMutex};
-            PrompterService::s_activePromptId = promptId;
-        }
-        PrompterService::s_activeOwnerPid.store(ownerPid, std::memory_order_release);
-        PrompterService::s_activeDialog.store(&dlg, std::memory_order_release);
+    try {
+        result.returnResults(std::move(status), sdbus::UnixFd{fd, sdbus::adopt_fd}, std::string{});
+    } catch (...) {
+        std::fprintf(stderr, "librescrs-pinentry-kde: reply dropped (caller gone)\n");
     }
-    ~ActiveDialogScope()
-    {
-        PrompterService::s_activeDialog.store(nullptr, std::memory_order_release);
-        PrompterService::s_activeOwnerPid.store(0, std::memory_order_release);
-        const std::lock_guard lock{PrompterService::s_activeMutex};
-        PrompterService::s_activePromptId.clear();
-    }
-    ActiveDialogScope(const ActiveDialogScope&) = delete;
-    ActiveDialogScope& operator=(const ActiveDialogScope&) = delete;
-};
-
-DialogOutcome runDialog(PromptDialog::Kind kind, const PromptDialog::Options& opts, pid_t ownerPid,
-                        const std::string& promptId)
-{
-    // Stack-allocated dialog: deterministic teardown of the embedded
-    // input widget right after we extract the fd, scrubbing residue from
-    // user-space buffers before the function returns.
-    PromptDialog dlg(kind, opts);
-    int code = 0;
-    {
-        ActiveDialogScope scope(dlg, ownerPid, promptId);
-        code = dlg.exec();
-    }
-    if (code != QDialog::Accepted) {
-        return {kStatusCancelled, makeEmptySealedFd()};
-    }
-    const int fd = dlg.captureSecretFd();
-    if (fd < 0) {
-        return {kStatusError, makeEmptySealedFd()};
-    }
-    return {kStatusOk, fd, dlg.mrzChosen()};
 }
 
-struct MultiDialogOutcome
+void answerSecrets(SecretsResult& result, std::string status, int primaryFd, int secondaryFd) noexcept
 {
-    std::string status;
-    // Both fds default to the -1 no-fd sentinel (see DialogOutcome): a failed
-    // hop must not adopt fd 0 twice and double-close stdin.
-    int primaryFd{-1};   // current secret; empty sealed fd unless status is ok
-    int secondaryFd{-1}; // new secret; empty sealed fd unless status is ok
-};
+    try {
+        result.returnResults(std::move(status), sdbus::UnixFd{primaryFd, sdbus::adopt_fd},
+                             sdbus::UnixFd{secondaryFd, sdbus::adopt_fd}, std::string{});
+    } catch (...) {
+        std::fprintf(stderr, "librescrs-pinentry-kde: reply dropped (caller gone)\n");
+    }
+}
 
-// Same -1 sentinel invariant as DialogOutcome, on BOTH fds: a failed hop would
-// otherwise adopt fd 0 twice and double-close stdin.
-static_assert(MultiDialogOutcome{}.primaryFd == -1 && MultiDialogOutcome{}.secondaryFd == -1,
-              "MultiDialogOutcome fds must default to the -1 no-fd sentinel");
-
-MultiDialogOutcome runChangePinDialog(const PromptDialog::Options& opts, pid_t ownerPid, const std::string& promptId)
+// Build the window, register it, show it. The COMPLETION answers -- this
+// returns immediately, so the D-Bus worker is not held and a second reader's
+// prompt can be served while this window stands.
+//
+// Heap-allocated, unlike the old stack dialog: the window outlives the call
+// that raised it. Its own completion is what deletes it, and that runs while
+// the widget is still alive, so the secret is read before anything is torn
+// down (the same ordering the stack version had after exec() returned).
+//
+// Runs on the Qt main thread.
+void raiseWindow(PromptDialog::Kind kind, const PromptDialog::Options& opts, pid_t ownerPid,
+                 const std::string& promptId, bool offerMrzSwitch, const std::shared_ptr<SecretResult>& result)
 {
-    PromptDialog dlg(PromptDialog::Kind::ChangePin, opts);
-    int code = 0;
-    {
-        ActiveDialogScope scope(dlg, ownerPid, promptId);
-        code = dlg.exec();
+    auto* dlg = new PromptDialog(kind, opts);
+    const auto handle = registry().add(dlg, ownerPid, promptId);
+    if (!handle) {
+        // Two windows answering to one name would make a dismissal ambiguous,
+        // which is the defect this registry exists to end. Refuse, fail closed.
+        delete dlg;
+        answerSecret(*result, kStatusError, makeEmptySealedFd());
+        return;
     }
-    if (code != QDialog::Accepted) {
-        return {kStatusCancelled, makeEmptySealedFd(), makeEmptySealedFd()};
-    }
-    const PromptDialog::SecretFdPair pair = dlg.takeSecretFdPair();
-    if (pair.primaryFd < 0 || pair.secondaryFd < 0) {
-        // Partial capture must not leak the half that succeeded.
-        if (pair.primaryFd >= 0) {
-            ::close(pair.primaryFd);
+
+    QObject::connect(dlg, &QDialog::finished, dlg, [dlg, h = *handle, offerMrzSwitch, result](int code) {
+        // Take the entry FIRST: exactly one path ever answers a prompt, so a
+        // dismissal that raced this completion finds nothing and no-ops.
+        if (!registry().take(h)) {
+            return;
         }
-        if (pair.secondaryFd >= 0) {
-            ::close(pair.secondaryFd);
+        if (code != QDialog::Accepted) {
+            answerSecret(*result, kStatusCancelled, makeEmptySealedFd());
+        } else if (const int fd = dlg->captureSecretFd(); fd < 0) {
+            answerSecret(*result, kStatusError, makeEmptySealedFd());
+        } else {
+            // The ONLY site that mints the switched-to-MRZ status, gated on the
+            // very offer this prompt made: an accepted prompt that offered the
+            // switch AND was submitted on the MRZ form answers with it, because
+            // the fd then carries an MRZ payload rather than a CAN.
+            const bool switched = offerMrzSwitch && dlg->mrzChosen();
+            answerSecret(*result, switched ? kStatusOkMrz : kStatusOk, fd);
         }
-        return {kStatusError, makeEmptySealedFd(), makeEmptySealedFd()};
+        dlg->deleteLater();
+    });
+
+    // Shown, not exec'd, and without taking focus (see PromptDialog's ctor).
+    dlg->show();
+    dlg->announce();
+}
+
+void raiseChangePinWindow(const PromptDialog::Options& opts, pid_t ownerPid, const std::string& promptId,
+                          const std::shared_ptr<SecretsResult>& result)
+{
+    auto* dlg = new PromptDialog(PromptDialog::Kind::ChangePin, opts);
+    const auto handle = registry().add(dlg, ownerPid, promptId);
+    if (!handle) {
+        delete dlg;
+        answerSecrets(*result, kStatusError, makeEmptySealedFd(), makeEmptySealedFd());
+        return;
     }
-    return {kStatusOk, pair.primaryFd, pair.secondaryFd};
+
+    QObject::connect(dlg, &QDialog::finished, dlg, [dlg, h = *handle, result](int code) {
+        if (!registry().take(h)) {
+            return;
+        }
+        if (code != QDialog::Accepted) {
+            answerSecrets(*result, kStatusCancelled, makeEmptySealedFd(), makeEmptySealedFd());
+            dlg->deleteLater();
+            return;
+        }
+        const PromptDialog::SecretFdPair pair = dlg->takeSecretFdPair();
+        if (pair.primaryFd < 0 || pair.secondaryFd < 0) {
+            // Partial capture must not leak the half that succeeded.
+            if (pair.primaryFd >= 0) {
+                ::close(pair.primaryFd);
+            }
+            if (pair.secondaryFd >= 0) {
+                ::close(pair.secondaryFd);
+            }
+            answerSecrets(*result, kStatusError, makeEmptySealedFd(), makeEmptySealedFd());
+        } else {
+            answerSecrets(*result, kStatusOk, pair.primaryFd, pair.secondaryFd);
+        }
+        dlg->deleteLater();
+    });
+
+    dlg->show();
+    dlg->announce();
 }
 
 } // namespace
@@ -325,30 +331,32 @@ PrompterService::~PrompterService()
     unregisterAdaptor();
 }
 
-std::tuple<std::string, sdbus::UnixFd, std::string>
-PrompterService::RequestSecret(const std::string& kind, const std::map<std::string, sdbus::Variant>& options)
+void PrompterService::RequestSecret(SecretResult&& result, std::string kind,
+                                    std::map<std::string, sdbus::Variant> options)
 {
+    // shared_ptr so the reply handle can be captured by a copyable functor and
+    // carried across the post into the window's completion. It is answered
+    // exactly once: whichever path takes the registry entry.
+    auto reply = std::make_shared<SecretResult>(std::move(result));
+
     // Trust boundary: only the agent binary may drive the prompter. Reject a
     // non-agent caller with a zero-byte sealed memfd + "unauthorized" status
-    // (the existing no-secret encoding) BEFORE any dialog is constructed, so
-    // a rogue same-user process can neither phish a secret nor flash a UI.
+    // (the existing no-secret encoding) BEFORE any window is constructed, so a
+    // rogue same-user process can neither phish a secret nor flash a UI.
     const pid_t ownerPid = authorizeCaller("RequestSecret");
     if (ownerPid == 0) {
-        sdbus::UnixFd wrapped{makeEmptySealedFd(), sdbus::adopt_fd};
-        return std::make_tuple(std::string{kStatusUnauthorized}, std::move(wrapped), std::string{});
+        answerSecret(*reply, std::string{kStatusUnauthorized}, makeEmptySealedFd());
+        return;
     }
 
     const auto parsedKind = parseKind(kind);
     if (!parsedKind) {
-        // adopt_fd: take exclusive ownership of the fd we just created,
-        // skipping the redundant dup() the default ctor would perform.
-        // UnixFd treats -1 as "no fd" and is a no-op on destruction.
-        sdbus::UnixFd wrapped{makeEmptySealedFd(), sdbus::adopt_fd};
         // Empty user_message: the "error" status already carries the semantics
         // and clients map their own taxonomy. A hardcoded English literal here
         // would be permanently untranslatable and off the msgKey/fallback wire
         // convention.
-        return std::make_tuple(std::string{kStatusError}, std::move(wrapped), std::string{});
+        answerSecret(*reply, std::string{kStatusError}, makeEmptySealedFd());
+        return;
     }
     PromptDialog::Options opts = buildOptions(options);
     // Routing metadata, not chrome: the dialog never sees it. Absent means this
@@ -359,122 +367,91 @@ PrompterService::RequestSecret(const std::string& kind, const std::map<std::stri
     // opt-in is meaningful only on a CAN request, and only for the alternative
     // this dialog can actually offer. This is the single site where both the
     // requested kind and the lifted options are in scope, and the flag it
-    // produces is the same one the status decision below reads — so an offer
-    // the user never saw can never be answered, and an answer the caller never
-    // opted into can never be minted.
+    // produces is the same one the completion's status decision reads — so an
+    // offer the user never saw can never be answered, and an answer the caller
+    // never opted into can never be minted.
     const bool offerMrzSwitch =
         *parsedKind == PromptDialog::Kind::Can && opts.altKinds.contains(QString::fromLatin1(PrompterWire::kKindMrz));
     opts.offerMrzSwitch = offerMrzSwitch;
 
-    // Hop to the Qt main thread: every widget allocation, layout, event
-    // dispatch and exec() must run there.
+    // Every widget allocation, layout and event dispatch runs on the Qt main
+    // thread. POST, never block: holding this thread is what stopped a second
+    // reader's prompt from being served at all.
     auto* app = QCoreApplication::instance();
-    DialogOutcome outcome;
-    if (app && QThread::currentThread() != app->thread()) {
-        std::optional<DialogOutcome> hopped =
-            runOnMain(app, [&]() { return runDialog(*parsedKind, opts, ownerPid, promptId); });
-        if (hopped) {
-            outcome = std::move(*hopped);
-        } else {
-            // The GUI thread never ran the dialog (shutdown race). Fail closed:
-            // a real empty-sealed fd (never the -1 sentinel, which the wire
-            // encoder cannot send) with Error status. makeEmptySealedFd() runs
-            // ONLY here, so the success path leaks no fd.
-            outcome = DialogOutcome{std::string{kStatusError}, makeEmptySealedFd()};
-        }
-    } else {
+    const auto raise = [kind = *parsedKind, opts, ownerPid, promptId, offerMrzSwitch, reply] {
+        raiseWindow(kind, opts, ownerPid, promptId, offerMrzSwitch, reply);
+    };
+    if (app == nullptr || QThread::currentThread() == app->thread()) {
         // Already on the main thread (single-threaded test harness, or a
-        // future synchronous dispatcher) — call directly.
-        outcome = runDialog(*parsedKind, opts, ownerPid, promptId);
+        // future synchronous dispatcher) — raise directly.
+        raise();
+        return;
     }
-
-    // The ONLY site that mints the switched-to-MRZ status, gated on the very
-    // offer made above: an accepted prompt that offered the switch AND was
-    // submitted on the MRZ form answers with it, because the fd then carries
-    // an MRZ payload rather than a CAN. Every other outcome — including an
-    // opted-in caller whose user stayed on the CAN form — keeps today's
-    // status vocabulary unchanged.
-    std::string status = std::move(outcome.status);
-    if (status == kStatusOk && offerMrzSwitch && outcome.mrzChosen) {
-        status = kStatusOkMrz;
+    if (!postToMain(app, raise)) {
+        // The GUI thread never got the window (shutdown race). Fail closed with
+        // a real empty-sealed fd — never the -1 sentinel, which the wire encoder
+        // cannot send.
+        answerSecret(*reply, std::string{kStatusError}, makeEmptySealedFd());
     }
-
-    // sdbus::UnixFd with adopt_fd takes exclusive ownership of the fd we
-    // just minted (no dup, no double-close). The wire encoder transmits
-    // it via SCM_RIGHTS; the receiver gets its own dup'd fd.
-    sdbus::UnixFd wrapped{outcome.fd, sdbus::adopt_fd};
-    return std::make_tuple(std::move(status), std::move(wrapped), std::string{});
 }
 
-std::tuple<std::string, sdbus::UnixFd, sdbus::UnixFd, std::string>
-PrompterService::RequestSecrets(const std::string& kind, const std::map<std::string, sdbus::Variant>& options)
+void PrompterService::RequestSecrets(SecretsResult&& result, std::string kind,
+                                     std::map<std::string, sdbus::Variant> options)
 {
-    // Same trust boundary as RequestSecret: fail closed BEFORE any dialog,
-    // with the established zero-byte-sealed-memfd no-secret encoding — on
-    // BOTH fds of the multi-secret reply.
+    auto reply = std::make_shared<SecretsResult>(std::move(result));
+
+    // Same trust boundary as RequestSecret: fail closed BEFORE any window, with
+    // the established zero-byte-sealed-memfd no-secret encoding — on BOTH fds
+    // of the multi-secret reply.
     const pid_t ownerPid = authorizeCaller("RequestSecrets");
     if (ownerPid == 0) {
-        sdbus::UnixFd primary{makeEmptySealedFd(), sdbus::adopt_fd};
-        sdbus::UnixFd secondary{makeEmptySealedFd(), sdbus::adopt_fd};
-        return std::make_tuple(std::string{kStatusUnauthorized}, std::move(primary), std::move(secondary),
-                               std::string{});
+        answerSecrets(*reply, std::string{kStatusUnauthorized}, makeEmptySealedFd(), makeEmptySealedFd());
+        return;
+    }
+    if (kind != PrompterWire::kKindChangePin) {
+        answerSecrets(*reply, std::string{kStatusError}, makeEmptySealedFd(), makeEmptySealedFd());
+        return;
     }
 
-    if (kind != PrompterWire::kKindChangePin) {
-        sdbus::UnixFd primary{makeEmptySealedFd(), sdbus::adopt_fd};
-        sdbus::UnixFd secondary{makeEmptySealedFd(), sdbus::adopt_fd};
-        // Empty user_message (see RequestSecret): status "error" is the contract;
-        // no bare English literal on the wire.
-        return std::make_tuple(std::string{kStatusError}, std::move(primary), std::move(secondary), std::string{});
-    }
     const PromptDialog::Options opts = buildMultiOptions(options);
     const std::string promptId = optionString(options, kOptPromptId);
 
-    // Hop to the Qt main thread — same discipline as RequestSecret.
     auto* app = QCoreApplication::instance();
-    MultiDialogOutcome outcome;
-    if (app && QThread::currentThread() != app->thread()) {
-        std::optional<MultiDialogOutcome> hopped =
-            runOnMain(app, [&]() { return runChangePinDialog(opts, ownerPid, promptId); });
-        if (hopped) {
-            outcome = std::move(*hopped);
-        } else {
-            // Shutdown race, both secrets: fail closed with two real
-            // empty-sealed fds (never the -1 sentinels) + Error status.
-            // makeEmptySealedFd() runs ONLY here (no success-path leak).
-            outcome = MultiDialogOutcome{std::string{kStatusError}, makeEmptySealedFd(), makeEmptySealedFd()};
-        }
-    } else {
-        outcome = runChangePinDialog(opts, ownerPid, promptId);
-    }
-
-    sdbus::UnixFd primary{outcome.primaryFd, sdbus::adopt_fd};
-    sdbus::UnixFd secondary{outcome.secondaryFd, sdbus::adopt_fd};
-    return std::make_tuple(outcome.status, std::move(primary), std::move(secondary), std::string{});
-}
-
-void PrompterService::rejectDialog(const std::string& promptId) noexcept
-{
-    auto* dlg = s_activeDialog.load(std::memory_order_acquire);
-    if (dlg == nullptr) {
-        // No live prompt — documented no-op.
+    const auto raise = [opts, ownerPid, promptId, reply] { raiseChangePinWindow(opts, ownerPid, promptId, reply); };
+    if (app == nullptr || QThread::currentThread() == app->thread()) {
+        raise();
         return;
     }
-    {
-        // Only the prompt this id names. A dismissal meant for one reader's
-        // window must never close another's.
-        const std::lock_guard lock{s_activeMutex};
-        if (!isNamedPrompt(s_activePromptId, promptId)) {
-            return;
-        }
+    if (!postToMain(app, raise)) {
+        answerSecrets(*reply, std::string{kStatusError}, makeEmptySealedFd(), makeEmptySealedFd());
     }
-    // reject() must run on the GUI thread; CancelCurrent dispatches on the
-    // sdbus-c++ worker. QueuedConnection posts an event to the dialog's
-    // owning thread (the Qt main thread inside runDialog()), where the
-    // QDialog::reject slot runs safely. Method-name dispatch via
-    // QMetaObject is the load-bearing entry; the regression test in
+}
+
+void PrompterService::dismissOnGuiThread(const std::string& promptId, pid_t callerPid) noexcept
+{
+    // Runs on the Qt main thread, so the lookup and the dismissal are one
+    // uninterrupted step: a window that answered in the meantime is simply not
+    // in the registry any more, which is the documented idempotent no-op rather
+    // than a pointer to a deleted dialog.
+    const auto handle = registry().findByPromptId(promptId);
+    if (!handle) {
+        return;
+    }
+    const auto entry = registry().find(*handle);
+    if (!entry) {
+        return;
+    }
+    // Per-window ownership: only the caller that raised THIS window may dismiss
+    // it, so one authenticated peer cannot close another's dialog.
+    if (!isActivePromptOwner(entry->ownerPid, callerPid)) {
+        return;
+    }
+    // The entry is left in place: QDialog::reject() emits finished, and the
+    // completion is the one path that takes the entry and answers. Two paths
+    // answering one prompt is what the take-first discipline there prevents.
+    // Method-name dispatch via QMetaObject is the load-bearing entry;
     // PromptDialogRejectTest pins reject() as an addressable slot.
-    QMetaObject::invokeMethod(dlg, "reject", Qt::QueuedConnection);
+    QMetaObject::invokeMethod(entry->window, "reject", Qt::QueuedConnection);
 }
 
 pid_t PrompterService::authorizeCaller(const char* method)
@@ -513,16 +490,14 @@ void PrompterService::Cancel(const std::string& promptId)
         return;
     }
 
-    // Ownership gate: only the caller that initiated the prompt may cancel it.
-    // A Cancel from a different (but still agent-authenticated) caller — or
-    // against an idle prompter — is a no-op. Reading the owner before
-    // dispatching keeps the check race-tolerant: if the dialog tears down
-    // between here and rejectDialog(), the latter already no-ops.
-    const pid_t owner = s_activeOwnerPid.load(std::memory_order_acquire);
-    if (!isActivePromptOwner(owner, callerPid)) {
+    // The lookup itself is posted, not just the dismissal: everything that
+    // touches the registry or a window runs on the Qt main thread.
+    auto* app = QCoreApplication::instance();
+    if (app == nullptr || QThread::currentThread() == app->thread()) {
+        dismissOnGuiThread(promptId, callerPid);
         return;
     }
-    rejectDialog(promptId);
+    static_cast<void>(postToMain(app, [promptId, callerPid] { dismissOnGuiThread(promptId, callerPid); }));
 }
 
 bool PrompterService::isActivePromptOwner(pid_t ownerPid, pid_t callerPid) noexcept
@@ -530,14 +505,12 @@ bool PrompterService::isActivePromptOwner(pid_t ownerPid, pid_t callerPid) noexc
     return ownerPid != 0 && ownerPid == callerPid;
 }
 
-bool PrompterService::isNamedPrompt(const std::string& activeId, const std::string& requestedId) noexcept
-{
-    return !activeId.empty() && activeId == requestedId;
-}
-
 void PrompterService::cancelForTest(const std::string& promptId) noexcept
 {
-    rejectDialog(promptId);
+    // The test seam skips only the bus round trip and the binary-identity gate;
+    // the ownership check still applies, so it passes this process's own PID --
+    // the same PID a test's in-process request registered under.
+    dismissOnGuiThread(promptId, ::getpid());
 }
 
 } // namespace LibreLinux::Prompter

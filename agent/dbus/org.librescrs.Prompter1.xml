@@ -69,6 +69,7 @@
         user_message  optional localised explanation (empty on ok)
     -->
     <method name="RequestSecret">
+      <annotation name="org.freedesktop.DBus.Method.Async" value="server"/>
       <arg name="kind"         type="s"    direction="in"/>
       <arg name="options"      type="a{sv}" direction="in"/>
       <arg name="status"       type="s"    direction="out"/>
@@ -108,6 +109,7 @@
       Secure::Strings, and close immediately.
     -->
     <method name="RequestSecrets">
+      <annotation name="org.freedesktop.DBus.Method.Async" value="server"/>
       <arg name="kind"         type="s"    direction="in"/>
       <arg name="options"      type="a{sv}" direction="in"/>
       <arg name="status"       type="s"    direction="out"/>

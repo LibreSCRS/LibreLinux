@@ -598,7 +598,19 @@ public:
 
 bool dialogIsLive()
 {
-    return PrompterService::s_activeDialog.load() != nullptr;
+    return !PrompterService::registryForTest().empty();
+}
+
+// The single live window, or nullptr. These cases raise one at a time.
+PromptDialog* liveDialog()
+{
+    auto& reg = PrompterService::registryForTest();
+    const auto handles = reg.handles();
+    if (handles.empty()) {
+        return nullptr;
+    }
+    const auto entry = reg.find(handles.front());
+    return entry ? entry->window : nullptr;
 }
 
 template <class Pred>
@@ -640,8 +652,7 @@ protected:
         m_clientConn->leaveEventLoop();
         m_service.reset();
         m_serverConn->leaveEventLoop();
-        PrompterService::s_activeDialog.store(nullptr);
-        PrompterService::s_activeOwnerPid.store(0);
+        static_cast<void>(PrompterService::registryForTest().takeAll());
         ::unsetenv(kPeerEnv);
     }
 
@@ -662,7 +673,7 @@ protected:
             if (!spinUntil(dialogIsLive, std::chrono::seconds{10})) {
                 return; // no dialog appeared; the caller's assertions fail below
             }
-            auto* dlg = PrompterService::s_activeDialog.load();
+            auto* dlg = liveDialog();
             if (dlg != nullptr && onDialog != nullptr) {
                 QMetaObject::invokeMethod(dlg, [dlg, onDialog]() { onDialog(dlg); }, Qt::QueuedConnection);
             }
@@ -709,7 +720,7 @@ TEST_F(PrompterMultiFieldBusTest, UnauthorizedRequestSecretsReturnsBothZeroByteF
     ASSERT_GE(secondary, 0);
     EXPECT_EQ(fdSize(primary), 0);
     EXPECT_EQ(fdSize(secondary), 0);
-    EXPECT_EQ(PrompterService::s_activeDialog.load(), nullptr) << "no dialog for an unauthorized caller";
+    EXPECT_TRUE(PrompterService::registryForTest().empty()) << "no window for an unauthorized caller";
 }
 
 TEST_F(PrompterMultiFieldBusTest, UnknownKindReturnsErrorWithBothZeroByteFds)
@@ -725,7 +736,7 @@ TEST_F(PrompterMultiFieldBusTest, UnknownKindReturnsErrorWithBothZeroByteFds)
     // user_message must NOT carry a hardcoded English sentence: the status is
     // already "error" and clients map their own taxonomy. Empty, not "unknown kind".
     EXPECT_TRUE(std::get<3>(reply).empty()) << "user_message must not carry a bare English literal";
-    EXPECT_EQ(PrompterService::s_activeDialog.load(), nullptr);
+    EXPECT_TRUE(PrompterService::registryForTest().empty());
 }
 
 TEST_F(PrompterMultiFieldBusTest, CancelledChangePinReturnsCancelledWithBothZeroLengthFds)
@@ -827,9 +838,8 @@ TEST_F(PrompterMultiFieldBusTest, AcceptedChangePinReturnsCurrentAndNewSecrets)
     EXPECT_EQ(sealsOf(primary), reference) << "multi-secret seal set must match the single-secret path";
     EXPECT_EQ(sealsOf(secondary), reference) << "multi-secret seal set must match the single-secret path";
     EXPECT_EQ(std::get<3>(reply), "");
-    // Slots cleared after the dialog unwinds.
-    EXPECT_EQ(PrompterService::s_activeDialog.load(), nullptr);
-    EXPECT_EQ(PrompterService::s_activeOwnerPid.load(), 0);
+    // The window is out of the registry once it has answered.
+    EXPECT_TRUE(PrompterService::registryForTest().empty());
 }
 
 // ----- main -----------------------------------------------------------------

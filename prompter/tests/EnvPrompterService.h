@@ -11,6 +11,9 @@
 #include <sys/types.h> // pid_t
 
 #include <atomic>
+#include <map>
+#include <string>
+#include <tuple>
 
 namespace LibreLinux::Prompter {
 
@@ -64,15 +67,24 @@ public:
     EnvPrompterService& operator=(EnvPrompterService&&) = delete;
 
 private:
+    // The adaptor is asynchronous on the server side (the production prompter
+    // needs to return while its window stands). This one raises no window, so
+    // it builds its reply and sends it straight back.
+    void RequestSecret(sdbus::Result<std::string, sdbus::UnixFd, std::string>&& result, std::string kind,
+                       std::map<std::string, sdbus::Variant> options) override;
+
     std::tuple<std::string, sdbus::UnixFd, std::string>
-    RequestSecret(const std::string& kind, const std::map<std::string, sdbus::Variant>& options) override;
+    buildSecretReply(const std::string& kind, const std::map<std::string, sdbus::Variant>& options);
 
     // change_pin (current + new PIN) is out of scope for this env-driven
     // prompter — no LIBRESCRS_TEST_* pair models it — so this always refuses,
     // matching PrompterClientBase's own default-Error contract for a backend
     // that never wired multi-secret prompting.
+    void RequestSecrets(sdbus::Result<std::string, sdbus::UnixFd, sdbus::UnixFd, std::string>&& result,
+                        std::string kind, std::map<std::string, sdbus::Variant> options) override;
+
     std::tuple<std::string, sdbus::UnixFd, sdbus::UnixFd, std::string>
-    RequestSecrets(const std::string& kind, const std::map<std::string, sdbus::Variant>& options) override;
+    buildSecretsReply(const std::string& kind, const std::map<std::string, sdbus::Variant>& options);
 
     void Cancel(const std::string& promptId) override;
 
