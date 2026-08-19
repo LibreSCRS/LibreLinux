@@ -250,3 +250,28 @@ msgstr "Радња: %1"
 msgctxt "@info:placeholder unset date entry"
 msgid "select date"
 msgstr "изаберите датум"
+
+#: prompter/src/PromptDialog.cpp:0
+#, kde-format
+msgctxt "@info which physical slot of a reader a prompt belongs to"
+msgid "contact"
+msgstr "контактни"
+
+#: prompter/src/PromptDialog.cpp:0
+#, kde-format
+msgctxt "@info which physical slot of a reader a prompt belongs to"
+msgid "contactless"
+msgstr "бесконтактни"
+
+#: prompter/src/PromptDialog.cpp:0
+#, kde-format
+msgctxt "@info which reader is asking for the credential"
+msgid "Reader: %1"
+msgstr "Читач: %1"
+
+#: prompter/src/PromptDialog.cpp:0
+#, kde-format
+msgctxt "@action:button reveal the reader's full system name"
+msgid "Reader details"
+msgstr "Подаци о читачу"
+

@@ -56,6 +56,40 @@ PromptStatus parseStatus(std::string_view raw)
     return PromptStatus::Error;
 }
 
+// The reader's interface qualifier as its wire token. EXHAUSTIVE switch with no
+// default: an enumerator appended upstream must be a -Wswitch diagnostic here,
+// not a silent fall to "unknown" that would make a dual-interface reader's two
+// slots indistinguishable again.
+const char* readerInterfaceToken(LibreSCRS::Agent::ReaderInterface iface)
+{
+    switch (iface) {
+    case LibreSCRS::Agent::ReaderInterface::Contact:
+        return LibreLinux::PrompterWire::kReaderInterfaceContact;
+    case LibreSCRS::Agent::ReaderInterface::Contactless:
+        return LibreLinux::PrompterWire::kReaderInterfaceContactless;
+    case LibreSCRS::Agent::ReaderInterface::Unknown:
+        return LibreLinux::PrompterWire::kReaderInterfaceUnknown;
+    }
+    return LibreLinux::PrompterWire::kReaderInterfaceUnknown;
+}
+
+// Marshal the reader's identity. Each key is omitted when empty, like every
+// other optional option -- a prompt whose reader could not be resolved says
+// nothing rather than naming the wrong one.
+void emplaceReaderIdentity(std::map<std::string, sdbus::Variant>& dict, const PromptOptions& options)
+{
+    if (!options.reader.model.empty()) {
+        dict.emplace(LibreLinux::PrompterWire::kOptReaderModel, sdbus::Variant{options.reader.model});
+    }
+    if (options.reader.iface != LibreSCRS::Agent::ReaderInterface::Unknown) {
+        dict.emplace(LibreLinux::PrompterWire::kOptReaderInterface,
+                     sdbus::Variant{std::string{readerInterfaceToken(options.reader.iface)}});
+    }
+    if (!options.reader.full.empty()) {
+        dict.emplace(LibreLinux::PrompterWire::kOptReaderFull, sdbus::Variant{options.reader.full});
+    }
+}
+
 // Did THIS request offer the user a switch to the MRZ form? True only for the
 // exact shape the prompter mints its distinct status on: a CAN request whose
 // alternative-kind list named the MRZ kind. The list is marshalled for every
@@ -105,6 +139,7 @@ std::map<std::string, sdbus::Variant> buildOptionsDict(const PromptOptions& opti
     if (options.deadlineMs > 0) {
         dict.emplace(LibreLinux::PrompterWire::kOptDeadlineMs, sdbus::Variant{options.deadlineMs});
     }
+    emplaceReaderIdentity(dict, options);
     if (!options.title.empty()) {
         dict.emplace(LibreLinux::PrompterWire::kOptTitle, sdbus::Variant{options.title});
     }
@@ -175,6 +210,7 @@ std::map<std::string, sdbus::Variant> buildChangePinOptionsDict(const PromptOpti
     if (options.deadlineMs > 0) {
         dict.emplace(LibreLinux::PrompterWire::kOptDeadlineMs, sdbus::Variant{options.deadlineMs});
     }
+    emplaceReaderIdentity(dict, options);
     if (!options.title.empty()) {
         dict.emplace(LibreLinux::PrompterWire::kOptTitle, sdbus::Variant{options.title});
     }

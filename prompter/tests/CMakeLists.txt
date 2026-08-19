@@ -453,8 +453,14 @@ if(MSGFMT_EXECUTABLE)
     # hide a broken sr catalog). LANGUAGE=sr then selects Serbian. CI must have
     # en_US.UTF-8 generated (see the workflow's locale step); a developer desktop
     # already carries a UTF-8 locale.
+    # XDG_DATA_HOME is PINNED at the test tree, not merely prepended to
+    # XDG_DATA_DIRS. QStandardPaths::GenericDataLocation searches XDG_DATA_HOME
+    # FIRST, so on a machine that has dogfood-installed the prompter into
+    # ~/.local/share the test reads that catalog instead of the one just built —
+    # and passes or fails on whatever was installed last. Found by adding a
+    # string and watching the test resolve the old catalog without it.
     set_tests_properties(PromptCatalogResolutionTest PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;LANGUAGE=sr;LANG=en_US.UTF-8"
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;LANGUAGE=sr;LANG=en_US.UTF-8;XDG_DATA_HOME=${_cat_locale_root}"
         ENVIRONMENT_MODIFICATION "XDG_DATA_DIRS=path_list_prepend:${_cat_locale_root}")
 else()
     message(WARNING "msgfmt not found — PromptCatalogResolutionTest (Serbian catalog resolution) is skipped")

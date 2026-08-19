@@ -67,6 +67,9 @@ using PrompterWire::kOptPinLabel;
 using PrompterWire::kOptPrimaryMaxLength;
 using PrompterWire::kOptPrimaryMinLength;
 using PrompterWire::kOptPromptId;
+using PrompterWire::kOptReaderFull;
+using PrompterWire::kOptReaderInterface;
+using PrompterWire::kOptReaderModel;
 using PrompterWire::kOptRequester;
 using PrompterWire::kOptTitle;
 using PrompterWire::kStatusCancelled;
@@ -166,6 +169,11 @@ PromptDialog::Options buildOptions(const std::map<std::string, sdbus::Variant>& 
     // requested KIND, which this helper deliberately does not see; that
     // decision is made once, in the RequestSecret handler.
     out.altKinds = optionStringList(opts, kOptAltKinds);
+    // Trusted reader identity, carried verbatim; the dialog turns the closed
+    // interface token into words.
+    out.readerModel = QString::fromStdString(optionString(opts, kOptReaderModel));
+    out.readerInterface = QString::fromStdString(optionString(opts, kOptReaderInterface));
+    out.readerFull = QString::fromStdString(optionString(opts, kOptReaderFull));
     return out;
 }
 

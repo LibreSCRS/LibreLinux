@@ -95,6 +95,18 @@ public:
         // flag, so what is offered and what can be answered cannot diverge.
         bool offerMrzSwitch = false;
 
+        // Which reader raised this prompt (the wire's reader_* options).
+        // TRUSTED, agent-owned: the agent owns the roster and is the only layer
+        // that can tell a dual-interface unit's two slots apart. `interface` is
+        // a CLOSED vocabulary token, never prose -- the dialog says it in the
+        // holder's language. `full` is the literal PC/SC name, shown behind a
+        // details affordance because it is long enough to push the entry field
+        // off a small screen. All three empty on a prompt whose reader could
+        // not be resolved, and then no reader row is rendered at all.
+        QString readerModel;
+        QString readerInterface;
+        QString readerFull;
+
         // Kind::ChangePin only — per-role bounds (primary drives the current
         // field; new drives the new AND confirm fields) + display-only labels.
         int primaryMinLength = 4;
@@ -203,6 +215,7 @@ private:
     QPushButton* m_switchButton = nullptr; // null unless Options::offerMrzSwitch
     QLabel* m_kindHint = nullptr;          // null unless Options::offerMrzSwitch
     QLabel* m_retryError = nullptr;        // null unless Options::attempt > 0
+    QLabel* m_readerFullLabel = nullptr;   // null unless Options::readerFull is set
     SecretFdPair m_captured;
     int m_announcements = 0;
 

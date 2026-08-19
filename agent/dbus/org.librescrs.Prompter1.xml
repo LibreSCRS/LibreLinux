@@ -32,6 +32,17 @@
                                  needed and transport latency is not charged to
                                  the human. Absent or 0 means no deadline; a
                                  prompter must never read 0 as instant expiry.
+                   "reader_model"     (s) the reader's shortened model string,
+                                 e.g. "OMNIKEY 5422". TRUSTED, agent-owned.
+                                 No interface wording is composed into it.
+                   "reader_interface" (s) CLOSED vocabulary: "contact" |
+                                 "contactless" | "unknown". The prompter says it
+                                 in the holder's language; an unrecognised value
+                                 is treated as "unknown". This is what separates
+                                 the two slots of a dual-interface reader whose
+                                 PC/SC names share a serial.
+                   "reader_full"      (s) the literal PC/SC reader name, for a
+                                 details affordance rather than the chrome.
                    "artifacts"   (as) UNTRUSTED per-document display names of a
                                  batch signing request; rendered client-supplied,
                                  in the description zone's plain-text treatment —
@@ -98,7 +109,8 @@
                  crosses this interface.
         options  optional metadata; recognises the RequestSecret display keys
                  ("title", "description", "requester", "artifact",
-                 "prompt_id", "deadline_ms") plus:
+                 "prompt_id", "deadline_ms", "reader_model",
+                 "reader_interface", "reader_full") plus:
                    "primary_min_length" (u) bounds of the current-PIN field
                    "primary_max_length" (u)
                    "new_min_length"     (u) bounds of the new AND confirm fields

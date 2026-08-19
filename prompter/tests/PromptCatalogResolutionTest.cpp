@@ -71,3 +71,25 @@ int main(int argc, char** argv)
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();
 }
+
+TEST(PromptCatalogResolution, TheReaderInterfaceQualifierIsSaidInTheHoldersLanguage)
+{
+    // The agent sends a closed token, never prose: it has no localisation, so
+    // any English it composed would arrive already written and no prompter
+    // could fix it. This proves the prompter -- not the agent -- owns the words.
+    KLocalizedString::setLanguages({QStringLiteral("sr")});
+
+    const QString contactless =
+        i18ndc(kDomain, "@info which physical slot of a reader a prompt belongs to", "contactless");
+    EXPECT_EQ(contactless, QString::fromUtf8("бесконтактни"))
+        << "the interface qualifier resolved to the English fallback under a Serbian locale";
+
+    // Substituted, not raw: ki18n marks an unsupplied placeholder, so asserting
+    // the bare pattern would fail on the marker rather than on the translation.
+    const QString reader = i18ndc(kDomain, "@info which reader is asking for the credential", "Reader: %1",
+                                  QStringLiteral("OMNIKEY 5422"));
+    EXPECT_EQ(reader, QString::fromUtf8("Читач: OMNIKEY 5422"));
+
+    const QString details = i18ndc(kDomain, "@action:button reveal the reader's full system name", "Reader details");
+    EXPECT_EQ(details, QString::fromUtf8("Подаци о читачу"));
+}

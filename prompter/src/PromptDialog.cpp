@@ -3,6 +3,8 @@
 
 #include "PromptDialog.h"
 
+#include "PrompterWire.h"
+
 #include "CanInputWidget.h"
 #include "ChangePinInputWidget.h"
 #include "InputWidgetBase.h"
@@ -149,6 +151,32 @@ QLabel* makeClientSuppliedLabel(const QString& text, const char* objectName, QWi
     return label;
 }
 
+// The reader's interface qualifier, said in the holder's language. The agent
+// sends a closed token and never prose: it has no localisation, so any English
+// it composed would arrive already written and no prompter could fix it.
+// An unrecognised token is treated as "unknown" and renders nothing.
+QString readerInterfaceText(const QString& token)
+{
+    if (token == QLatin1String(PrompterWire::kReaderInterfaceContact))
+        return i18nc("@info which physical slot of a reader a prompt belongs to", "contact");
+    if (token == QLatin1String(PrompterWire::kReaderInterfaceContactless))
+        return i18nc("@info which physical slot of a reader a prompt belongs to", "contactless");
+    return {};
+}
+
+// A language-neutral mark beside the localised word, so the two platforms show
+// the same thing where one of them has no localisation at all. These are the
+// closest widely-rendered stand-ins for the chip and wave marks; the word
+// beside them carries the meaning wherever a font lacks the glyph.
+QString readerInterfaceGlyph(const QString& token)
+{
+    if (token == QLatin1String(PrompterWire::kReaderInterfaceContact))
+        return QString::fromUtf8("\xF0\x9F\x92\xB3"); // card in a slot
+    if (token == QLatin1String(PrompterWire::kReaderInterfaceContactless))
+        return QString::fromUtf8("\xF0\x9F\x93\xB6"); // wireless waves
+    return {};
+}
+
 // Localized text for the TRUSTED, agent-owned artifact category tokens (the
 // closed vocabulary the flows attach to their consent prompts). A recognised
 // token renders as prompter chrome — a human sentence, not the raw
@@ -259,6 +287,50 @@ void PromptDialog::buildLayout(const Options& opts)
                                                     "Documents: %1", opts.artifacts.join(QStringLiteral(", "))),
                                               "artifactsLabel", this);
         layout->addWidget(files);
+    }
+
+    // Trusted area: WHICH READER is asking. Load-bearing rather than chrome --
+    // more than one credential window can stand at once, and on a
+    // dual-interface unit whose two PC/SC names share a serial the qualifier is
+    // the only thing separating two otherwise identical dialogs. Agent-owned,
+    // so it sits with the other trusted labels and never inside the
+    // client-supplied group box. Plain text as defence in depth.
+    if (!opts.readerModel.isEmpty()) {
+        const QString qualifier = readerInterfaceText(opts.readerInterface);
+        const QString glyph = readerInterfaceGlyph(opts.readerInterface);
+        // %1 is the reader's model, e.g. "OMNIKEY 5422".
+        QString text = i18nc("@info which reader is asking for the credential", "Reader: %1", opts.readerModel);
+        if (!qualifier.isEmpty()) {
+            // %1 is a language-neutral mark, %2 the localised interface name.
+            text += QStringLiteral(" %1 %2").arg(glyph, qualifier);
+        }
+        auto* reader = new QLabel(text, this);
+        reader->setObjectName(QStringLiteral("readerLabel"));
+        reader->setWordWrap(true);
+        reader->setTextFormat(Qt::PlainText);
+        layout->addWidget(reader);
+
+        // The literal PC/SC name behind a details affordance: it is long enough
+        // to push the entry field off a small screen, so it is available rather
+        // than shown.
+        if (!opts.readerFull.isEmpty()) {
+            m_readerFullLabel = new QLabel(opts.readerFull, this);
+            m_readerFullLabel->setObjectName(QStringLiteral("readerFullDetails"));
+            m_readerFullLabel->setWordWrap(true);
+            m_readerFullLabel->setTextFormat(Qt::PlainText);
+            m_readerFullLabel->hide();
+            layout->addWidget(m_readerFullLabel);
+
+            auto* details =
+                new QPushButton(i18nc("@action:button reveal the reader's full system name", "Reader details"), this);
+            details->setObjectName(QStringLiteral("readerDetailsButton"));
+            details->setFlat(true);
+            details->setAutoDefault(false);
+            details->setDefault(false);
+            connect(details, &QPushButton::clicked, m_readerFullLabel,
+                    [label = m_readerFullLabel] { label->setVisible(!label->isVisible()); });
+            layout->addWidget(details);
+        }
     }
 
     // Trusted area: the card the operation applies to (agent-derived

@@ -249,3 +249,28 @@ msgstr ""
 msgctxt "@info:placeholder unset date entry"
 msgid "select date"
 msgstr ""
+
+#: prompter/src/PromptDialog.cpp:0
+#, kde-format
+msgctxt "@info which physical slot of a reader a prompt belongs to"
+msgid "contact"
+msgstr ""
+
+#: prompter/src/PromptDialog.cpp:0
+#, kde-format
+msgctxt "@info which physical slot of a reader a prompt belongs to"
+msgid "contactless"
+msgstr ""
+
+#: prompter/src/PromptDialog.cpp:0
+#, kde-format
+msgctxt "@info which reader is asking for the credential"
+msgid "Reader: %1"
+msgstr ""
+
+#: prompter/src/PromptDialog.cpp:0
+#, kde-format
+msgctxt "@action:button reveal the reader's full system name"
+msgid "Reader details"
+msgstr ""
+

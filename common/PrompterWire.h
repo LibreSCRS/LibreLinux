@@ -51,6 +51,29 @@ inline constexpr const char* kOptPromptId = "prompt_id";
 // prompter enforces it and closes its own window, so a window cannot be left
 // standing by a dismissal that never arrived.
 inline constexpr const char* kOptDeadlineMs = "deadline_ms";
+// Which reader raised this prompt, as three flat keys. More than one credential
+// window can stand at once, so a dialog that does not name its reader leaves the
+// holder guessing which secret authorises which card -- and on a dual-interface
+// unit whose two slots SHARE a serial, the qualifier below is the only thing
+// separating two otherwise identical dialogs.
+//
+// All three are agent-owned and TRUSTED, unlike kOptArtifacts: the agent owns
+// the reader roster and is the only layer that can tell a dual-interface unit's
+// two slots apart. The prompter renders them and parses none of them.
+inline constexpr const char* kOptReaderModel = "reader_model";
+// A CLOSED vocabulary (kReaderInterface* below), not prose. The agent has no
+// localisation, so any English wording it composed would be unfixable by a
+// prompter -- the agent keeps the judgement, the prompter keeps the words. An
+// unrecognised value is treated as kReaderInterfaceUnknown.
+inline constexpr const char* kOptReaderInterface = "reader_interface";
+// The literal PC/SC name, for a details affordance. Long enough to push the
+// entry field off a small screen, so it never belongs in the chrome itself.
+inline constexpr const char* kOptReaderFull = "reader_full";
+
+// The closed vocabulary of kOptReaderInterface.
+inline constexpr const char* kReaderInterfaceContact = "contact";
+inline constexpr const char* kReaderInterfaceContactless = "contactless";
+inline constexpr const char* kReaderInterfaceUnknown = "unknown";
 inline constexpr const char* kOptTitle = "title";
 inline constexpr const char* kOptDescription = "description";
 inline constexpr const char* kOptRequester = "requester";

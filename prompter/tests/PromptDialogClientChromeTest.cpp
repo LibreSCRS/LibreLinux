@@ -13,6 +13,7 @@
 #include <QApplication>
 #include <QGroupBox>
 #include <QLabel>
+#include <QPushButton>
 
 #include <gtest/gtest.h>
 
@@ -216,4 +217,139 @@ TEST(PromptDialogClientChrome, DescriptionLabelWithMarkupRendersLiterally)
     EXPECT_EQ(desc->text(), hostile) << "the literal markup must be preserved, not stripped/interpreted";
     EXPECT_EQ(desc->textFormat(), Qt::PlainText)
         << "Qt must not be allowed to interpret the client-derived text as rich text";
+}
+
+// --- the reader row --------------------------------------------------------
+//
+// Two credential windows can stand at once, so a dialog that does not name its
+// reader leaves the holder guessing which secret authorises which card. On the
+// dual-interface reader on the owner's desk, whose two PC/SC names SHARE a
+// serial, the qualifier is the only thing separating two otherwise identical
+// dialogs.
+
+namespace {
+
+PromptDialog::Options optsWithReader(const QString& model, const QString& iface, const QString& full)
+{
+    PromptDialog::Options o;
+    o.readerModel = model;
+    o.readerInterface = iface;
+    o.readerFull = full;
+    return o;
+}
+
+constexpr const char* kOmnikeyContactless =
+    "HID Global OMNIKEY 5422 Smartcard Reader [OMNIKEY 5422CL Smartcard Reader] (IM0O2C00NF10456904) 00 00";
+
+} // namespace
+
+TEST(PromptDialogReaderChrome, TheModelAndItsInterfaceQualifierAreBothRendered)
+{
+    int argc = 1;
+    const char* argv[] = {"reader-chrome-test"};
+    QApplication app(argc, const_cast<char**>(argv));
+
+    PromptDialog dlg(PromptDialog::Kind::Can,
+                     optsWithReader(QStringLiteral("OMNIKEY 5422"), QStringLiteral("contactless"),
+                                    QString::fromLatin1(kOmnikeyContactless)));
+
+    auto* label = dlg.findChild<QLabel*>(QStringLiteral("readerLabel"));
+    ASSERT_NE(label, nullptr) << "the dialog does not name its reader";
+    EXPECT_TRUE(label->text().contains(QStringLiteral("OMNIKEY 5422")));
+    EXPECT_TRUE(label->text().contains(QStringLiteral("contactless")))
+        << "without the qualifier the two slots of one reader are indistinguishable: " << label->text().toStdString();
+}
+
+TEST(PromptDialogReaderChrome, TheTwoSlotsOfOneReaderRenderDifferently)
+{
+    int argc = 1;
+    const char* argv[] = {"reader-chrome-test"};
+    QApplication app(argc, const_cast<char**>(argv));
+
+    // The failure this exists to prevent, stated as the test: same model, same
+    // serial, two windows the holder must be able to tell apart.
+    PromptDialog contact(PromptDialog::Kind::Pin,
+                         optsWithReader(QStringLiteral("OMNIKEY 5422"), QStringLiteral("contact"),
+                                        QStringLiteral("... [OMNIKEY 5422 Smartcard Reader] ... 01 00")));
+    PromptDialog contactless(PromptDialog::Kind::Can,
+                             optsWithReader(QStringLiteral("OMNIKEY 5422"), QStringLiteral("contactless"),
+                                            QString::fromLatin1(kOmnikeyContactless)));
+
+    const QString a = contact.findChild<QLabel*>(QStringLiteral("readerLabel"))->text();
+    const QString b = contactless.findChild<QLabel*>(QStringLiteral("readerLabel"))->text();
+    EXPECT_NE(a, b) << "two slots of the same reader produced identical dialogs: " << a.toStdString();
+}
+
+TEST(PromptDialogReaderChrome, TheRawSystemNameIsAvailableButNotInTheChrome)
+{
+    int argc = 1;
+    const char* argv[] = {"reader-chrome-test"};
+    QApplication app(argc, const_cast<char**>(argv));
+
+    // Long enough to push the entry field off a small screen, so it is offered
+    // rather than shown.
+    PromptDialog dlg(PromptDialog::Kind::Can,
+                     optsWithReader(QStringLiteral("OMNIKEY 5422"), QStringLiteral("contactless"),
+                                    QString::fromLatin1(kOmnikeyContactless)));
+
+    auto* label = dlg.findChild<QLabel*>(QStringLiteral("readerLabel"));
+    ASSERT_NE(label, nullptr);
+    EXPECT_FALSE(label->text().contains(QString::fromLatin1(kOmnikeyContactless)));
+
+    auto* details = dlg.findChild<QLabel*>(QStringLiteral("readerFullDetails"));
+    ASSERT_NE(details, nullptr) << "the literal reader name is not reachable at all";
+    EXPECT_EQ(details->text(), QString::fromLatin1(kOmnikeyContactless));
+    EXPECT_FALSE(details->isVisible());
+    ASSERT_NE(dlg.findChild<QPushButton*>(QStringLiteral("readerDetailsButton")), nullptr);
+}
+
+TEST(PromptDialogReaderChrome, AnUnknownQualifierRendersTheModelAlone)
+{
+    int argc = 1;
+    const char* argv[] = {"reader-chrome-test"};
+    QApplication app(argc, const_cast<char**>(argv));
+
+    // A single-interface reader has nothing to disambiguate, so it gets no
+    // qualifier rather than the word "unknown".
+    PromptDialog dlg(PromptDialog::Kind::Pin,
+                     optsWithReader(QStringLiteral("Gemalto PC Twin Reader"), QStringLiteral("unknown"),
+                                    QStringLiteral("Gemalto PC Twin Reader (69988A87) 02 00")));
+
+    auto* label = dlg.findChild<QLabel*>(QStringLiteral("readerLabel"));
+    ASSERT_NE(label, nullptr);
+    EXPECT_TRUE(label->text().contains(QStringLiteral("Gemalto PC Twin Reader")));
+    EXPECT_FALSE(label->text().contains(QStringLiteral("unknown")));
+}
+
+TEST(PromptDialogReaderChrome, APromptWithNoResolvedReaderRendersNoReaderRow)
+{
+    int argc = 1;
+    const char* argv[] = {"reader-chrome-test"};
+    QApplication app(argc, const_cast<char**>(argv));
+
+    PromptDialog dlg(PromptDialog::Kind::Pin, PromptDialog::Options{});
+    EXPECT_EQ(dlg.findChild<QLabel*>(QStringLiteral("readerLabel")), nullptr);
+    EXPECT_EQ(dlg.findChild<QLabel*>(QStringLiteral("readerFullDetails")), nullptr);
+}
+
+TEST(PromptDialogReaderChrome, TheReaderRowIsTrustedChromeNotClientSuppliedFraming)
+{
+    int argc = 1;
+    const char* argv[] = {"reader-chrome-test"};
+    QApplication app(argc, const_cast<char**>(argv));
+
+    // The agent owns the roster and is the only layer that can tell a
+    // dual-interface unit's slots apart, so this belongs with the trusted
+    // labels -- never inside the box that frames client-supplied text.
+    PromptDialog dlg(PromptDialog::Kind::Can,
+                     optsWithReader(QStringLiteral("OMNIKEY 5422"), QStringLiteral("contactless"),
+                                    QString::fromLatin1(kOmnikeyContactless)));
+
+    auto* group = dlg.findChild<QGroupBox*>(QStringLiteral("clientSuppliedGroup"));
+    if (group != nullptr) {
+        EXPECT_EQ(group->findChild<QLabel*>(QStringLiteral("readerLabel")), nullptr);
+    }
+    auto* label = dlg.findChild<QLabel*>(QStringLiteral("readerLabel"));
+    ASSERT_NE(label, nullptr);
+    EXPECT_EQ(label->textFormat(), Qt::PlainText) << "defence in depth: the reader row renders inert";
 }
