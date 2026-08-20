@@ -536,6 +536,44 @@ TEST_F(PrompterIntegrationTest, AltKindsRideTheOptionsDict)
               (std::vector<std::string>{wire::kKindMrz}));
 }
 
+// The offer and what the offered form is WORTH travel together. A dialog told
+// it may switch to a form the caller values at five minutes, but left holding
+// the two the CAN was armed with, hands whoever takes the offer at 0:40 forty
+// seconds to transcribe two lines of 44 characters.
+TEST_F(PrompterIntegrationTest, AltDeadlineRidesTheOptionsDictBesideAltKinds)
+{
+    m_mock->setBehavior(MockBehavior{.status = wire::kStatusOk, .secretBytes = "123456"});
+
+    PromptOptions opts;
+    opts.altKinds = {wire::kKindMrz};
+    opts.altDeadlineMs = 300'000;
+
+    const auto result = m_client->requestCan(opts);
+    ASSERT_EQ(result.status, PromptStatus::Ok);
+
+    const auto captured = m_mock->captured();
+    ASSERT_TRUE(captured.seen);
+    ASSERT_TRUE(captured.options.contains(wire::kOptAltDeadlineMs))
+        << "the offer must say what the alternative form is worth";
+    EXPECT_EQ(captured.options.at(wire::kOptAltDeadlineMs).get<std::uint32_t>(), 300'000U);
+}
+
+// Absent at zero, like every other optional key: the overwhelming majority of
+// prompts offer no switch, and their dictionary must stay byte-identical so a
+// prompter that predates the key is unaffected.
+TEST_F(PrompterIntegrationTest, NoAlternativeDeadlineMeansNoSuchKey)
+{
+    m_mock->setBehavior(MockBehavior{.status = wire::kStatusOk, .secretBytes = "123456"});
+
+    PromptOptions opts;
+    const auto result = m_client->requestCan(opts);
+    ASSERT_EQ(result.status, PromptStatus::Ok);
+
+    const auto captured = m_mock->captured();
+    ASSERT_TRUE(captured.seen);
+    EXPECT_FALSE(captured.options.contains(wire::kOptAltDeadlineMs));
+}
+
 // New client x OLD prompter: a backend that predates the option simply lifts
 // the keys it knows, so the request degrades to an ordinary CAN prompt and the
 // reply is the plain success status. The client must report exactly that — no

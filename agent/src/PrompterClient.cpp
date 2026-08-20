@@ -182,6 +182,12 @@ std::map<std::string, sdbus::Variant> buildOptionsDict(const PromptOptions& opti
     if (!options.altKinds.empty()) {
         dict.emplace(LibreLinux::PrompterWire::kOptAltKinds, sdbus::Variant{options.altKinds});
     }
+    // What the offered form is worth, so the dialog can re-base its clock on
+    // the switch instead of leaving the holder the budget sized for the form
+    // they just left. Omitted at 0 like every other optional key.
+    if (options.altDeadlineMs > 0) {
+        dict.emplace(LibreLinux::PrompterWire::kOptAltDeadlineMs, sdbus::Variant{options.altDeadlineMs});
+    }
     return dict;
 }
 

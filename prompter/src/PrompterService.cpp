@@ -51,6 +51,7 @@ namespace {
 // Kind / option-key / status names live in common/PrompterWire.h (shared with
 // the agent consumer so the two binaries cannot drift). kStatusUnauthorized
 // pairs with a zero-byte sealed memfd so no dialog shows and no secret leaks.
+using PrompterWire::kOptAltDeadlineMs;
 using PrompterWire::kOptAltKinds;
 using PrompterWire::kOptArtifact;
 using PrompterWire::kOptArtifacts;
@@ -249,7 +250,7 @@ void answerSecrets(SecretsResult& result, std::string status, int primaryFd, int
 // Runs on the Qt main thread.
 void raiseWindow(PromptDialog::Kind kind, const PromptDialog::Options& opts, pid_t ownerPid,
                  const std::string& promptId, bool offerMrzSwitch, std::chrono::milliseconds entryBudget,
-                 const std::shared_ptr<SecretResult>& result)
+                 std::chrono::milliseconds altEntryBudget, const std::shared_ptr<SecretResult>& result)
 {
     auto* dlg = new PromptDialog(kind, opts);
     const auto handle = registry().add(dlg, ownerPid, promptId);
@@ -287,6 +288,13 @@ void raiseWindow(PromptDialog::Kind kind, const PromptDialog::Options& opts, pid
     // Armed BEFORE show(): the timer starts from the show event, so the
     // holder's time begins when the window is actually on screen.
     dlg->setEntryDeadline(entryBudget);
+    // What the offered switch is worth, armed alongside it: the dialog re-bases
+    // on it if the holder takes the offer, and ignores it otherwise. Only for a
+    // window that actually offers the switch -- a budget for a form this dialog
+    // cannot show would be a clock nobody can reach.
+    if (offerMrzSwitch) {
+        dlg->setAlternateEntryDeadline(altEntryBudget);
+    }
     // Shown, not exec'd, and without taking focus (see PromptDialog's ctor).
     dlg->show();
     dlg->announce();
@@ -384,6 +392,9 @@ void PrompterService::RequestSecret(SecretResult&& result, std::string kind,
     // A DURATION, not an absolute time: no shared clock between the two
     // processes. 0 (or absent) means no deadline, never an instant expiry.
     const std::chrono::milliseconds entryBudget{optionUInt(options, kOptDeadlineMs, 0u)};
+    // Same shape and same origin instant as entryBudget; meaningful only if the
+    // conjunction below actually offers the switch.
+    const std::chrono::milliseconds altEntryBudget{optionUInt(options, kOptAltDeadlineMs, 0u)};
 
     // THE conjunction, evaluated once and nowhere else: the alternative-kind
     // opt-in is meaningful only on a CAN request, and only for the alternative
@@ -400,8 +411,9 @@ void PrompterService::RequestSecret(SecretResult&& result, std::string kind,
     // thread. POST, never block: holding this thread is what stopped a second
     // reader's prompt from being served at all.
     auto* app = QCoreApplication::instance();
-    const auto raise = [kind = *parsedKind, opts, ownerPid, promptId, offerMrzSwitch, entryBudget, reply] {
-        raiseWindow(kind, opts, ownerPid, promptId, offerMrzSwitch, entryBudget, reply);
+    const auto raise = [kind = *parsedKind, opts, ownerPid, promptId, offerMrzSwitch, entryBudget, altEntryBudget,
+                        reply] {
+        raiseWindow(kind, opts, ownerPid, promptId, offerMrzSwitch, entryBudget, altEntryBudget, reply);
     };
     if (app == nullptr || QThread::currentThread() == app->thread()) {
         // Already on the main thread (single-threaded test harness, or a

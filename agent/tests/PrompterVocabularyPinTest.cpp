@@ -30,4 +30,5 @@ TEST(RequestSecretWire, RequestSecretVocabularyIsPinned)
     namespace wire = LibreLinux::PrompterWire;
     EXPECT_STREQ(wire::kStatusOkMrz, "ok_mrz");
     EXPECT_STREQ(wire::kOptAltKinds, "alt_kinds");
+    EXPECT_STREQ(wire::kOptAltDeadlineMs, "alt_deadline_ms");
 }

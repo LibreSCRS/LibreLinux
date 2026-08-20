@@ -170,6 +170,39 @@ public:
     /// defect: a window left standing with nobody reading it.
     void setEntryDeadline(std::chrono::milliseconds budget);
 
+    /// Arm what the ALTERNATIVE form is worth, for a window that offers the
+    /// in-dialog switch. @p budget is a DURATION measured from the same instant
+    /// as setEntryDeadline's -- the moment the window is SHOWN -- so taking the
+    /// switch re-bases the clock on the larger budget instead of adding a fresh
+    /// one on top of what has already been spent. A switched window therefore
+    /// lives the LONGER of the two budgets, never their sum, which is what
+    /// keeps it inside the longest deadline the transport is pinned against.
+    ///
+    /// Zero (or never called) leaves the clock exactly as setEntryDeadline
+    /// armed it: an agent that predates the option sends no such budget, and
+    /// its windows must behave as they always have.
+    void setAlternateEntryDeadline(std::chrono::milliseconds budget);
+
+    /// The clock's new remaining time when the holder takes the offered switch:
+    /// @p alternative minus @p elapsed -- what the window has ALREADY been
+    /// standing -- never a fresh copy of @p alternative. A window switched at
+    /// 1:50 into a 2:00 budget that then restarted a full 5:00 would stand for
+    /// 6:50, and the transport carrying the prompt is pinned to outlive 5:00,
+    /// not 6:50.
+    ///
+    /// Returns zero, meaning "leave the clock alone", when @p alternative
+    /// grants no more than @p current (including switching BACK to the shorter
+    /// form: time already granted is never taken back) and when the window has
+    /// already outlived @p alternative -- a negative interval would read to a
+    /// QTimer as "fire now" and close the window on the switch itself.
+    ///
+    /// Pure and static: this is the whole arithmetic, testable without a
+    /// running clock, whose default coarse type reports intervals up to 5%
+    /// above nominal and so cannot measure it.
+    [[nodiscard]] static std::chrono::milliseconds rebasedRemaining(std::chrono::milliseconds current,
+                                                                    std::chrono::milliseconds alternative,
+                                                                    std::chrono::milliseconds elapsed) noexcept;
+
     /// True once this window closed itself on its deadline rather than being
     /// answered or dismissed.
     [[nodiscard]] bool expired() const;
@@ -201,6 +234,10 @@ private:
     /// reachable from the switch affordance, which exists only under
     /// @ref Options::offerMrzSwitch.
     void swapInputKind();
+    /// Re-base the running clock on the alternative form's budget. Idempotent
+    /// and one-way: it only ever LENGTHENS the window, so switching back does
+    /// not take back time already granted, and a second switch changes nothing.
+    void rebaseEntryDeadlineOnAlternative();
 
     /// Drop the retry-context error line, if one is shown. It described the
     /// attempt made with the PREVIOUS form's credential, so it must not
@@ -227,6 +264,9 @@ private:
     QTimer* m_countdownTimer = nullptr;
     QLabel* m_countdownLabel = nullptr;
     std::chrono::milliseconds m_entryBudget{0};
+    // What the offered alternative form is worth, measured from the same
+    // instant as m_entryBudget. 0 = the caller offered no budget for it.
+    std::chrono::milliseconds m_altEntryBudget{0};
     std::chrono::steady_clock::time_point m_shownAt{};
     bool m_expired = false;
 };

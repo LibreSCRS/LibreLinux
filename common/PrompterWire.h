@@ -133,6 +133,17 @@ inline constexpr const char* kOptLastError = "last_error";
 // The key is meaningful ONLY on kind "can"; a request of any other kind that
 // carries it renders no switch and answers with today's status vocabulary.
 inline constexpr const char* kOptAltKinds = "alt_kinds";
+// What the ALTERNATIVE form offered by kOptAltKinds is worth, as the same kind
+// of DURATION as kOptDeadlineMs: milliseconds from the moment the window is
+// SHOWN, never an increment on kOptDeadlineMs. A prompter that honours the
+// switch RE-BASES its clock on this value minus what the window has already
+// been standing -- a fresh copy granted on top of what was already spent would
+// let one window outlive the transport carrying it.
+//
+// Meaningful only alongside kOptAltKinds; absent or 0 leaves the clock exactly
+// as kOptDeadlineMs armed it, which is what an agent that predates this key
+// sends and what its windows must keep doing.
+inline constexpr const char* kOptAltDeadlineMs = "alt_deadline_ms";
 
 // Additional option-dict keys of RequestSecrets (all non-secret metadata).
 // Per-role bounds: primary_* applies to the CURRENT credential field,

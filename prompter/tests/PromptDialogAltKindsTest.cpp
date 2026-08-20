@@ -3,7 +3,7 @@
 //
 // Pins the opt-in CAN -> MRZ switch affordance on the credential dialog: a CAN
 // prompt whose caller declared it can also consume an MRZ (Options::
-// offerMrzSwitch) renders one flat switch button between the input widget and
+// offerMrzSwitch) renders one switch button between the input widget and
 // the button box; clicking it swaps CanInputWidget <-> MrzInputWidget IN PLACE
 // (same layout index, old widget destroyed so its destructor scrubs its
 // buffers) and RE-FRAMES the dialog for the new kind (window title, the
@@ -30,12 +30,14 @@
 #include <QLineEdit>
 #include <QPointer>
 #include <QPushButton>
+#include <QTimer>
 #include <QVBoxLayout>
 
 #include <unistd.h> // read, lseek, close
 
 #include <gtest/gtest.h>
 
+#include <chrono>
 #include <cstddef>
 #include <string>
 
@@ -67,6 +69,22 @@ PromptDialog::Options switchableCanOptions()
 QPushButton* switchButtonOf(PromptDialog& dlg)
 {
     return dlg.findChild<QPushButton*>(QStringLiteral("switchToMrzButton"));
+}
+
+// The window's entry clock. The dialog owns exactly two timers -- the one-shot
+// that closes the window and the repeating one that only repaints the label --
+// so single-shot identifies it; assert that here rather than trust it, or a
+// third timer added later would silently re-point every assertion below.
+QTimer* deadlineTimerOf(PromptDialog& dlg)
+{
+    QTimer* found = nullptr;
+    for (QTimer* timer : dlg.findChildren<QTimer*>()) {
+        if (timer->isSingleShot()) {
+            EXPECT_EQ(found, nullptr) << "more than one one-shot timer: the clock is no longer identifiable";
+            found = timer;
+        }
+    }
+    return found;
 }
 
 QPushButton* okButtonOf(PromptDialog& dlg)
@@ -162,7 +180,15 @@ TEST(PromptDialogAltKinds, SwitchAffordancePresentWithOptIn)
     auto* button = switchButtonOf(dlg);
     ASSERT_NE(button, nullptr) << "the opt-in must render the switch affordance";
     EXPECT_FALSE(button->text().isEmpty()) << "the switch must carry a localized label";
-    EXPECT_TRUE(button->isFlat()) << "the switch is a flat inline affordance, not a second primary action";
+    // Breeze draws NO frame on a flat button until the pointer is over it, so
+    // a flat switch reads as centred text and was not recognised as clickable
+    // on a real desk. It must look like a button.
+    EXPECT_FALSE(button->isFlat()) << "a flat switch is invisible as an affordance under Breeze";
+    // Still not a second primary action, which is what flatness was standing in
+    // for: Return accepts the dialog and must never swap the form out from
+    // under someone who has already typed.
+    EXPECT_FALSE(button->isDefault()) << "the switch must not be the dialog's default button";
+    EXPECT_FALSE(button->autoDefault()) << "the switch must not become default by focus";
 
     // Opting in does NOT pre-select the alternative: the dialog still shows the
     // requested CAN form until the user asks for the other one.
@@ -360,4 +386,123 @@ TEST(PromptDialogAltKinds, AcceptOnMrzCapturesCanonicalPayload)
     ASSERT_GE(fd, 0);
     EXPECT_EQ(readMemfd(fd), std::string(kSpecimenPayload));
     ::close(fd);
+}
+
+// ----- the clock follows the form the holder is actually filling in ---------
+//
+// Two halves, deliberately measured apart. The ARITHMETIC (what the new
+// remaining time must be) is exact and belongs to a pure function; the WIRING
+// (the running clock actually got re-armed) is measured on the live QTimer,
+// whose default coarse type may report up to 5% ABOVE its nominal interval --
+// a 120 s timer answered 120147 ms here. Every widget-level bound below is
+// therefore far outside that slop, and none of them tries to tell a re-based
+// clock from a restarted one: that distinction is the pure function's job.
+
+// The trap the whole change exists around: a switch must NOT hand the holder a
+// fresh copy of the alternative's budget. 110 s already spent plus a fresh
+// 300 s is 410 s of window, and the transport carrying the prompt is pinned to
+// outlive 300 s, not 410.
+TEST(PromptDialogAltKinds, RebasedRemainingSubtractsWhatTheWindowAlreadySpent)
+{
+    using namespace std::chrono_literals;
+    const auto rebased = &PromptDialog::rebasedRemaining;
+
+    // The case from the desk: switched at 1:50 into a 2:00 CAN window.
+    EXPECT_EQ(rebased(120'000ms, 300'000ms, 110'000ms), 190'000ms)
+        << "the alternative's budget runs from the window, not from the switch";
+    // Switched the instant it appeared: the whole alternative budget is left.
+    EXPECT_EQ(rebased(120'000ms, 300'000ms, 0ms), 300'000ms);
+    // An alternative worth no more than what is already armed changes nothing,
+    // which is also what switching BACK to the shorter form must do.
+    EXPECT_EQ(rebased(300'000ms, 120'000ms, 10'000ms), 0ms);
+    EXPECT_EQ(rebased(300'000ms, 300'000ms, 10'000ms), 0ms);
+    // Past even the longer budget: never a negative interval, which a QTimer
+    // would read as "fire immediately" and close the window on the switch.
+    EXPECT_EQ(rebased(120'000ms, 300'000ms, 310'000ms), 0ms);
+    // No alternative offered at all.
+    EXPECT_EQ(rebased(120'000ms, 0ms, 10'000ms), 0ms);
+}
+
+// The wiring: taking the offer re-arms the LIVE clock, not just a member. The
+// two budgets are an order of magnitude apart so no coarse-timer slop can
+// account for the difference.
+TEST(PromptDialogAltKinds, SwitchingToTheAlternativeRebasesTheClockOnItsBudget)
+{
+    int argc = 1;
+    const char* argv[] = {"alt-kinds-test"};
+    QApplication app(argc, const_cast<char**>(argv));
+
+    PromptDialog dlg(PromptDialog::Kind::Can, switchableCanOptions(), nullptr);
+    dlg.setEntryDeadline(std::chrono::milliseconds{20'000});
+    dlg.setAlternateEntryDeadline(std::chrono::milliseconds{300'000});
+    dlg.show();
+
+    auto* clock = deadlineTimerOf(dlg);
+    ASSERT_NE(clock, nullptr);
+    ASSERT_TRUE(clock->isActive()) << "the clock starts when the window is shown";
+    ASSERT_LT(clock->remainingTime(), 30'000) << "armed on the requested form's budget";
+
+    switchButtonOf(dlg)->click();
+
+    EXPECT_GT(clock->remainingTime(), 200'000) << "the alternative's budget has to reach the running clock";
+}
+
+// Switching back is not a punishment: a holder who looked at the MRZ form and
+// thought better of it must not find their window closing sooner than before
+// they looked.
+TEST(PromptDialogAltKinds, SwitchingBackNeverTakesBackTimeAlreadyGranted)
+{
+    int argc = 1;
+    const char* argv[] = {"alt-kinds-test"};
+    QApplication app(argc, const_cast<char**>(argv));
+
+    PromptDialog dlg(PromptDialog::Kind::Can, switchableCanOptions(), nullptr);
+    dlg.setEntryDeadline(std::chrono::milliseconds{20'000});
+    dlg.setAlternateEntryDeadline(std::chrono::milliseconds{300'000});
+    dlg.show();
+
+    auto* clock = deadlineTimerOf(dlg);
+    ASSERT_NE(clock, nullptr);
+    switchButtonOf(dlg)->click();
+    ASSERT_GT(clock->remainingTime(), 200'000);
+
+    switchButtonOf(dlg)->click(); // back to the CAN form
+    EXPECT_GT(clock->remainingTime(), 200'000) << "returning to the shorter form must not shorten the window";
+}
+
+// The additive half: an agent that predates the option sends no alternative
+// budget, and such a window must behave exactly as it does today -- the switch
+// still works, the clock simply stays on what it was armed with.
+TEST(PromptDialogAltKinds, WithoutAnAlternativeBudgetTheClockIsUntouched)
+{
+    int argc = 1;
+    const char* argv[] = {"alt-kinds-test"};
+    QApplication app(argc, const_cast<char**>(argv));
+
+    PromptDialog dlg(PromptDialog::Kind::Can, switchableCanOptions(), nullptr);
+    dlg.setEntryDeadline(std::chrono::milliseconds{20'000});
+    dlg.show();
+
+    auto* clock = deadlineTimerOf(dlg);
+    ASSERT_NE(clock, nullptr);
+    switchButtonOf(dlg)->click();
+    EXPECT_LT(clock->remainingTime(), 30'000) << "no alternative budget, no re-base";
+    EXPECT_GT(clock->remainingTime(), 0);
+}
+
+// A window with no clock at all (deadline 0 -- the "unset" sentinel) must not
+// grow one just because a switch was offered.
+TEST(PromptDialogAltKinds, AnAlternativeBudgetNeverArmsAWindowThatHasNoClock)
+{
+    int argc = 1;
+    const char* argv[] = {"alt-kinds-test"};
+    QApplication app(argc, const_cast<char**>(argv));
+
+    PromptDialog dlg(PromptDialog::Kind::Can, switchableCanOptions(), nullptr);
+    dlg.setEntryDeadline(std::chrono::milliseconds::zero());
+    dlg.setAlternateEntryDeadline(std::chrono::milliseconds{300'000});
+    dlg.show();
+
+    switchButtonOf(dlg)->click();
+    EXPECT_EQ(deadlineTimerOf(dlg), nullptr) << "an unset deadline stays unset";
 }

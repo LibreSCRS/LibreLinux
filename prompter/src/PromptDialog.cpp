@@ -403,13 +403,14 @@ void PromptDialog::buildLayout(const Options& opts)
 
     // The switch affordance sits between the input widget and the button box:
     // it changes what is being asked for, so it belongs with the entry area,
-    // not among the accept/cancel actions. Flat, and explicitly NOT a default
-    // button — Return must still accept the dialog, never silently swap the
-    // form out from under a user who has already typed.
+    // not among the accept/cancel actions. Framed, not flat — Breeze leaves a
+    // flat button frameless until hover, which read as plain centred text and
+    // was not taken for something clickable. Not a default button either:
+    // Return must still accept the dialog, never silently swap the form out
+    // from under a user who has already typed.
     if (opts.offerMrzSwitch) {
         m_switchButton = new QPushButton(switchButtonText(m_kind), this);
         m_switchButton->setObjectName(QStringLiteral("switchToMrzButton"));
-        m_switchButton->setFlat(true);
         m_switchButton->setAutoDefault(false);
         m_switchButton->setDefault(false);
         connect(m_switchButton, &QPushButton::clicked, this, &PromptDialog::swapInputKind);
@@ -474,6 +475,42 @@ void PromptDialog::setEntryDeadline(std::chrono::milliseconds budget)
             std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - m_shownAt);
         m_countdownLabel->setText(QStringLiteral("\u23F1 %1").arg(formatRemaining(m_entryBudget - elapsed)));
     });
+}
+
+void PromptDialog::setAlternateEntryDeadline(std::chrono::milliseconds budget)
+{
+    m_altEntryBudget = budget;
+}
+
+std::chrono::milliseconds PromptDialog::rebasedRemaining(std::chrono::milliseconds current,
+                                                         std::chrono::milliseconds alternative,
+                                                         std::chrono::milliseconds elapsed) noexcept
+{
+    if (alternative <= current) {
+        return std::chrono::milliseconds::zero();
+    }
+    const auto remaining = alternative - elapsed;
+    return remaining > std::chrono::milliseconds::zero() ? remaining : std::chrono::milliseconds::zero();
+}
+
+void PromptDialog::rebaseEntryDeadlineOnAlternative()
+{
+    // No clock to re-base: an unset deadline stays unset, and a window not yet
+    // shown has not started one -- showEvent will arm it from m_entryBudget.
+    if (m_deadlineTimer == nullptr || !m_deadlineTimer->isActive()) {
+        return;
+    }
+    const auto elapsed =
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - m_shownAt);
+    const auto remaining = rebasedRemaining(m_entryBudget, m_altEntryBudget, elapsed);
+    if (remaining <= std::chrono::milliseconds::zero()) {
+        return;
+    }
+    // One-way: m_entryBudget now IS the alternative's, so a second switch (and
+    // switching back) finds nothing left to grant and leaves the clock alone.
+    m_entryBudget = m_altEntryBudget;
+    m_deadlineTimer->start(remaining);
+    m_countdownLabel->setText(QStringLiteral("\u23F1 %1").arg(formatRemaining(remaining)));
 }
 
 bool PromptDialog::expired() const
@@ -570,6 +607,7 @@ void PromptDialog::swapInputKind()
     }
     wireValidity();
     m_widget->setFocus();
+    rebaseEntryDeadlineOnAlternative();
 }
 
 int PromptDialog::captureSecretFd()
