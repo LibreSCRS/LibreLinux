@@ -367,7 +367,10 @@ PromptResult PrompterClient::request(std::string_view kind, const PromptOptions&
     // dismiss a prompt would leave it standing with nobody able to close it --
     // the defect this design removes, returning through a mismatched pair.
     if (!prompterIsUsable()) {
-        result.status = PromptStatus::Error;
+        // Not a failure of the helper: it is running and serving, it simply
+        // predates the addressed cancel, so a prompt raised now could never be
+        // dismissed. A capability gap, and one the holder can clear.
+        result.status = PromptStatus::HelperTooOld;
         result.userMessage = "the credential window helper is out of date";
         return result;
     }
@@ -442,7 +445,10 @@ PinChangePromptResult PrompterClient::requestPinChange(const PromptOptions& opti
 
     // Same refusal as the single-secret path, for the same reason.
     if (!prompterIsUsable()) {
-        result.status = PromptStatus::Error;
+        // Not a failure of the helper: it is running and serving, it simply
+        // predates the addressed cancel, so a prompt raised now could never be
+        // dismissed. A capability gap, and one the holder can clear.
+        result.status = PromptStatus::HelperTooOld;
         result.userMessage = "the credential window helper is out of date";
         return result;
     }

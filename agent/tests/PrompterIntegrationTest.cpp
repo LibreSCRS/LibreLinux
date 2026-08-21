@@ -929,7 +929,11 @@ TEST_F(PrompterIntegrationTest, AnOutOfDateHelperGetsNoWindowRaised)
 
     const PromptResult result = m_client->requestPin(PromptOptions{});
 
-    EXPECT_EQ(result.status, PromptStatus::Error);
+    // HelperTooOld, not Error: the helper is running and serving, it merely
+    // predates the addressed cancel. Reporting a fault would describe a broken
+    // helper and cost the holder the remedy — restart the session.
+    EXPECT_EQ(result.status, PromptStatus::HelperTooOld);
+    EXPECT_NE(result.status, PromptStatus::Error) << "a refusal is not a prompter failure";
     EXPECT_FALSE(result.secret.has_value());
     EXPECT_FALSE(m_mock->captured().seen) << "a prompt was raised on a helper that could not dismiss it";
 }
@@ -940,7 +944,9 @@ TEST_F(PrompterIntegrationTest, AnOutOfDateHelperIsRefusedTheChangePinModalToo)
 
     const PinChangePromptResult result = m_client->requestPinChange(PromptOptions{});
 
-    EXPECT_EQ(result.status, PromptStatus::Error);
+    // Same refusal, same reasoning, on the two-secret path.
+    EXPECT_EQ(result.status, PromptStatus::HelperTooOld);
+    EXPECT_NE(result.status, PromptStatus::Error) << "a refusal is not a prompter failure";
     EXPECT_FALSE(result.current.has_value());
     EXPECT_FALSE(result.newPin.has_value());
 }

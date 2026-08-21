@@ -71,9 +71,10 @@ static_assert(u(CardCapabilities::PinManagement) == (1u << 3),
 // demands the matching Operation1.xml enumeration entry (the canonical wire
 // contract clients mirror). Bump the pins here when the taxonomy grows.
 static_assert(u(ErrorCode::None) == 0u, "wire contract: ErrorCode::None drifted from 0");
-static_assert(u(ErrorCode::InvalidDocument) == 19u,
-              "wire contract: ErrorCode::InvalidDocument (last) drifted; mirror in KDE");
-static_assert(u(ErrorCode::InvalidDocument) + 1u == 20u,
+static_assert(u(ErrorCode::InvalidDocument) == 19u, "wire contract: ErrorCode::InvalidDocument drifted");
+static_assert(u(ErrorCode::EntryExpired) == 20u,
+              "wire contract: ErrorCode::EntryExpired (last) drifted; mirror in KDE");
+static_assert(u(ErrorCode::EntryExpired) + 1u == 21u,
               "wire contract: ErrorCode count changed; append the new value to LibreKDE ErrorText.h + bump this guard");
 
 } // namespace

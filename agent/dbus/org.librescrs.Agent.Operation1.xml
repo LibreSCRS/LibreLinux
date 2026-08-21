@@ -51,6 +51,7 @@
       17  RateLimited          too many sign requests from the caller (Sign)
       18  EngineUnavailable    signing engine/security module could not load — deployment (Sign)
       19  InvalidDocument      document to sign is invalid/unreadable — client input (Sign)
+      20  EntryExpired         the credential entry window closed before a secret was entered
 
   Typed results ride on a per-operation sub-interface exported on the
   SAME object path. Strict ordering: the sub-interface Result signal

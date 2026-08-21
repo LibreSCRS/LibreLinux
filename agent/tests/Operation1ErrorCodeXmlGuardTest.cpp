@@ -85,6 +85,8 @@ constexpr const char* wireNameFor(ErrorCode code) noexcept
         return "EngineUnavailable";
     case ErrorCode::InvalidDocument:
         return "InvalidDocument";
+    case ErrorCode::EntryExpired:
+        return "EntryExpired";
     }
     return nullptr; // not a taxonomy value (used to probe past the end)
 }

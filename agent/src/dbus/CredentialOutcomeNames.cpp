@@ -33,6 +33,8 @@ const char* credentialOutcomeToken(CredentialOutcome outcome) noexcept
         return "keyActivationFailed";
     case O::CardRemoved:
         return "cardRemoved";
+    case O::EntryExpired:
+        return "entryExpired";
     }
 #pragma GCC diagnostic pop
     // Unreachable for a valid enumerator; fail closed to the neutral token.
