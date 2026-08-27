@@ -31,6 +31,11 @@ namespace LibreLinux::Prompter {
 
 namespace {
 
+// Every prompt opens at least this wide, so a card's successive dialogs do not
+// change size with their text. Chosen to fit the longest reader chrome line
+// this dialog renders without wrapping it in the common case.
+constexpr int kMinimumDialogWidth = 460;
+
 InputWidgetBase* widgetFor(PromptDialog::Kind kind, const PromptDialog::Options& opts,
                            const PromptDialog::ChangePinWidgetFactory& factory)
 {
@@ -216,6 +221,15 @@ PromptDialog::PromptDialog(Kind kind, const Options& opts, QWidget* parent, Chan
         m_changePinWidget = static_cast<ChangePinInputWidget*>(m_widget);
     }
     setWindowTitle(opts.title.isEmpty() ? defaultTitle(kind) : opts.title);
+
+    // One stable base width for every prompt. Without it the dialog is only as
+    // wide as whatever text this particular prompt happens to carry -- the
+    // action line differs per artifact, the reader name is long or short, the
+    // description and the retry line come and go -- so consecutive prompts for
+    // one card opened at three different sizes and the window appeared to jump
+    // around the screen. Labels stay word-wrapped, so a longer text still grows
+    // the dialog downward; this only stops it shrinking below a readable width.
+    setMinimumWidth(kMinimumDialogWidth);
     // NOT modal, and it does not take focus. Two readers can drive two
     // credential prompts at once, so an application-modal window would stack
     // the second behind the first, and one that grabbed focus would collect the
