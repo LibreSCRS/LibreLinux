@@ -41,6 +41,11 @@ target_include_directories(AgentClientTest PRIVATE
 target_compile_features(AgentClientTest PRIVATE cxx_std_23)
 target_link_libraries(AgentClientTest PRIVATE SDBusCpp::sdbus-c++ GTest::gtest GTest::gtest_main)
 add_test(NAME AgentClientTest COMMAND ${DBUS_RUN_SESSION} -- $<TARGET_FILE:AgentClientTest>)
+# A wedged test under dbus-run-session must fail in minutes, not consume the
+# runner's whole wall: every dbus-run-session test here carries an explicit
+# timeout. The env-gated real-card tests below are deliberately uncapped: they
+# talk to the LIVE session bus and a human-paced card, not a private bus.
+set_tests_properties(AgentClientTest PROPERTIES TIMEOUT 120)
 
 # Pure-text assertions on the configured .module + deployment-(b) server unit
 # (no p11-kit, no D-Bus). The configured files are produced by the parent
@@ -65,6 +70,13 @@ target_compile_definitions(ModuleAbiTest PRIVATE
     LIBRESCRS_PKCS11_MODULE_PATH="$<TARGET_FILE:librescrs-pkcs11-agent>")
 add_dependencies(ModuleAbiTest librescrs-pkcs11-agent)
 add_test(NAME ModuleAbiTest COMMAND ${DBUS_RUN_SESSION} -- $<TARGET_FILE:ModuleAbiTest>)
+# Higher ceiling than the 120 s default used elsewhere in this file: this suite
+# is deliberately slow. One case parks a signature behind a 27 s fake delay to
+# ride past sd-bus's ~25 s default reply window, and two more add 3 s and 2 s,
+# so the floor is already around 33 s. At 120 s that would leave only ~3.6x of
+# headroom, which a slower or loaded runner can eat without anything being
+# actually wrong.
+set_tests_properties(ModuleAbiTest PROPERTIES TIMEOUT 180)
 
 # Module-side security properties (no-PIN-on-wire, mechanism rejection,
 # non-extractable keys, NAM gating) over the real C_* ABI + fake agent.
@@ -79,6 +91,7 @@ target_compile_definitions(SecurityTest PRIVATE
     LIBRESCRS_PKCS11_MODULE_PATH="$<TARGET_FILE:librescrs-pkcs11-agent>")
 add_dependencies(SecurityTest librescrs-pkcs11-agent)
 add_test(NAME SecurityTest COMMAND ${DBUS_RUN_SESSION} -- $<TARGET_FILE:SecurityTest>)
+set_tests_properties(SecurityTest PROPERTIES TIMEOUT 120)
 
 # RPC integration: drive the EXTERNAL consumer pkcs11-tool against the real .so
 # with the FakeAgent as the card backend (in-process deployment-a path). Needs a
@@ -96,7 +109,9 @@ add_dependencies(FakeAgentMain librescrs-pkcs11-agent)
 add_test(NAME Pkcs11ToolRpcTest
     COMMAND ${DBUS_RUN_SESSION} -- bash ${CMAKE_CURRENT_SOURCE_DIR}/pkcs11_tool_rpc.sh
             $<TARGET_FILE:FakeAgentMain> $<TARGET_FILE:librescrs-pkcs11-agent>)
-set_tests_properties(Pkcs11ToolRpcTest PROPERTIES SKIP_RETURN_CODE 77)
+set_tests_properties(Pkcs11ToolRpcTest PROPERTIES
+    SKIP_RETURN_CODE 77
+    TIMEOUT 120)
 
 # Env-gated MANUAL real-card smoke. Talks to the LIVE session bus + agent + card;
 # SKIPs entirely unless LIBRESCRS_HW_SMOKE=1, so it never blocks CI/dev runs and

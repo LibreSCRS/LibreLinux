@@ -212,8 +212,14 @@ target_link_libraries(PrompterAuthIntegrationTest PRIVATE
 # Private session bus (dbus-run-session) + offscreen Qt (no display server).
 add_test(NAME PrompterAuthIntegrationTest
     COMMAND ${DBUS_RUN_SESSION} -- $<TARGET_FILE:PrompterAuthIntegrationTest>)
+# Higher ceiling than the 120 s default used elsewhere in this file: this test
+# stacks its own diagnostics — nine 15 s internal watchdogs, about 135 s worst
+# case. The ctest ceiling has to sit ABOVE that internal ceiling so a wedge
+# still fails as a named assertion with a message ("never returned (test
+# wedged)"), rather than being cut short as a mute Timeout.
 set_tests_properties(PrompterAuthIntegrationTest PROPERTIES
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+    TIMEOUT 180)
 
 # Pins the reject-from-outside contract for PromptDialog. No production
 # source change is required (QDialog::reject is already a slot); this test
@@ -418,7 +424,8 @@ target_link_libraries(PrompterMultiFieldTest PRIVATE
 add_test(NAME PrompterMultiFieldTest
     COMMAND ${DBUS_RUN_SESSION} -- $<TARGET_FILE:PrompterMultiFieldTest>)
 set_tests_properties(PrompterMultiFieldTest PROPERTIES
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+    TIMEOUT 120)
 
 # Serbian catalog RESOLUTION: proves the sr Cyrillic-primary
 # catalog actually resolves at runtime through ki18n — not merely that the .po
@@ -532,6 +539,7 @@ target_link_libraries(EnvPrompterServiceTest PRIVATE
 # needed at all — every call in this prompter is synchronous.
 add_test(NAME EnvPrompterServiceTest
     COMMAND ${DBUS_RUN_SESSION} -- $<TARGET_FILE:EnvPrompterServiceTest>)
+set_tests_properties(EnvPrompterServiceTest PROPERTIES TIMEOUT 120)
 
 # The credential-window registry: pure addressing rules, no bus and no display.
 add_executable(PromptRegistryTest
@@ -597,5 +605,11 @@ target_link_libraries(PrompterConcurrentWindowsTest PRIVATE
 
 add_test(NAME PrompterConcurrentWindowsTest
     COMMAND ${DBUS_RUN_SESSION} -- $<TARGET_FILE:PrompterConcurrentWindowsTest>)
+# Higher ceiling than the 120 s default used elsewhere in this file: this test's
+# own pathological worst case is 25 consecutive 5 s pump budgets, about 125 s.
+# The ctest timeout has to sit ABOVE that internal ceiling so a genuine
+# wedge still surfaces as a named pumpUntil failure with a message, rather than
+# being cut short as a mute Timeout that says nothing about what stalled.
 set_tests_properties(PrompterConcurrentWindowsTest PROPERTIES
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+    TIMEOUT 180)

@@ -72,6 +72,9 @@ target_link_libraries(AgentTransportTest PRIVATE
     GTest::gtest_main)
 add_test(NAME AgentTransportTest
     COMMAND ${DBUS_RUN_SESSION} -- $<TARGET_FILE:AgentTransportTest>)
+# A wedged test under dbus-run-session must fail in minutes, not consume the
+# runner's whole wall: every bus-backed test below carries an explicit timeout.
+set_tests_properties(AgentTransportTest PROPERTIES TIMEOUT 120)
 
 # Static/source guard: the deferred-publish worker hop must marshal back through the
 # transport-handed-out post sink, never a concrete transport poster member. Reads the
@@ -133,6 +136,7 @@ target_link_libraries(TypedChannelWedgeDrainTest PRIVATE
     GTest::gtest_main)
 add_test(NAME TypedChannelWedgeDrainTest
     COMMAND ${DBUS_RUN_SESSION} -- $<TARGET_FILE:TypedChannelWedgeDrainTest>)
+set_tests_properties(TypedChannelWedgeDrainTest PROPERTIES TIMEOUT 120)
 
 # Cross-stack wire-contract drift guard: static_asserts tying the canonical
 # Card1.Capabilities + ErrorCode wire literals to the upstream LM symbol (links
@@ -231,6 +235,7 @@ target_link_libraries(Operation1AdaptorTest PRIVATE
 target_compile_definitions(Operation1AdaptorTest PRIVATE LIBRELINUX_TESTING)
 add_test(NAME Operation1AdaptorTest
     COMMAND ${DBUS_RUN_SESSION} -- $<TARGET_FILE:Operation1AdaptorTest>)
+set_tests_properties(Operation1AdaptorTest PROPERTIES TIMEOUT 120)
 
 # Certificates1.Result wire-shape conformance (compile-only static_assert).
 add_executable(Certificates1XmlCodegenTest Certificates1XmlCodegenTest.cpp)
@@ -283,6 +288,7 @@ target_link_libraries(OperationManagerNameOwnerChangedTest PRIVATE
     GTest::gtest_main)
 add_test(NAME OperationManagerNameOwnerChangedTest
     COMMAND ${DBUS_RUN_SESSION} -- $<TARGET_FILE:OperationManagerNameOwnerChangedTest>)
+set_tests_properties(OperationManagerNameOwnerChangedTest PROPERTIES TIMEOUT 120)
 
 # D-Bus integration test — needs a private session bus + dbus-run-session.
 add_executable(ReaderRemoveDrainTest ReaderRemoveDrainTest.cpp)
@@ -292,6 +298,7 @@ target_link_libraries(ReaderRemoveDrainTest PRIVATE
     GTest::gtest_main)
 add_test(NAME ReaderRemoveDrainTest
     COMMAND ${DBUS_RUN_SESSION} -- $<TARGET_FILE:ReaderRemoveDrainTest>)
+set_tests_properties(ReaderRemoveDrainTest PROPERTIES TIMEOUT 120)
 
 # Reader map + ReaderObject-field concurrency guard: resolveReaderCard (loop
 # thread) hammered against reader/card churn (monitor thread). Needs a private
@@ -303,6 +310,7 @@ target_link_libraries(BusExporterReaderRaceTest PRIVATE
     GTest::gtest_main)
 add_test(NAME BusExporterReaderRaceTest
     COMMAND ${DBUS_RUN_SESSION} -- $<TARGET_FILE:BusExporterReaderRaceTest>)
+set_tests_properties(BusExporterReaderRaceTest PROPERTIES TIMEOUT 120)
 
 add_executable(DBusServiceTest DBusServiceTest.cpp)
 target_link_libraries(DBusServiceTest PRIVATE
@@ -311,6 +319,7 @@ target_link_libraries(DBusServiceTest PRIVATE
     GTest::gtest_main)
 add_test(NAME DBusServiceTest
     COMMAND ${DBUS_RUN_SESSION} -- $<TARGET_FILE:DBusServiceTest>)
+set_tests_properties(DBusServiceTest PROPERTIES TIMEOUT 120)
 
 # Config1 end-to-end (Get/SetValue/Reset/Changed + mutability + polkit gate).
 add_executable(Config1Test Config1Test.cpp)
@@ -320,6 +329,7 @@ target_link_libraries(Config1Test PRIVATE
     GTest::gtest_main)
 add_test(NAME Config1Test
     COMMAND ${DBUS_RUN_SESSION} -- $<TARGET_FILE:Config1Test>)
+set_tests_properties(Config1Test PROPERTIES TIMEOUT 120)
 
 # Card1.ReadIdentity / GetPhoto end-to-end — capability gate + enqueue path.
 add_executable(CardObjectOperationsTest CardObjectOperationsTest.cpp)
@@ -329,6 +339,7 @@ target_link_libraries(CardObjectOperationsTest PRIVATE
     GTest::gtest_main)
 add_test(NAME CardObjectOperationsTest
     COMMAND ${DBUS_RUN_SESSION} -- $<TARGET_FILE:CardObjectOperationsTest>)
+set_tests_properties(CardObjectOperationsTest PROPERTIES TIMEOUT 120)
 
 # PrompterClient end-to-end: drive the client against an in-process mock
 # Prompter1 adaptor (hosted on a separate connection to avoid sd-bus self-call
@@ -359,6 +370,7 @@ target_link_libraries(PrompterIntegrationTest PRIVATE
     GTest::gtest_main)
 add_test(NAME PrompterIntegrationTest
     COMMAND ${DBUS_RUN_SESSION} -- $<TARGET_FILE:PrompterIntegrationTest>)
+set_tests_properties(PrompterIntegrationTest PROPERTIES TIMEOUT 120)
 
 # SecretMemfdReader trust-root input-shape check: a correctly-sealed memfd is
 # accepted, an unsealed memfd (or a non-memfd fd) is rejected. Bus-free — it
@@ -387,6 +399,7 @@ target_link_libraries(CardOperationsIntegrationTest PRIVATE
     GTest::gtest_main)
 add_test(NAME CardOperationsIntegrationTest
     COMMAND ${DBUS_RUN_SESSION} -- $<TARGET_FILE:CardOperationsIntegrationTest>)
+set_tests_properties(CardOperationsIntegrationTest PROPERTIES TIMEOUT 120)
 
 # --- A4 signing (card-free) ------------------------------------------------
 add_executable(SignFlowTest SignFlowTest.cpp)
@@ -514,6 +527,7 @@ target_link_libraries(PrompterClientPinChangeTest PRIVATE
     GTest::gtest_main)
 add_test(NAME PrompterClientPinChangeTest
     COMMAND ${DBUS_RUN_SESSION} -- $<TARGET_FILE:PrompterClientPinChangeTest>)
+set_tests_properties(PrompterClientPinChangeTest PROPERTIES TIMEOUT 120)
 
 # Human-paced prompt budget: the mock prompter replies only AFTER the D-Bus
 # default method timeout has elapsed; the client must still receive the
@@ -530,7 +544,12 @@ target_link_libraries(PrompterClientInteractiveBudgetTest PRIVATE
     GTest::gtest_main)
 add_test(NAME PrompterClientInteractiveBudgetTest
     COMMAND ${DBUS_RUN_SESSION} -- $<TARGET_FILE:PrompterClientInteractiveBudgetTest>)
-set_tests_properties(PrompterClientInteractiveBudgetTest PROPERTIES TIMEOUT 90)
+# Higher ceiling than the 120 s default used elsewhere in this file: the
+# measured floor is ~32 s because the test deliberately rides past sd-bus's
+# ~25 s default reply window (same class as the pkcs11 ModuleAbiTest sibling).
+# The previous 90 s left under 3x headroom, which a loaded runner can eat
+# without anything actually being wrong.
+set_tests_properties(PrompterClientInteractiveBudgetTest PROPERTIES TIMEOUT 180)
 
 # Credentials1 D-Bus surface end-to-end: CardObject (Card1 + Credentials1) + a fake
 # CredentialManager seam + FakePrompterService on a private session bus. Reuses the
@@ -547,3 +566,4 @@ target_link_libraries(CredentialsDbusTest PRIVATE
 target_compile_definitions(CredentialsDbusTest PRIVATE LIBRESCRS_INTERNAL_BUILD)
 add_test(NAME CredentialsDbusTest
     COMMAND ${DBUS_RUN_SESSION} -- $<TARGET_FILE:CredentialsDbusTest>)
+set_tests_properties(CredentialsDbusTest PROPERTIES TIMEOUT 120)
