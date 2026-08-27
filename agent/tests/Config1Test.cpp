@@ -205,7 +205,7 @@ TEST(Config1, DeniedAuthorizerRejectsSetValueAndReset)
 
 // Locks the per-key polkit action mapping under the PRODUCTION default
 // authorizer: the configure tier is allowed, the configure.trust tier
-// (TsaUrls/TslSources) is fail-closed until real polkit (Inc 7).
+// (TsaUrls/TslSources) is fail-closed until real polkit arrives.
 TEST(Config1, TrustTierFailsClosedUnderDefaultAuthorizer)
 {
     const auto dir = uniqueCfgDir("trusttier");

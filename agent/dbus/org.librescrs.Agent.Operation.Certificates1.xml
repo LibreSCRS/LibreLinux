@@ -71,7 +71,7 @@
     u   keyUsageBits    stable bitmask (bit i per X.509 KeyUsage ordinal); client localizes
     as  extendedKeyUsageOids
     as  chainSubjectCns  ordered leaf..root subject CNs (display only). NOTE: until
-                         the Inc 6 chain ladder lands this is just [leaf CN].
+                         the chain ladder lands this is just [leaf CN].
     u   trustStatus     0 Trusted, 1 UntrustedRoot, 2 BrokenChain,
                         3 InvalidCertificate, 4 Expired, 5 Revoked,
                         6 OfflineUnverified, 255 Unknown. Computed by the
