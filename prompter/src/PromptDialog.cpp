@@ -21,6 +21,7 @@
 #include <QGroupBox>
 #include <QLabel>
 #include <QPushButton>
+#include <QToolButton>
 #include <QVBoxLayout>
 
 #include <unistd.h> // close
@@ -328,6 +329,25 @@ void PromptDialog::buildLayout(const Options& opts)
         // to push the entry field off a small screen, so it is available rather
         // than shown.
         if (!opts.readerFull.isEmpty()) {
+            // The arrow is drawn by the style (setArrowType), not an icon
+            // theme: this agent-spawned dialog must render on a session with
+            // no icon theme installed at all, where a themed icon would leave
+            // the only affordance blank. Frameless (autoRaise), unlike the
+            // framed switch button below — there the frame is the sole click
+            // cue, here the permanently drawn arrow carries it.
+            auto* details = new QToolButton(this);
+            details->setObjectName(QStringLiteral("readerDetailsButton"));
+            details->setText(i18nc("@action:button reveal the reader's full system name", "Reader details"));
+            // Without TextBesideIcon the arrow is drawn alone and the label text
+            // is dropped.
+            details->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+            details->setArrowType(Qt::RightArrow);
+            details->setCheckable(true);
+            details->setAutoRaise(true);
+            // A left-aligned row among the other chrome lines, not a centred
+            // full-width header over empty space.
+            layout->addWidget(details, 0, Qt::AlignLeft);
+
             m_readerFullLabel = new QLabel(opts.readerFull, this);
             m_readerFullLabel->setObjectName(QStringLiteral("readerFullDetails"));
             m_readerFullLabel->setWordWrap(true);
@@ -335,15 +355,14 @@ void PromptDialog::buildLayout(const Options& opts)
             m_readerFullLabel->hide();
             layout->addWidget(m_readerFullLabel);
 
-            auto* details =
-                new QPushButton(i18nc("@action:button reveal the reader's full system name", "Reader details"), this);
-            details->setObjectName(QStringLiteral("readerDetailsButton"));
-            details->setFlat(true);
-            details->setAutoDefault(false);
-            details->setDefault(false);
-            connect(details, &QPushButton::clicked, m_readerFullLabel,
-                    [label = m_readerFullLabel] { label->setVisible(!label->isVisible()); });
-            layout->addWidget(details);
+            // Visibility follows the button's checked state — the source of
+            // truth — rather than toggling on isVisible(), which is false for
+            // any child of a window that has not been shown yet and so does not
+            // mean what it appears to mean here.
+            connect(details, &QToolButton::toggled, m_readerFullLabel, [label = m_readerFullLabel, details](bool on) {
+                label->setVisible(on);
+                details->setArrowType(on ? Qt::DownArrow : Qt::RightArrow);
+            });
         }
     }
 

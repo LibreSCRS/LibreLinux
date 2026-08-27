@@ -13,7 +13,7 @@
 #include <QApplication>
 #include <QGroupBox>
 #include <QLabel>
-#include <QPushButton>
+#include <QToolButton>
 
 #include <gtest/gtest.h>
 
@@ -296,11 +296,29 @@ TEST(PromptDialogReaderChrome, TheRawSystemNameIsAvailableButNotInTheChrome)
     ASSERT_NE(label, nullptr);
     EXPECT_FALSE(label->text().contains(QString::fromLatin1(kOmnikeyContactless)));
 
-    auto* details = dlg.findChild<QLabel*>(QStringLiteral("readerFullDetails"));
-    ASSERT_NE(details, nullptr) << "the literal reader name is not reachable at all";
-    EXPECT_EQ(details->text(), QString::fromLatin1(kOmnikeyContactless));
-    EXPECT_FALSE(details->isVisible());
-    ASSERT_NE(dlg.findChild<QPushButton*>(QStringLiteral("readerDetailsButton")), nullptr);
+    auto* full = dlg.findChild<QLabel*>(QStringLiteral("readerFullDetails"));
+    ASSERT_NE(full, nullptr) << "the literal reader name is not reachable at all";
+    EXPECT_EQ(full->text(), QString::fromLatin1(kOmnikeyContactless));
+
+    // The reveal affordance is a disclosure control: a checkable tool button
+    // carrying a style-drawn arrow that points at the text it reveals.
+    auto* details = dlg.findChild<QToolButton*>(QStringLiteral("readerDetailsButton"));
+    ASSERT_NE(details, nullptr) << "no disclosure control for the literal reader name";
+    EXPECT_TRUE(details->isCheckable());
+    EXPECT_EQ(details->arrowType(), Qt::RightArrow);
+
+    // isVisibleTo, never isVisible: this dialog is never shown, and isVisible()
+    // is false for every child of an unshown window, so it would pass on a
+    // permanently visible label just as happily.
+    EXPECT_FALSE(full->isVisibleTo(&dlg));
+
+    details->click();
+    EXPECT_TRUE(full->isVisibleTo(&dlg));
+    EXPECT_EQ(details->arrowType(), Qt::DownArrow);
+
+    details->click();
+    EXPECT_FALSE(full->isVisibleTo(&dlg));
+    EXPECT_EQ(details->arrowType(), Qt::RightArrow);
 }
 
 TEST(PromptDialogReaderChrome, AnUnknownQualifierRendersTheModelAlone)
