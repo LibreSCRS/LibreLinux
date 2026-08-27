@@ -18,7 +18,7 @@
         type-string (the frozen field-key namespace carries the semantics).
         group keys:  subject | issuer | validity | publicKey | cert | ext |
                      basicConstraints | san | ian | crlDp | aia |
-                     certificatePolicies | security
+                     certificatePolicies | eku | security
         field keys:  subject/issuer: cn,o,ou,dn ; validity: notBefore,notAfter
                      publicKey: algorithm,sizeBits,curveOid
                      cert: serial,version,signatureAlgorithm (falls back to the
@@ -42,11 +42,32 @@
                        OCSP-responder / CA-Issuers URI
                      certificatePolicies: policy<n> — one field per policy OID
                        (friendly name, else dotted-decimal; no qualifiers)
+                     eku: usage<n> — one field per ExtendedKeyUsage purpose,
+                       rendered by NAME through the OID database (dotted
+                       decimal when it has no entry). Does NOT replace the
+                       extendedKeyUsageOids member below, which stays the
+                       dotted list a caller matches on
+                     critical: every typed extension group above
+                       (basicConstraints, san, ian, crlDp, aia,
+                       certificatePolicies, eku) may also carry this field —
+                       labelKey EMPTY, labelFallback "Critical", value "true"
+                       — present ONLY when that extension is critical. A group
+                       carries no label on this wire, so the marker rides a
+                       field; the empty labelKey is what marks it as group
+                       metadata rather than a row to render. Absent means not
+                       critical; it is never emitted with a false value
                      security: one field per security-status token (see
                        trustStatus below), keyed by the token itself, value ==
                        the token — the lawful dict-key-growth route for
                        securityStatus (there is no separate wire member for it)
         values are UTF-8 strings (dates ISO-8601 UTC, serial/ext colon/plain hex).
+        One further group, "diagnostic", is emitted INSTEAD of all of the
+        above (and alone) when the agent cannot parse a certificate's DER at
+        all: it carries a single "parseError" field with the parser's own
+        message, and that cert's signingCapable stays false with an empty
+        chainSubjectCns. It is listed apart because it is a failure channel,
+        not part of the certificate vocabulary — but a client decodes it
+        through exactly the same generic path.
     u   keyUsageBits    stable bitmask (bit i per X.509 KeyUsage ordinal); client localizes
     as  extendedKeyUsageOids
     as  chainSubjectCns  ordered leaf..root subject CNs (display only). NOTE: until
