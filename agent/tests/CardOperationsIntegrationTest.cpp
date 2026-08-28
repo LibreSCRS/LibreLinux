@@ -75,6 +75,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <semaphore>
 #include <string>
 #include <string_view>
@@ -831,6 +832,240 @@ TEST(CardOperationsIntegration, SustainedReadLoadKeepsDispatchThreadResponsive)
         }
     }
     EXPECT_TRUE(responsive) << "D-Bus must stay RESPONSIVE after the sustained read flood (no dispatch-thread wedge)";
+
+    client->leaveEventLoop();
+    prompterBus->leaveEventLoop();
+    agentBus->leaveEventLoop();
+}
+
+// ---------------------------------------------------------------------------
+// A standing credential window must not take the bus dispatch thread with it.
+//
+// A prompt is answered at HUMAN speed, so the per-reader worker sits inside
+// Prompter1.RequestSecret for as long as the window stands -- up to the ten
+// minute interactive budget. For that whole time the agent still has to serve
+// everyone else: property reads and the ObjectManager roster must be answered
+// from state the dispatch thread already holds, never queued behind the flow
+// that is waiting on a human. When they are not, one unanswered dialog takes
+// the agent off the bus: clients time out, their rosters come back empty, and
+// nothing on any other reader can be started.
+//
+// The prompt here is raised straight from the reader double rather than through
+// the middleware's activation callback -- what the case pins is the DISPATCH
+// THREAD while a real Prompter1.RequestSecret is outstanding on a real bus, and
+// which layer issued it does not change that. The prompter never answers, which
+// is exactly what a window on screen with nobody typing looks like.
+// ---------------------------------------------------------------------------
+namespace {
+
+constexpr const char* kAgentServicePrompted = "org.librescrs.Agent.Test.E2E.Prompted";
+constexpr const char* kPrompterServicePrompted = "org.librescrs.Prompter1.Test.E2E.Prompted";
+
+// Prompter host that raises the window and never answers: it parks the
+// asynchronous reply and only completes it when the test releases it. That is
+// the whole point -- a mock that answers immediately never puts a worker in the
+// state this case is about.
+class HoldingPrompterService final : public sdbus::AdaptorInterfaces<org::librescrs::Prompter1_adaptor>
+{
+public:
+    HoldingPrompterService(sdbus::IConnection& connection, sdbus::ObjectPath path)
+        : AdaptorInterfaces(connection, std::move(path))
+    {
+        registerAdaptor();
+    }
+    ~HoldingPrompterService()
+    {
+        release();
+        unregisterAdaptor();
+    }
+
+    HoldingPrompterService(const HoldingPrompterService&) = delete;
+    HoldingPrompterService& operator=(const HoldingPrompterService&) = delete;
+    HoldingPrompterService(HoldingPrompterService&&) = delete;
+    HoldingPrompterService& operator=(HoldingPrompterService&&) = delete;
+
+    [[nodiscard]] bool windowStands() const noexcept
+    {
+        return m_standing.load(std::memory_order_acquire);
+    }
+
+    // Close the window the way a dismissal does, so the blocked worker returns
+    // and the suite can tear down without a wedged thread.
+    void release()
+    {
+        std::optional<sdbus::Result<std::string, sdbus::UnixFd, std::string>> pending;
+        {
+            const std::lock_guard lock{m_mutex};
+            pending.swap(m_pending);
+        }
+        if (pending.has_value()) {
+            m_standing.store(false, std::memory_order_release);
+            pending->returnResults(std::string{LibreLinux::PrompterWire::kStatusCancelled},
+                                   sdbus::UnixFd{makeSealedMemfd(""), sdbus::adopt_fd}, std::string{});
+        }
+    }
+
+private:
+    void RequestSecret(sdbus::Result<std::string, sdbus::UnixFd, std::string>&& result, std::string /*kind*/,
+                       std::map<std::string, sdbus::Variant> /*options*/) override
+    {
+        const std::lock_guard lock{m_mutex};
+        m_pending.emplace(std::move(result));
+        m_standing.store(true, std::memory_order_release);
+    }
+
+    void RequestSecrets(sdbus::Result<std::string, sdbus::UnixFd, sdbus::UnixFd, std::string>&& result,
+                        std::string /*kind*/, std::map<std::string, sdbus::Variant> /*options*/) override
+    {
+        result.returnResults(std::string{LibreLinux::PrompterWire::kStatusCancelled},
+                             sdbus::UnixFd{makeSealedMemfd(""), sdbus::adopt_fd},
+                             sdbus::UnixFd{makeSealedMemfd(""), sdbus::adopt_fd}, std::string{});
+    }
+
+    void Reset() override {}
+
+    uint32_t ProtocolVersion() override
+    {
+        return LibreLinux::PrompterWire::kProtocolVersion;
+    }
+
+    void Cancel(const std::string& /*promptId*/) override {}
+
+    mutable std::mutex m_mutex;
+    std::optional<sdbus::Result<std::string, sdbus::UnixFd, std::string>> m_pending;
+    std::atomic<bool> m_standing{false};
+};
+
+// Reader double that asks for a CAN through the real PrompterClient, on the
+// per-reader worker thread, the way a pre-read authentication does.
+class PromptingReader final : public CardReader
+{
+public:
+    explicit PromptingReader(PrompterClientBase& prompter) : m_prompter(prompter) {}
+
+    ReadOutcome read(LibreSCRS::SmartCard::CardSession&, const CandidateList&, LibreSCRS::CancelToken,
+                     GroupReadCallback = {}) override
+    {
+        static_cast<void>(m_prompter.requestCan(PromptOptions{}));
+        return ReadOutcome{ReadOutcome::Status::Cancelled, std::nullopt, "cancelled"};
+    }
+    GroupSnapshot readTokenInfo(LibreSCRS::SmartCard::CardSession&, const CandidateList&,
+                                LibreSCRS::CancelToken) override
+    {
+        return {};
+    }
+
+private:
+    PrompterClientBase& m_prompter;
+};
+
+} // namespace
+
+TEST(CardOperationsIntegration, CredentialPromptDoesNotStallDispatchThread)
+{
+    std::shared_ptr<sdbus::IConnection> agentBus = sdbus::createSessionBusConnection();
+    ASSERT_NE(agentBus, nullptr) << "run under dbus-run-session";
+    agentBus->requestName(sdbus::ServiceName{kAgentServicePrompted});
+
+    auto prompterBus = sdbus::createSessionBusConnection();
+    ASSERT_NE(prompterBus, nullptr);
+    prompterBus->requestName(sdbus::ServiceName{kPrompterServicePrompted});
+    HoldingPrompterService prompterHost(*prompterBus, sdbus::ObjectPath{kPrompterObject});
+
+    agentBus->enterEventLoopAsync();
+    prompterBus->enterEventLoopAsync();
+
+    PrompterClient prompterClient(kPrompterServicePrompted, kPrompterObject);
+    PromptingReader reader(prompterClient);
+    CredentialCache credCache;
+    CardReadCache readCache;
+    PromptSerializer serializer;
+    OperationManager mgr(nullptr); // production (cleanup-grace) mode; no resolver
+    mgr.setSessionFactoryForTest(fakeSessionFactory());
+
+    auto deps = makeDeps(reader, prompterClient, serializer, credCache, readCache);
+    constexpr std::uint32_t kIdentityBit =
+        static_cast<std::uint32_t>(LibreSCRS::Plugin::CardCapabilities::IdentityData);
+    CardObject card(*agentBus, sdbus::ObjectPath{kCardPath}, kIdentityBit, sdbus::ObjectPath{kReaderPath}, mgr,
+                    std::move(deps));
+
+    auto client = sdbus::createSessionBusConnection();
+    ASSERT_NE(client, nullptr);
+    client->enterEventLoopAsync();
+    auto cardProxy =
+        sdbus::createProxy(*client, sdbus::ServiceName{kAgentServicePrompted}, sdbus::ObjectPath{kCardPath});
+
+    // Every call in this case carries an explicit budget, this one included: a
+    // dispatch thread that raised the window itself would otherwise leave the
+    // suite hanging on the D-Bus default instead of saying what went wrong.
+    constexpr auto kAnswerBudget = 3s;
+    constexpr auto kAnswerBudgetUs = std::chrono::duration_cast<std::chrono::microseconds>(kAnswerBudget);
+    sdbus::ObjectPath opPath;
+    try {
+        cardProxy->callMethod("ReadIdentity")
+            .onInterface(sdbus::InterfaceName{kCard1Iface})
+            .withTimeout(kAnswerBudgetUs)
+            .storeResultsTo(opPath);
+    } catch (const sdbus::Error& e) {
+        FAIL() << "ReadIdentity did not return the operation path promptly, so the dispatch thread is raising the "
+                  "window itself instead of handing it to the per-reader worker: "
+               << e.getName() << ": " << e.getMessage();
+    }
+    EXPECT_FALSE(opPath.empty());
+
+    const auto raised = std::chrono::steady_clock::now() + 5s;
+    while (!prompterHost.windowStands() && std::chrono::steady_clock::now() < raised) {
+        std::this_thread::sleep_for(10ms);
+    }
+    ASSERT_TRUE(prompterHost.windowStands()) << "the read never reached the prompter, so nothing is being held";
+
+    // The decisive assertions, taken WHILE the window stands. The budget is far
+    // shorter than the interactive one the worker is sitting on: a dispatch
+    // thread waiting behind that fails here instead of answering.
+    try {
+        sdbus::Variant caps;
+        cardProxy->callMethod("Get")
+            .onInterface(sdbus::InterfaceName{"org.freedesktop.DBus.Properties"})
+            .withTimeout(kAnswerBudgetUs)
+            .withArguments(std::string{kCard1Iface}, std::string{"Capabilities"})
+            .storeResultsTo(caps);
+        EXPECT_EQ(caps.get<std::uint32_t>(), kIdentityBit);
+    } catch (const sdbus::Error& e) {
+        ADD_FAILURE() << "Card1 property read did not answer while a credential window stood: " << e.getName() << ": "
+                      << e.getMessage();
+    }
+    try {
+        std::map<std::string, sdbus::Variant> all;
+        cardProxy->callMethod("GetAll")
+            .onInterface(sdbus::InterfaceName{"org.freedesktop.DBus.Properties"})
+            .withTimeout(kAnswerBudgetUs)
+            .withArguments(std::string{kCard1Iface})
+            .storeResultsTo(all);
+        EXPECT_TRUE(all.contains("Capabilities"));
+    } catch (const sdbus::Error& e) {
+        ADD_FAILURE() << "the Card1 property snapshot did not answer while a credential window stood: " << e.getName()
+                      << ": " << e.getMessage();
+    }
+    try {
+        sdbus::Variant probe;
+        cardProxy->callMethod("Get")
+            .onInterface(sdbus::InterfaceName{"org.freedesktop.DBus.Properties"})
+            .withTimeout(kAnswerBudgetUs)
+            .withArguments(std::string{kCard1Iface}, std::string{"Reader"})
+            .storeResultsTo(probe);
+        EXPECT_EQ(probe.get<sdbus::ObjectPath>(), sdbus::ObjectPath{kReaderPath});
+    } catch (const sdbus::Error& e) {
+        ADD_FAILURE() << "a second read behind the first did not answer while a credential window stood: "
+                      << e.getName() << ": " << e.getMessage();
+    }
+
+    // Dismiss so the blocked worker returns and teardown is not left joining a
+    // thread that is still inside the prompter call.
+    prompterHost.release();
+    const auto settled = std::chrono::steady_clock::now() + 5s;
+    while (prompterHost.windowStands() && std::chrono::steady_clock::now() < settled) {
+        std::this_thread::sleep_for(10ms);
+    }
 
     client->leaveEventLoop();
     prompterBus->leaveEventLoop();
