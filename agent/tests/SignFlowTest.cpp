@@ -239,6 +239,7 @@ struct Harness
     }
 };
 
+constexpr auto kReading = static_cast<std::uint32_t>(OperationPhase::Reading);
 constexpr auto kAwaiting = static_cast<std::uint32_t>(OperationPhase::AwaitingConsent);
 constexpr auto kAuth = static_cast<std::uint32_t>(OperationPhase::Authenticating);
 constexpr auto kSigning = static_cast<std::uint32_t>(OperationPhase::Signing);
@@ -425,12 +426,13 @@ TEST(SignFlow, PinPathPhaseOrderingAndUncachedPrompt)
     EXPECT_TRUE(h.signer.sawPin) << "the pin field reached the signer";
     EXPECT_EQ(h.prompter.pinCalls, 1) << "PIN prompted (uncached)";
     EXPECT_EQ(h.prompter.canCalls, 0);
-    // AwaitingConsent precedes Authenticating+Signing: the watchdog (armed on
-    // Authenticating) covers signing but never times the human at the prompt.
-    ASSERT_EQ(h.phaseSink.phases.size(), 3u);
-    EXPECT_EQ(h.phaseSink.phases[0], kAwaiting);
-    EXPECT_EQ(h.phaseSink.phases[1], kAuth);
-    EXPECT_EQ(h.phaseSink.phases[2], kSigning);
+    // Reading (the pre-consent anti-TOCTOU re-read / PACE establishment) fires
+    // first, then AwaitingConsent, then Authenticating+Signing: the watchdog
+    // (armed on Reading, then re-armed on Authenticating) covers the on-card
+    // I/O and the signing but never times the human at the prompt. Asserted
+    // as the full ordered sequence, not just its length, so a phase going
+    // missing, duplicated, or reordered cannot pass unnoticed.
+    EXPECT_EQ(h.phaseSink.phases, (std::vector<std::uint32_t>{kReading, kAwaiting, kAuth, kSigning}));
 }
 
 TEST(SignFlow, PinPromptCancelMapsCancelledAndArmsNothing)
@@ -441,9 +443,11 @@ TEST(SignFlow, PinPromptCancelMapsCancelledAndArmsNothing)
     auto r = h.make().run();
     EXPECT_EQ(r.outcome, SignFlow::Outcome::Cancelled);
     EXPECT_EQ(h.prompter.pinCalls, 1);
-    // Only AwaitingConsent — the watchdog-arming phases never fire on a cancel.
-    ASSERT_EQ(h.phaseSink.phases.size(), 1u);
-    EXPECT_EQ(h.phaseSink.phases[0], kAwaiting);
+    // Reading (armed before the prompt) then AwaitingConsent -- the
+    // watchdog-arming Authenticating/Signing phases never fire on a cancel.
+    // Asserted as the full sequence so an extra or reordered phase cannot
+    // pass unnoticed.
+    EXPECT_EQ(h.phaseSink.phases, (std::vector<std::uint32_t>{kReading, kAwaiting}));
 }
 
 TEST(SignFlow, PinPrompterErrorMapsPrompterErrorNotAuthFailed)
@@ -486,9 +490,10 @@ TEST(SignFlow, CanPathIsCachedAndAddsNoSignPhases)
     EXPECT_EQ(h.prompter.canCalls, 1);
     EXPECT_EQ(h.prompter.pinCalls, 0);
     EXPECT_TRUE(h.cache.hasCan("card-A")) << "CAN cached for reuse (PIN never is)";
-    // Channel establishment surfaces AwaitingConsent only — not the sign phases.
-    ASSERT_EQ(h.phaseSink.phases.size(), 1u);
-    EXPECT_EQ(h.phaseSink.phases[0], kAwaiting);
+    // Reading (armed before the channel-establishment prompt) then
+    // AwaitingConsent only -- channel establishment never surfaces the sign
+    // phases. Asserted as the full sequence, not just its length.
+    EXPECT_EQ(h.phaseSink.phases, (std::vector<std::uint32_t>{kReading, kAwaiting}));
 }
 
 TEST(SignFlow, ChainCompleteIsAlwaysFalseReservedThisRelease)
