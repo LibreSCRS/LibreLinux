@@ -16,6 +16,7 @@
 #include <map>
 #include <memory>
 #include <span>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -110,6 +111,58 @@ public:
     }
 };
 class UnusedPrompter final : public PrompterClientBase
+{
+public:
+    PromptResult requestPin(const PromptOptions&) override
+    {
+        return {};
+    }
+    PromptResult requestCan(const PromptOptions&) override
+    {
+        return {};
+    }
+    PromptResult requestMrz(const PromptOptions&) override
+    {
+        return {};
+    }
+};
+
+// Cache-miss holder: unlike makeUnusedHolder() above, the factory + resolver
+// actually build a session/candidate list instead of failing the test, so a
+// real fake reader can drive the flow (mirrors
+// ReadIdentityOperationTest::makeHolder).
+inline std::unique_ptr<CardSessionHolder> makeHolder()
+{
+    auto factory = [](const std::string& r)
+        -> std::expected<std::shared_ptr<LibreSCRS::SmartCard::CardSession>, LibreSCRS::SmartCard::OpenError> {
+        return LibreSCRS::SmartCard::detail::makeDetachedCardSession(r);
+    };
+    auto resolver = [](std::span<const std::uint8_t>, LibreSCRS::SmartCard::CardSession&) { return CandidateList{}; };
+    return std::make_unique<CardSessionHolder>("FakeReader", std::move(factory), std::move(resolver),
+                                               std::make_shared<LibreSCRS::SmartCard::CardMap>());
+}
+
+// A reader that actually walks the card on a cache miss -- the twin of
+// UnusedReader above, which must never run.
+class FakeReader final : public CardReader
+{
+public:
+    ReadOutcome read(LibreSCRS::SmartCard::CardSession&, const CandidateList&, LibreSCRS::CancelToken,
+                     GroupReadCallback = {}) override
+    {
+        ++reads;
+        return outcome;
+    }
+    GroupSnapshot readTokenInfo(LibreSCRS::SmartCard::CardSession&, const CandidateList&,
+                                LibreSCRS::CancelToken) override
+    {
+        return {};
+    }
+    ReadOutcome outcome;
+    int reads = 0; ///< how many times the card was actually walked
+};
+
+class FakePrompter final : public PrompterClientBase
 {
 public:
     PromptResult requestPin(const PromptOptions&) override
@@ -252,4 +305,59 @@ TEST(GetPhotoOperation, NoPhotoFieldYieldsError)
     ASSERT_EQ(raw->finishes.size(), 1u);
     EXPECT_EQ(raw->finishes[0].status, 2u);
     EXPECT_TRUE(raw->captured.empty());
+}
+
+// Every test above pre-seeds the read cache and uses
+// makeUnusedHolder()/UnusedReader, which ADD_FAILURE()s if the flow is ever
+// actually driven -- so IdentityReadFlow::run() (and the .readerName forward
+// this op wires into it) was never exercised anywhere in this file. This is
+// the one cache-miss case: an empty cache, a reader that actually walks the
+// card, through to a successful photo emission -- mirrors
+// ReadIdentityOperationTest::SuccessPathPopulatesCacheEmitsResultThenFinishes.
+TEST(GetPhotoOperation, CacheMissDrivesFlowAndNamesReaderInAuditLine)
+{
+    CardReadCache readCache; // empty: forces the cache-miss path
+    auto holder = makeHolder();
+    FakeReader reader;
+    reader.outcome = ReadOutcome{ReadOutcome::Status::Ok, snapshotWithPhotos(), ""};
+    FakePrompter prompter;
+    PromptSerializer serializer;
+    CredentialCache credCache;
+
+    auto adaptor = std::make_unique<FakeOperationChannel>();
+    auto* raw = adaptor.get();
+    auto state = std::make_shared<OperationState>();
+
+    std::stringstream captured;
+    std::streambuf* saved = std::clog.rdbuf(captured.rdbuf());
+
+    GetPhotoOperation op(std::move(adaptor),
+                         GetPhotoOperation::Deps{
+                             .holder = holder.get(),
+                             .reader = reader,
+                             .depositor = depositor,
+                             .prompter = prompter,
+                             .serializer = serializer,
+                             .credentials = credCache,
+                             .readCache = readCache,
+                             .cardKey = "card-A",
+                             .readerName = "FakeReader",
+                         },
+                         state);
+    op.runOnWorker();
+
+    std::clog.rdbuf(saved);
+    const std::string out = captured.str();
+
+    ASSERT_EQ(raw->finishes.size(), 1u);
+    EXPECT_EQ(raw->finishes[0].status, 0u) << "OperationStatus::Ok";
+    ASSERT_EQ(raw->captured.size(), 1u);
+    ASSERT_TRUE(raw->captured.contains("photo:portrait"));
+    EXPECT_EQ(reader.reads, 1) << "the cache miss must actually walk the card";
+    EXPECT_TRUE(readCache.get("card-A").has_value()) << "the cache-miss read populates the cache";
+
+    // The load-bearing assertion: the flow's audit line must name THIS
+    // reader, not read empty -- proving GetPhotoOperation.cpp's
+    // `.readerName = m_deps.readerName,` forward actually reaches the flow.
+    EXPECT_NE(out.find("reader=\"FakeReader\""), std::string::npos) << out;
 }

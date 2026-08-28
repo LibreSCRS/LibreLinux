@@ -34,7 +34,9 @@ public:
         CardReadCache& readCache;
         std::string cardKey;
         // Human reader name, used by the OperationManager to lazily build this
-        // reader's CardSessionHolder. Not consumed by the flow.
+        // reader's CardSessionHolder, and forwarded into
+        // IdentityReadFlowDeps::readerName for the flow's per-request audit
+        // line.
         std::string readerName;
         // Caller-identity chrome for the consent prompt: the requesting
         // client's best-effort label and the artifact being read ("photo").

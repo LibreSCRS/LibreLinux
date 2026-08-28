@@ -35,8 +35,10 @@ public:
         CardReadCache& readCache;
         std::string cardKey;
         // Human reader name (e.g. "Yubico YubiKey ..."), used by the
-        // OperationManager to lazily build this reader's CardSessionHolder. Not
-        // consumed by the flow (the holder owns the open).
+        // OperationManager to lazily build this reader's CardSessionHolder, and
+        // forwarded into IdentityReadFlowDeps::readerName for the flow's
+        // per-request audit line (the flow never uses it to open anything --
+        // the holder owns the open).
         std::string readerName;
         // Caller-identity chrome for the consent prompt: the requesting
         // client's best-effort label and the artifact being read ("identity").

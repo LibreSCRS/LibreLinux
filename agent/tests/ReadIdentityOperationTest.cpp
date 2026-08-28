@@ -14,6 +14,7 @@
 #include <expected>
 #include <memory>
 #include <span>
+#include <sstream>
 #include <string_view>
 #include <utility>
 #include <variant>
@@ -147,7 +148,12 @@ TEST(ReadIdentityOperation, SuccessPathPopulatesCacheEmitsResultThenFinishes)
                                  .readerName = "FakeReader",
                              },
                              state);
+
+    std::stringstream captured;
+    std::streambuf* saved = std::clog.rdbuf(captured.rdbuf());
     op.runOnWorker();
+    std::clog.rdbuf(saved);
+    const std::string logged = captured.str();
 
     ASSERT_EQ(raw->finishes.size(), 1u);
     EXPECT_EQ(raw->finishes[0].status, 0u) << "OperationStatus::Ok";
@@ -159,6 +165,13 @@ TEST(ReadIdentityOperation, SuccessPathPopulatesCacheEmitsResultThenFinishes)
     auto cached = readCache.get("card-A");
     ASSERT_TRUE(cached.has_value());
     EXPECT_EQ(cached->groups.size(), 2u) << "cache stores the full snapshot (photos included)";
+
+    // The flow's audit line must name THIS reader, not read empty -- proving
+    // ReadIdentityOperation.cpp's `.readerName = m_deps.readerName,` forward
+    // actually reaches the flow (content asserted at the LA level; this is
+    // the one LL-side check that a regression dropping the forward would
+    // still be caught here, not only at LA).
+    EXPECT_NE(logged.find("reader=\"FakeReader\""), std::string::npos) << logged;
 }
 
 // A re-read of a still-seated card (master-detail browsing / a reader switch

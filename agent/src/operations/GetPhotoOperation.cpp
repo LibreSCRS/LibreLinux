@@ -41,6 +41,7 @@ std::optional<CardReadSnapshot> GetPhotoOperation::obtainSnapshot()
         .phaseSink = *this,
         .groupSink = noGroupStream,
         .cardKey = m_deps.cardKey,
+        .readerName = m_deps.readerName,
         .requester = m_deps.requester,
         .artifact = m_deps.artifact,
         .token = token(),

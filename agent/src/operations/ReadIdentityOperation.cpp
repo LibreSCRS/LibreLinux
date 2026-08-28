@@ -65,6 +65,7 @@ void ReadIdentityOperation::doWork()
         .phaseSink = *this,
         .groupSink = *this,
         .cardKey = m_deps.cardKey,
+        .readerName = m_deps.readerName,
         .requester = m_deps.requester,
         .artifact = m_deps.artifact,
         .token = token(),
