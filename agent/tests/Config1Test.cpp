@@ -8,6 +8,7 @@
 // the Changed signal.
 #include <LibreSCRS/Agent/backend/Authorizer.h>
 #include <LibreSCRS/Agent/config/ConfigStore.h>
+#include <LibreSCRS/Agent/operations/RateLimiter.h>
 #include "dbus/ManagerObject.h"
 #include <sdbus-c++/sdbus-c++.h>
 #include <gtest/gtest.h>
@@ -74,7 +75,8 @@ TEST(Config1, GetSetResetAndValidation)
     serverConn->requestName(sdbus::ServiceName{svc});
     Config::ConfigStore cfg(dir / "agent.conf", dir / "cache");
     AllowAllAuthorizer authz;
-    ManagerObject manager(*serverConn, sdbus::ObjectPath{kRootPath}, "t", cfg, authz, nullptr);
+    Operations::RateLimiter limiter;
+    ManagerObject manager(*serverConn, sdbus::ObjectPath{kRootPath}, "t", cfg, authz, limiter, nullptr);
     serverConn->enterEventLoopAsync();
 
     auto clientConn = sdbus::createSessionBusConnection();
@@ -187,7 +189,8 @@ TEST(Config1, ChangedSignalFires)
     serverConn->requestName(sdbus::ServiceName{svc});
     Config::ConfigStore cfg(dir / "agent.conf", dir / "cache");
     AllowAllAuthorizer authz;
-    ManagerObject manager(*serverConn, sdbus::ObjectPath{kRootPath}, "t", cfg, authz, nullptr);
+    Operations::RateLimiter limiter;
+    ManagerObject manager(*serverConn, sdbus::ObjectPath{kRootPath}, "t", cfg, authz, limiter, nullptr);
     // AgentService wires this in production; replicate so the mutation emits Changed.
     cfg.setOnChanged([&](const std::string& key) { manager.emitConfigChanged(key); });
     serverConn->enterEventLoopAsync();
@@ -228,7 +231,8 @@ TEST(Config1, DeniedAuthorizerRejectsSetValueAndReset)
     serverConn->requestName(sdbus::ServiceName{svc});
     Config::ConfigStore cfg(dir / "agent.conf", dir / "cache");
     DenyAuthorizer deny;
-    ManagerObject manager(*serverConn, sdbus::ObjectPath{kRootPath}, "t", cfg, deny, nullptr);
+    Operations::RateLimiter limiter;
+    ManagerObject manager(*serverConn, sdbus::ObjectPath{kRootPath}, "t", cfg, deny, limiter, nullptr);
     serverConn->enterEventLoopAsync();
 
     auto clientConn = sdbus::createSessionBusConnection();
@@ -267,7 +271,8 @@ TEST(Config1, TrustTierFailsClosedUnderDefaultAuthorizer)
     serverConn->requestName(sdbus::ServiceName{svc});
     Config::ConfigStore cfg(dir / "agent.conf", dir / "cache");
     DefaultAuthorizer authz; // configure allowed, configure.trust denied
-    ManagerObject manager(*serverConn, sdbus::ObjectPath{kRootPath}, "t", cfg, authz, nullptr);
+    Operations::RateLimiter limiter;
+    ManagerObject manager(*serverConn, sdbus::ObjectPath{kRootPath}, "t", cfg, authz, limiter, nullptr);
     serverConn->enterEventLoopAsync();
 
     auto clientConn = sdbus::createSessionBusConnection();

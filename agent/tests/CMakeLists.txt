@@ -567,3 +567,42 @@ target_compile_definitions(CredentialsDbusTest PRIVATE LIBRESCRS_INTERNAL_BUILD)
 add_test(NAME CredentialsDbusTest
     COMMAND ${DBUS_RUN_SESSION} -- $<TARGET_FILE:CredentialsDbusTest>)
 set_tests_properties(CredentialsDbusTest PROPERTIES TIMEOUT 120)
+
+# --- country-signing anchor import ------------------------------------------
+#
+# The synthetic master-list fixture mints its certificates with the SYSTEM
+# OpenSSL. That dependency is the test's alone: the agent consumes the published
+# LibreMiddleware trust API and links no crypto library of its own, which is the
+# property CscaAnchorImport.cpp exists to preserve.
+find_package(OpenSSL REQUIRED COMPONENTS Crypto)
+add_library(SyntheticMasterList STATIC SyntheticMasterList.cpp)
+target_include_directories(SyntheticMasterList PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(SyntheticMasterList PUBLIC OpenSSL::Crypto)
+target_compile_features(SyntheticMasterList PUBLIC cxx_std_23)
+set_target_properties(SyntheticMasterList PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
+# Trust bootstrap away from D-Bus: first import, pin, rotation, and the
+# refusals — including the link certificate that a self-signed-only filter
+# would drop.
+add_executable(CscaAnchorImportTest CscaAnchorImportTest.cpp)
+target_link_libraries(CscaAnchorImportTest PRIVATE
+    LibreLinuxAgentCore
+    SyntheticMasterList
+    GTest::gtest
+    GTest::gtest_main)
+add_test(NAME CscaAnchorImportTest COMMAND CscaAnchorImportTest)
+set_tests_properties(CscaAnchorImportTest PROPERTIES TIMEOUT 120)
+
+# Config1.ImportCscaMasterList over a private session bus: the authorise ->
+# rate-limit -> read ORDER (proved by the descriptor's own file offset, not by
+# the error name, which an implementation with the checks reversed also
+# returns), the descriptor discipline, and the accepted path.
+add_executable(CscaImportDbusTest CscaImportDbusTest.cpp)
+target_link_libraries(CscaImportDbusTest PRIVATE
+    LibreLinuxAgentCore
+    SyntheticMasterList
+    GTest::gtest
+    GTest::gtest_main)
+add_test(NAME CscaImportDbusTest
+    COMMAND ${DBUS_RUN_SESSION} -- $<TARGET_FILE:CscaImportDbusTest>)
+set_tests_properties(CscaImportDbusTest PROPERTIES TIMEOUT 120)

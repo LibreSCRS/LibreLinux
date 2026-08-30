@@ -46,7 +46,7 @@ AgentFrontend::AgentFrontend(BusExporter& transport, std::shared_ptr<sdbus::ICon
     // ObjectManager natively. The Pkcs11_1 surface forwards to the AgentCore-owned
     // broker this frontend borrows.
     m_manager = std::make_unique<ManagerObject>(*m_connection, sdbus::ObjectPath{LibreLinux::AgentWire::kRootPath},
-                                                m_version, m_config, m_authorizer, m_pkcs11);
+                                                m_version, m_config, m_authorizer, m_rateLimiter, m_pkcs11);
 
     // Register the materialization callbacks on the transport: each typed presence
     // delta forwarded here CREATES / DESTROYS the real exported sdbus object.

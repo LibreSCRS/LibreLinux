@@ -9,12 +9,16 @@
 #include <sdbus-c++/StandardInterfaces.h>
 #include <sdbus-c++/Types.h>
 #include <cstdint>
+#include <map>
 #include <string>
 #include <tuple>
 #include <vector>
 namespace LibreSCRS::Agent {
 namespace Config {
 class ConfigStore;
+}
+namespace Operations {
+class RateLimiter;
 }
 class Authorizer;
 class Pkcs11Broker;
@@ -37,8 +41,12 @@ public:
     // single IObject per path, so the low-level PKCS#11 broker rides here next
     // to Manager1 + Config1). May be null in conformance tests that never
     // exercise the Pkcs11_1 methods.
+    // @p rateLimiter is a REFERENCE rather than a nullable pointer like @p
+    // pkcs11: it is the flood bound on ImportCscaMasterList, and a surface that
+    // could be wired without one would be wired without one.
     ManagerObject(sdbus::IConnection& connection, sdbus::ObjectPath path, std::string version,
-                  Config::ConfigStore& config, Authorizer& authorizer, Pkcs11Broker* pkcs11);
+                  Config::ConfigStore& config, Authorizer& authorizer, Operations::RateLimiter& rateLimiter,
+                  Pkcs11Broker* pkcs11);
     ~ManagerObject();
     ManagerObject(const ManagerObject&) = delete;
     ManagerObject& operator=(const ManagerObject&) = delete;
@@ -75,12 +83,18 @@ private:
     std::string TslCacheDir() override;
     std::string AiaCacheDir() override;
     std::vector<sdbus::Struct<std::string, bool>> CscaSources() override;
+    // Empty dict until a master list has been accepted; see the XML for the keys.
+    std::map<std::string, sdbus::Variant> CscaAnchorState() override;
     std::string DefaultReason() override;
     std::string DefaultLocation() override;
     std::string PluginDir() override;
     // Config1 — mutation (throws sdbus::Error on rejection)
     void SetValue(const std::string& key, const sdbus::Variant& value) override;
     void Reset(const std::string& key) override;
+    // Config1 — install country-signing anchors from a signed ICAO master list.
+    // Authorise, then rate-limit, THEN read the descriptor: a refused caller
+    // must not be able to make the agent read anything.
+    std::map<std::string, sdbus::Variant> ImportCscaMasterList(const sdbus::UnixFd& masterList) override;
 
     // Pkcs11_1 — low-level PKCS#11 broker. The card-touching methods are sdbus-c++
     // ASYNC methods (org.freedesktop.DBus.Method.Async): each resolves the caller
@@ -110,6 +124,7 @@ private:
     std::string m_version;
     Config::ConfigStore& m_config;
     Authorizer& m_authorizer;
+    Operations::RateLimiter& m_rateLimiter;
     Pkcs11Broker* m_pkcs11;
 };
 } // namespace LibreSCRS::Agent

@@ -9,11 +9,20 @@
 #include <LibreSCRS/Agent/config/ConfigStore.h>
 #include <LibreSCRS/Agent/crypto/Mechanism.h>
 #include "dbus/Pkcs11OutcomeNames.h"
-#include <LibreSCRS/Agent/operations/LmSeams.h>         // Operations::layoutVisualSignature/appearanceFontBytes
+#include <LibreSCRS/Agent/operations/LmSeams.h> // Operations::layoutVisualSignature/appearanceFontBytes
+#include <LibreSCRS/Agent/operations/RateLimiter.h>
 #include <LibreSCRS/Agent/operations/SignatureParams.h> // isValidLayoutRect
 #include <LibreSCRS/Agent/pkcs11/Pkcs11Broker.h>
 #include <LibreSCRS/Agent/Reply.h>
 #include "SealedMemfdCreator.h" // shared sealed-memfd creator (matches the producer)
+#include "trust/CscaAnchorImport.h"
+#include <sys/stat.h>
+#include <unistd.h>
+#include <array>
+#include <cerrno>
+#include <chrono>
+#include <cstddef>
+#include <map>
 #include <sdbus-c++/Error.h>
 #include <sdbus-c++/IObject.h>
 #include <sdbus-c++/Message.h>
@@ -39,12 +48,142 @@ const char* actionFor(Config::Mutability m) noexcept
 {
     return (m == Config::Mutability::DbusMutableTrust) ? kActionConfigureTrust : kActionConfigure;
 }
+
+// ImportCscaMasterList rejections. The master-list refusals are distinct names
+// rather than one generic failure because a client has to be able to tell
+// "this file is not a master list" from "it is one, and it is empty" — the two
+// need different words in front of a person.
+constexpr const char* kErrInvalidRequest = LibreLinux::AgentWire::kErrInvalidRequest;
+constexpr const char* kErrRateLimited = LibreLinux::AgentWire::kErrRateLimited;
+constexpr const char* kErrInputTooLarge = "org.librescrs.Agent.Error.InputTooLarge";
+constexpr const char* kErrNotAMasterList = "org.librescrs.Agent.Error.NotAMasterList";
+constexpr const char* kErrEmptyMasterList = "org.librescrs.Agent.Error.EmptyMasterList";
+constexpr const char* kErrMalformedMasterList = "org.librescrs.Agent.Error.MalformedMasterList";
+constexpr const char* kErrBadMasterListSignature = "org.librescrs.Agent.Error.BadMasterListSignature";
+constexpr const char* kErrMasterListSignerChanged = "org.librescrs.Agent.Error.MasterListSignerChanged";
+constexpr const char* kErrMasterListReplayed = "org.librescrs.Agent.Error.MasterListReplayed";
+constexpr const char* kErrAnchorCacheNotWritable = "org.librescrs.Agent.Error.AnchorCacheNotWritable";
+
+enum class ReadStatus : std::uint8_t { Ok, TooLarge, Error, NotRegular };
+struct ReadInput
+{
+    ReadStatus status{ReadStatus::Error};
+    std::vector<std::uint8_t> bytes;
+};
+
+// Read the whole input off @p fd, capping at @p cap bytes. The fd MUST be a
+// regular file or memfd: a pipe/socket/char fd would let a client stall a
+// blocking ::read() indefinitely on the single bus thread (whole-agent DoS), so
+// non-regular fds are rejected up-front via fstat. Same shape and same reason as
+// the document read behind Card1.Sign.
+ReadInput readInput(int fd, std::size_t cap)
+{
+    if (fd < 0) {
+        return {ReadStatus::Error, {}};
+    }
+    struct stat st{};
+    if (::fstat(fd, &st) != 0) {
+        return {ReadStatus::Error, {}};
+    }
+    if (!S_ISREG(st.st_mode)) {
+        return {ReadStatus::NotRegular, {}};
+    }
+    std::vector<std::uint8_t> out;
+    std::array<std::uint8_t, 64 * 1024> buf{};
+    for (;;) {
+        const ssize_t n = ::read(fd, buf.data(), buf.size());
+        if (n < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            return {ReadStatus::Error, {}};
+        }
+        if (n == 0) {
+            return {ReadStatus::Ok, std::move(out)};
+        }
+        if (out.size() + static_cast<std::size_t>(n) > cap) {
+            return {ReadStatus::TooLarge, {}};
+        }
+        out.insert(out.end(), buf.data(), buf.data() + n);
+    }
+}
+
+// The dict both the import reply and the CscaAnchorState property serve, so the
+// two can never describe the same state differently.
+std::map<std::string, sdbus::Variant> anchorStateDict(const Trust::AnchorState& state)
+{
+    std::map<std::string, sdbus::Variant> out;
+    if (!state.present) {
+        return out; // nothing imported: an empty dict, not a dict full of zeros
+    }
+    out["anchors"] = sdbus::Variant{state.anchorCount};
+    out["issuers"] = sdbus::Variant{state.issuerCount};
+    out["signer"] = sdbus::Variant{Trust::toHex(state.signer)};
+    out["signerPinned"] = sdbus::Variant{state.signerPinned};
+    out["acceptedAt"] = sdbus::Variant{state.acceptedAt};
+    // ALWAYS present, because its false is the interesting value: an
+    // installation whose anchors cannot be checked for rollback has to be able
+    // to find that out, and a missing key would read as "no problem here".
+    out["replayRefusalActive"] = sdbus::Variant{state.replayRefusalActive()};
+    if (state.signedAt) {
+        // Omitted rather than zeroed when the list carried no date: a sentinel
+        // would be indistinguishable from a list signed at the epoch.
+        out["signedAt"] = sdbus::Variant{*state.signedAt};
+    }
+    out["origin"] = sdbus::Variant{state.origin};
+    return out;
+}
+
+[[noreturn]] void throwRefusal(const Trust::Refusal& refusal)
+{
+    switch (refusal.reason) {
+    case Trust::ImportRefusal::NotAMasterList:
+        throw sdbus::Error{sdbus::Error::Name{kErrNotAMasterList}, "The file is not an ICAO master list"};
+    case Trust::ImportRefusal::Empty:
+        throw sdbus::Error{sdbus::Error::Name{kErrEmptyMasterList},
+                           "The master list carries no country signing certificate"};
+    case Trust::ImportRefusal::Malformed:
+        throw sdbus::Error{sdbus::Error::Name{kErrMalformedMasterList}, "The master list's content cannot be read"};
+    case Trust::ImportRefusal::BadSignature:
+        throw sdbus::Error{sdbus::Error::Name{kErrBadMasterListSignature},
+                           "The signature over the master list does not verify"};
+    case Trust::ImportRefusal::CacheNotWritable:
+        throw sdbus::Error{sdbus::Error::Name{kErrAnchorCacheNotWritable},
+                           "The master list verified but the anchors could not be stored"};
+    case Trust::ImportRefusal::Replayed: {
+        // Both dates travel with the refusal, and the two shapes read
+        // differently on purpose: a missing offered date is the STRIP attempt,
+        // a smaller one is the rollback.
+        std::string replay = "The master list is not newer than the one already installed";
+        if (refusal.trustedSignedAt) {
+            replay += "; installed list signed at " + std::to_string(*refusal.trustedSignedAt);
+        }
+        replay += refusal.seenSignedAt ? "; offered list signed at " + std::to_string(*refusal.seenSignedAt)
+                                       : "; the offered list carries no signing time at all";
+        throw sdbus::Error{sdbus::Error::Name{kErrMasterListReplayed}, replay};
+    }
+    case Trust::ImportRefusal::SignerChanged:
+        break;
+    }
+    // BOTH fingerprints travel with the refusal. Telling a lawful rotation from
+    // an attack needs a person who can recognise the publisher; the agent has
+    // nothing to decide it with, so it must not pretend to.
+    std::string message = "The master list is signed by a publisher this agent does not follow";
+    if (refusal.trustedSigner) {
+        message += "; trusted signer " + Trust::toHex(*refusal.trustedSigner);
+    }
+    if (refusal.seenSigner) {
+        message += "; offered signer " + Trust::toHex(*refusal.seenSigner);
+    }
+    throw sdbus::Error{sdbus::Error::Name{kErrMasterListSignerChanged}, message};
+}
 } // namespace
 
 ManagerObject::ManagerObject(sdbus::IConnection& connection, sdbus::ObjectPath path, std::string version,
-                             Config::ConfigStore& config, Authorizer& authorizer, Pkcs11Broker* pkcs11)
+                             Config::ConfigStore& config, Authorizer& authorizer, Operations::RateLimiter& rateLimiter,
+                             Pkcs11Broker* pkcs11)
     : AdaptorInterfaces(connection, std::move(path)), m_version(std::move(version)), m_config(config),
-      m_authorizer(authorizer), m_pkcs11(pkcs11)
+      m_authorizer(authorizer), m_rateLimiter(rateLimiter), m_pkcs11(pkcs11)
 {
     registerAdaptor();
 }
@@ -140,6 +279,14 @@ std::vector<sdbus::Struct<std::string, bool>> ManagerObject::CscaSources()
         out.emplace_back(s.uri, s.eager);
     }
     return out;
+}
+
+std::map<std::string, sdbus::Variant> ManagerObject::CscaAnchorState()
+{
+    // Read from the cache on every call rather than cached in this object: the
+    // cache directory is a config key, and an import may have landed from a
+    // path that does not run through here.
+    return anchorStateDict(Trust::AnchorCache(m_config.cscaCacheDir()).state());
 }
 std::string ManagerObject::DefaultReason()
 {
@@ -355,6 +502,59 @@ void ManagerObject::Reset(const std::string& key)
     if (!r.ok) {
         throw sdbus::Error{sdbus::Error::Name{r.errorName}, r.message};
     }
+}
+
+std::map<std::string, sdbus::Variant> ManagerObject::ImportCscaMasterList(const sdbus::UnixFd& masterList)
+{
+    // ORDER, and it is the whole point of this preamble: AUTHORISE the client,
+    // then apply the per-caller flood bound, and only THEN touch the
+    // descriptor. Both gates are keyed on the caller's unique bus name, which
+    // the kernel validates and which cannot be reused for the life of the
+    // connection. A rejected caller must never be able to make the agent read
+    // (up to the cap off) an fd it handed over — the same discipline, and the
+    // same reasoning, as the document ingest behind Card1.Sign.
+    //
+    // The polkit action is the trust one, shared with CscaSources: an import is
+    // a larger trust change than naming a source, not a smaller one.
+    const std::string sender = callerBusName();
+    if (!m_authorizer.authorize(kActionConfigureTrust, CallerToken{sender})) {
+        throw sdbus::Error{sdbus::Error::Name{kErrNotAuthorized}, "Not authorized to import country signing anchors"};
+    }
+    if (!m_rateLimiter.allow(CallerToken{sender})) {
+        throw sdbus::Error{sdbus::Error::Name{kErrRateLimited}, "Too many anchor imports; try again shortly"};
+    }
+
+    // A PLAIN descriptor, deliberately: a master list is public data, and the
+    // sealed memfd this agent uses elsewhere is its vocabulary for secrets.
+    // Reading it here on the bus thread is bounded by the fstat regular-file
+    // rejection and by the cap, exactly as the sign path is.
+    auto input = readInput(masterList.get(), Trust::kMaxMasterListBytes);
+    if (input.status == ReadStatus::NotRegular) {
+        throw sdbus::Error{sdbus::Error::Name{kErrInvalidRequest},
+                           "The master list must be a regular file or memfd (no pipes/sockets)"};
+    }
+    if (input.status == ReadStatus::TooLarge) {
+        throw sdbus::Error{sdbus::Error::Name{kErrInputTooLarge}, "The master list exceeds the size limit"};
+    }
+    if (input.status == ReadStatus::Error) {
+        throw sdbus::Error{sdbus::Error::Name{kErrInvalidRequest}, "The master list could not be read"};
+    }
+
+    Trust::AnchorCache cache(m_config.cscaCacheDir());
+    const auto now =
+        std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+    auto imported = Trust::importMasterList(input.bytes, cache, now);
+    if (!imported) {
+        throwRefusal(imported.error());
+    }
+
+    // Deliberately says what was DONE, not that anything was proved: on a first
+    // import signerPinned is false, and a client that renders "authenticity
+    // verified" over it is claiming more than the agent measured.
+    log::infof("country signing anchors imported: anchors={} issuers={} pinned={}", imported->anchorCount,
+               imported->issuerCount, imported->signerPinned);
+    emitConfigChanged("CscaAnchorState");
+    return anchorStateDict(*imported);
 }
 
 void ManagerObject::emitConfigChanged(const std::string& key) noexcept
