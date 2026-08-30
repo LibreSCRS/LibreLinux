@@ -19,8 +19,16 @@
   polkit has no per-user actions location. Only when no system bus / polkit is
   present does the agent fall back to a degraded gate (sign + low-tier configure
   allowed, the trust/timestamping tier fail-closed). PluginDir / TslCacheDir /
-  AiaCacheDir are NOT exposed over D-Bus at all (config-file-only) and so have
-  no action.
+  AiaCacheDir / CscaCacheDir are NOT settable over D-Bus at all
+  (config-file-only) and so have no action.
+
+  Deliberately NO separate action for the country-signing anchor sources
+  (Config1's CscaSources): choosing which anchors a passport is verified
+  against is a trust decision of the same class as the trusted lists and
+  timestamping authorities below, so it is gated by
+  org.librescrs.agent.configure.trust. One authorisation regime, one table —
+  a per-key action would fragment it for no gain in expressiveness, since a
+  site that wants to pin the anchors wants to pin the trusted lists too.
 -->
 <policyconfig>
   <vendor>LibreSCRS</vendor>

@@ -131,6 +131,16 @@ std::string ManagerObject::AiaCacheDir()
 {
     return m_config.aiaCacheDir();
 }
+std::vector<sdbus::Struct<std::string, bool>> ManagerObject::CscaSources()
+{
+    std::vector<sdbus::Struct<std::string, bool>> out;
+    const auto sources = m_config.cscaSources();
+    out.reserve(sources.size());
+    for (const auto& s : sources) {
+        out.emplace_back(s.uri, s.eager);
+    }
+    return out;
+}
 std::string ManagerObject::DefaultReason()
 {
     return m_config.defaultReason();
@@ -305,6 +315,16 @@ void ManagerObject::SetValue(const std::string& key, const sdbus::Variant& value
                 sources.push_back(Config::TslSource{std::get<0>(s), std::get<1>(s), std::get<2>(s)});
             }
             r = m_config.setTslSources(std::move(sources));
+        } else if (key == "CscaSources") {
+            // Same trust tier as TsaUrls/TslSources (actionFor already picked
+            // kActionConfigureTrust above from the store's Mutability) — the
+            // set of country-signing anchors is a trust decision, not a
+            // preference, so it needs no polkit action of its own.
+            std::vector<Config::CscaSource> sources;
+            for (const auto& s : value.get<std::vector<sdbus::Struct<std::string, bool>>>()) {
+                sources.push_back(Config::CscaSource{std::get<0>(s), std::get<1>(s)});
+            }
+            r = m_config.setCscaSources(std::move(sources));
         } else if (key == "DefaultReason") {
             r = m_config.setDefaultReason(value.get<std::string>());
         } else if (key == "DefaultLocation") {

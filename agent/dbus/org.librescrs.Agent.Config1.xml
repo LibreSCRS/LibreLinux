@@ -9,10 +9,20 @@
   Properties are read-only over org.freedesktop.DBus.Properties; mutation goes
   through SetValue so each change is gated per-key:
     DefaultLevel / DefaultReason / DefaultLocation  -> polkit org.librescrs.agent.configure (default allow)
-    TsaUrls / TslSources                            -> polkit org.librescrs.agent.configure.trust (auth_self)
+    TsaUrls / TslSources / CscaSources              -> polkit org.librescrs.agent.configure.trust (auth_self)
     TslCacheDir / AiaCacheDir / PluginDir           -> config-file-only (NOT settable over D-Bus; a
                                                        D-Bus-settable PluginDir is a dlopen code-exec vector)
     LastTsaUrl                                      -> read-only agent-internal state
+
+  CscaSources rides the trust action rather than gaining one of its own: which
+  country-signing anchors a passport is checked against is a trust decision of
+  the same class as which trusted lists or timestamping authorities are used,
+  and a fourth action would split one authorisation regime across two tables.
+
+  The agent's config file carries three further keys that are NOT properties
+  here — CscaCacheDir, Pkcs11IdleTimeoutSecs, Pkcs11MaxLifetimeSecs — all
+  config-file-only. SetValue/Reset still know those names and answer
+  ReadOnlyConfig; they are simply not readable over this interface.
 
   SetValue(key, value) rejects with:
     org.librescrs.Agent.Error.UnknownConfigKey    — no such key
@@ -29,6 +39,10 @@
     <property name="TslSources"      type="a(sbb)" access="read"/>
     <property name="TslCacheDir"     type="s"      access="read"/>
     <property name="AiaCacheDir"     type="s"      access="read"/>
+    <!-- (uri, eager) per source. Two fields, not three: a country-signing
+         source names anchors, never further sources, so there is no
+         list-of-lists pivot flag as TslSources' a(sbb) carries. -->
+    <property name="CscaSources"     type="a(sb)"  access="read"/>
     <property name="DefaultReason"   type="s"      access="read"/>
     <property name="DefaultLocation" type="s"      access="read"/>
     <property name="PluginDir"       type="s"      access="read"/>

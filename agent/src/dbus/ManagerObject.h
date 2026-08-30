@@ -74,6 +74,7 @@ private:
     std::vector<sdbus::Struct<std::string, bool, bool>> TslSources() override;
     std::string TslCacheDir() override;
     std::string AiaCacheDir() override;
+    std::vector<sdbus::Struct<std::string, bool>> CscaSources() override;
     std::string DefaultReason() override;
     std::string DefaultLocation() override;
     std::string PluginDir() override;
