@@ -29,6 +29,7 @@
 #include <sys/types.h> // pid_t
 #include <exception>
 #include <memory>
+#include <optional>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -108,30 +109,126 @@ ReadInput readInput(int fd, std::size_t cap)
     }
 }
 
-// The dict both the import reply and the CscaAnchorState property serve, so the
-// two can never describe the same state differently.
-std::map<std::string, sdbus::Variant> anchorStateDict(const Trust::AnchorState& state)
+// What an accepted import leaves in the agent's own configuration.
+//
+// The import reply answers the client that performed the import. A client that
+// has only just connected has no reply to read, so the outcome is REMEMBERED
+// here rather than left to the caller — the same standing a recorded
+// LastTsaUrl has, and read-only for a stronger reason: a client able to write
+// it would be claiming what passports are checked against without installing a
+// single anchor.
+Config::CscaAnchorState toRecordedState(const Trust::AnchorState& state)
+{
+    Config::CscaAnchorState out;
+    out.anchors = state.anchorCount;
+    out.issuers = state.issuerCount;
+    out.replayRefusalActive = state.replayRefusalActive();
+    out.signer = Trust::toHex(state.signer);
+    out.signerPinned = state.signerPinned;
+    out.acceptedAt = state.acceptedAt;
+    out.signedAt = state.signedAt;
+    out.origin = state.origin;
+    return out;
+}
+
+// The dict both the import reply and the CscaAnchorState property serve, built
+// from the one value the agent records, so the two can never describe the same
+// state differently.
+std::map<std::string, sdbus::Variant> anchorStateDict(const std::optional<Config::CscaAnchorState>& state)
 {
     std::map<std::string, sdbus::Variant> out;
-    if (!state.present) {
+    if (!state) {
         return out; // nothing imported: an empty dict, not a dict full of zeros
     }
-    out["anchors"] = sdbus::Variant{state.anchorCount};
-    out["issuers"] = sdbus::Variant{state.issuerCount};
-    out["signer"] = sdbus::Variant{Trust::toHex(state.signer)};
-    out["signerPinned"] = sdbus::Variant{state.signerPinned};
-    out["acceptedAt"] = sdbus::Variant{state.acceptedAt};
+    out["anchors"] = sdbus::Variant{state->anchors};
+    out["issuers"] = sdbus::Variant{state->issuers};
+    out["signer"] = sdbus::Variant{state->signer};
+    out["signerPinned"] = sdbus::Variant{state->signerPinned};
+    if (state->acceptedAt) {
+        out["acceptedAt"] = sdbus::Variant{*state->acceptedAt};
+    }
     // ALWAYS present, because its false is the interesting value: an
     // installation whose anchors cannot be checked for rollback has to be able
     // to find that out, and a missing key would read as "no problem here".
-    out["replayRefusalActive"] = sdbus::Variant{state.replayRefusalActive()};
-    if (state.signedAt) {
+    out["replayRefusalActive"] = sdbus::Variant{state->replayRefusalActive};
+    if (state->signedAt) {
         // Omitted rather than zeroed when the list carried no date: a sentinel
         // would be indistinguishable from a list signed at the epoch.
-        out["signedAt"] = sdbus::Variant{*state.signedAt};
+        out["signedAt"] = sdbus::Variant{*state->signedAt};
     }
-    out["origin"] = sdbus::Variant{state.origin};
+    out["origin"] = sdbus::Variant{state->origin};
     return out;
+}
+
+// Discard a recorded anchor report the anchor cache does not bear out.
+//
+// The report follows the CONFIGURATION file. What it describes lives in the
+// anchor cache: the anchor files themselves, and beside them the cache's own
+// state file, which carries the signer this agent follows. A person may edit
+// or delete either, and the configuration file survives it — so the report
+// goes on describing an agent that is no longer there. Both halves overstate,
+// which on a trust surface is the direction that matters:
+//
+//   * the ANCHORS are gone, and the counts name anchors that are not there;
+//   * the cache's STATE is gone, and `signer` / `signerPinned` name a
+//     publisher the agent no longer follows. With nothing left to read the pin
+//     from, the next list is a trust-on-first-import, so a surface saying
+//     "pinned to X" is claiming a NARROWER trust than the one actually in
+//     force. The counts beside it may still be perfectly true, which is what
+//     makes this half the easy one to walk past.
+//
+// The harm is bounded and worth stating exactly: every verdict reads the cache
+// itself and never this report, so no document can be accepted on the strength
+// of a stale one. What breaks is a settings screen that contradicts what
+// reading a passport says, which corrodes trust in the display without being a
+// false green.
+//
+// CLEARED, not marked stale, and the two considerations that pull against each
+// other turn out not to conflict here:
+//
+//   * the pin and the rotation rule read the CACHE — AnchorCache::state for the
+//     signer it follows, AnchorCache::anchors for the path build a lawful
+//     rotation is checked against. Neither has ever read this record. Clearing
+//     it therefore cannot let any publisher re-establish trust on a wiped
+//     cache, which would be a far worse bug than the display one being fixed.
+//     Nothing in the cache is touched from here — this reports, it does not
+//     tidy — so a pin that outlived its anchors goes on refusing a stranger's
+//     list, and anchors that outlived the pin stay on disk;
+//   * absence is the only honest spelling this vocabulary has. A zeroed report
+//     means "a list was accepted and it vouched for nothing" — a different
+//     claim, and a false one. The empty dict already means "nothing installed
+//     that can be reported from here", which after either wipe is true.
+//
+// Both questions are cheap and neither re-verifies anything: an anchor probe
+// that stops at the first file it finds, and the small state file the cache
+// parses anyway. Startup latency is a real cost.
+//
+// STARTUP ONLY, and it is a deliberate trade a reader should not have to
+// discover: a cache wiped while the agent is running reads stale until the
+// next start. Catching that would mean watching the directory for the life of
+// the process — a standing cost, and a race with every import, for a display
+// that restarting already corrects.
+void discardStaleAnchorReport(Config::ConfigStore& config)
+{
+    if (!config.cscaAnchorState()) {
+        return; // nothing recorded, so there is no claim to be wrong about
+    }
+    const Trust::AnchorCache cache{config.cscaCacheDir()};
+    const bool anchorsHeld = cache.holdsAnchor();
+    // Reads false for an absent, unreadable or corrupt state file alike — every
+    // one of which is the cache saying it establishes no signer, which is the
+    // thing the report would otherwise keep claiming.
+    const bool signerHeld = cache.state().present;
+    if (anchorsHeld && signerHeld) {
+        return;
+    }
+    log::warnf("country signing anchors: the recorded report is not borne out by the cache (anchors held={}, pinned "
+               "signer held={}); discarding the report — nothing in the cache is touched by this",
+               anchorsHeld, signerHeld);
+    // Reset rather than a record of zeros, for the reason above. fromDbus is
+    // false: the key is ReadOnly on the wire and this is the agent clearing its
+    // own state, the same standing recordCscaAnchorState writes it under.
+    (void)config.resetKey("CscaAnchorState", /*fromDbus=*/false);
 }
 
 [[noreturn]] void throwRefusal(const Trust::Refusal& refusal)
@@ -185,6 +282,14 @@ ManagerObject::ManagerObject(sdbus::IConnection& connection, sdbus::ObjectPath p
     : AdaptorInterfaces(connection, std::move(path)), m_version(std::move(version)), m_config(config),
       m_authorizer(authorizer), m_rateLimiter(rateLimiter), m_pkcs11(pkcs11)
 {
+    // Reconcile before the object exists on the bus. This is the agent's
+    // startup — the store has just been loaded from its file, and
+    // AgentService::registerOnBus builds this object while the event loop is
+    // only entered afterwards in run(), so no client can have read the stale
+    // report and none can read it after. It belongs to the object that SERVES
+    // the property rather than to the composition root: not serving a report
+    // known to be stale is this object's own obligation.
+    discardStaleAnchorReport(m_config);
     registerAdaptor();
 }
 
@@ -283,10 +388,11 @@ std::vector<sdbus::Struct<std::string, bool>> ManagerObject::CscaSources()
 
 std::map<std::string, sdbus::Variant> ManagerObject::CscaAnchorState()
 {
-    // Read from the cache on every call rather than cached in this object: the
-    // cache directory is a config key, and an import may have landed from a
-    // path that does not run through here.
-    return anchorStateDict(Trust::AnchorCache(m_config.cscaCacheDir()).state());
+    // Served from the store, exactly as LastTsaUrl above is: agent-internal
+    // state the agent recorded, not a preference a client handed it. Empty
+    // until an import has been accepted — a zeroed report and an accepted list
+    // that vouched for nothing mean opposite things.
+    return anchorStateDict(m_config.cscaAnchorState());
 }
 std::string ManagerObject::DefaultReason()
 {
@@ -553,8 +659,15 @@ std::map<std::string, sdbus::Variant> ManagerObject::ImportCscaMasterList(const 
     // verified" over it is claiming more than the agent measured.
     log::infof("country signing anchors imported: anchors={} issuers={} pinned={}", imported->anchorCount,
                imported->issuerCount, imported->signerPinned);
-    emitConfigChanged("CscaAnchorState");
-    return anchorStateDict(*imported);
+
+    // Remember it. The reply below tells THIS client what it just installed;
+    // the record is what tells the next client to connect, which has no reply
+    // to read. The store persists it and fires Changed("CscaAnchorState")
+    // itself — the path a recorded LastTsaUrl already takes — so there is no
+    // explicit emit here, and no second signal for one import.
+    const auto recorded = toRecordedState(*imported);
+    m_config.recordCscaAnchorState(recorded);
+    return anchorStateDict(recorded);
 }
 
 void ManagerObject::emitConfigChanged(const std::string& key) noexcept

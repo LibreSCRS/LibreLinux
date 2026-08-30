@@ -12,7 +12,7 @@
     TsaUrls / TslSources / CscaSources              -> polkit org.librescrs.agent.configure.trust (auth_self)
     TslCacheDir / AiaCacheDir / PluginDir           -> config-file-only (NOT settable over D-Bus; a
                                                        D-Bus-settable PluginDir is a dlopen code-exec vector)
-    LastTsaUrl                                      -> read-only agent-internal state
+    LastTsaUrl / CscaAnchorState                    -> read-only agent-internal state
 
   CscaSources rides the trust action rather than gaining one of its own: which
   country-signing anchors a passport is checked against is a trust decision of
@@ -51,6 +51,12 @@
     <!-- What the agent currently believes about its country-signing anchors, for
          a client that has to have something to say. An EMPTY dict means nothing
          has been imported; there is no "unconfigured" sentinel to misread.
+
+         RECORDED, not derived on demand: an accepted import writes this into
+         the agent's configuration, so it survives a restart and a client that
+         has only just connected — and therefore has no import reply to read —
+         is answered from it. Changed fires for the key like any other.
+
          Keys, when present:
            anchors      u  anchors held. INCLUDES CSCA link certificates, which
                            are anchors like any other, so this is not a count of

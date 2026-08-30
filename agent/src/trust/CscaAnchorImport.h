@@ -157,6 +157,14 @@ public:
     // imported.
     [[nodiscard]] std::vector<std::vector<std::uint8_t>> anchors() const;
 
+    // Whether the cache holds AT LEAST ONE anchor. Stops at the first one and
+    // reads no bytes — the question is whether anything is here, not whether
+    // what is here still verifies, and re-verifying a store to answer it would
+    // put a full trust pass in the startup path. A missing or unreadable
+    // directory answers false, for the same reason @ref state does: a first run
+    // and a wiped cache are the same situation.
+    [[nodiscard]] bool holdsAnchor() const;
+
     // REPLACES the anchor set — a master list is a complete statement of what a
     // publisher vouches for, so merging would keep anchors it has withdrawn.
     // Returns false if anything could not be written, in which case the previous

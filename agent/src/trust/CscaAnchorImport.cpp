@@ -220,6 +220,20 @@ std::vector<std::vector<std::uint8_t>> AnchorCache::anchors() const
     return out;
 }
 
+bool AnchorCache::holdsAnchor() const
+{
+    std::error_code ec;
+    // Constructed with an error_code, so a directory that is absent or cannot
+    // be read yields nothing rather than throwing — and reads as "holds no
+    // anchor", which is what the caller has to act on either way.
+    for (const auto& entry : fs::directory_iterator(m_dir / kAnchorsDirName, ec)) {
+        if (entry.is_regular_file(ec) && entry.path().extension() == kAnchorSuffix) {
+            return true;
+        }
+    }
+    return false;
+}
+
 bool AnchorCache::replace(const std::vector<std::vector<std::uint8_t>>& anchors, const AnchorState& state)
 {
     std::error_code ec;

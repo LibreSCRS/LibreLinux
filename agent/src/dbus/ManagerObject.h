@@ -83,7 +83,9 @@ private:
     std::string TslCacheDir() override;
     std::string AiaCacheDir() override;
     std::vector<sdbus::Struct<std::string, bool>> CscaSources() override;
-    // Empty dict until a master list has been accepted; see the XML for the keys.
+    // The report an accepted import recorded in the store, served the way
+    // LastTsaUrl is. Empty dict until a master list has been accepted; see the
+    // XML for the keys.
     std::map<std::string, sdbus::Variant> CscaAnchorState() override;
     std::string DefaultReason() override;
     std::string DefaultLocation() override;

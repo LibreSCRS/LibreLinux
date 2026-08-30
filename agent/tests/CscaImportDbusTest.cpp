@@ -34,11 +34,14 @@
 #include <fcntl.h>
 #include <unistd.h>
 
+#include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <map>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -119,14 +122,12 @@ struct Harness
 {
     explicit Harness(const char* tag, Authorizer& authorizer)
         : dir(fs::temp_directory_path() / (std::string{"ll-csca-dbus-"} + tag)),
-          service(std::string{"org.librescrs.Agent.Test.CscaImport."} + tag)
+          service(std::string{"org.librescrs.Agent.Test.CscaImport."} + tag), auth(&authorizer)
     {
         fs::remove_all(dir);
         serverConn = sdbus::createSessionBusConnection();
         serverConn->requestName(sdbus::ServiceName{service});
-        config = std::make_unique<Config::ConfigStore>(dir / "agent.conf", dir / "cache");
-        manager = std::make_unique<ManagerObject>(*serverConn, sdbus::ObjectPath{kRootPath}, "t", *config, authorizer,
-                                                  limiter, nullptr);
+        build();
         serverConn->enterEventLoopAsync();
 
         clientConn = sdbus::createSessionBusConnection();
@@ -141,6 +142,18 @@ struct Harness
     }
     Harness(const Harness&) = delete;
     Harness& operator=(const Harness&) = delete;
+
+    // The agent stopping and starting again over the SAME directory. Both
+    // halves of what a restart re-reads are rebuilt — the configuration store
+    // from its file, the root object over the store — because a report that
+    // has outlived its anchors can only be caught at the moment the two are
+    // brought back together.
+    void restart()
+    {
+        manager.reset();
+        config.reset();
+        build();
+    }
 
     // Drive the import and hand back the rejection name (empty == accepted).
     std::string importFd(int fd, std::map<std::string, sdbus::Variant>* summary = nullptr)
@@ -170,8 +183,37 @@ struct Harness
         return v.get<std::map<std::string, sdbus::Variant>>();
     }
 
+    // Drive SetValue/Reset and hand back the rejection name (empty == accepted).
+    std::string setValue(const std::string& key, const sdbus::Variant& value)
+    {
+        try {
+            proxy->callMethod("SetValue").onInterface(sdbus::InterfaceName{kCfgIface}).withArguments(key, value);
+            return {};
+        } catch (const sdbus::Error& e) {
+            return e.getName();
+        }
+    }
+
+    std::string reset(const std::string& key)
+    {
+        try {
+            proxy->callMethod("Reset").onInterface(sdbus::InterfaceName{kCfgIface}).withArguments(key);
+            return {};
+        } catch (const sdbus::Error& e) {
+            return e.getName();
+        }
+    }
+
+    void build()
+    {
+        config = std::make_unique<Config::ConfigStore>(dir / "agent.conf", dir / "cache");
+        manager = std::make_unique<ManagerObject>(*serverConn, sdbus::ObjectPath{kRootPath}, "t", *config, *auth,
+                                                  limiter, nullptr);
+    }
+
     fs::path dir;
     std::string service;
+    Authorizer* auth{nullptr};
     std::unique_ptr<sdbus::IConnection> serverConn;
     std::unique_ptr<sdbus::IConnection> clientConn;
     std::unique_ptr<Config::ConfigStore> config;
@@ -336,6 +378,146 @@ TEST(CscaImportDbus, AnchorStateIsEmptyUntilSomethingIsImported)
     EXPECT_TRUE(h.anchorState().empty()) << "an agent that has imported nothing must not describe a trust store";
 }
 
+// --- what a client that has just STARTED reads ------------------------------
+//
+// The import reply answers the client that performed the import. A client that
+// has only just connected has no reply to read, and until the agent REMEMBERED
+// the accepted state its settings surface could say nothing at all about what
+// is installed. These three cases are that memory: it is written, it is what
+// the bus serves, and it cannot be written from the bus.
+
+TEST(CscaImportDbus, AnAcceptedImportIsRememberedInTheConfiguration)
+{
+    AllowAuthorizer allow;
+    Harness h("remembered", allow);
+
+    const auto list =
+        fixture::signMasterListDated({fixture::makeCsca("CSCA One", "AA"), fixture::makeCsca("CSCA Two", "BB")},
+                                     fixture::makeIndependentSigner(), kSignedEarlier);
+    TempFile file(h.dir / "in", "masterlist.ml", list.der);
+    ASSERT_EQ(h.importFd(file.fd()), "");
+
+    const auto recorded = h.config->cscaAnchorState();
+    ASSERT_TRUE(recorded.has_value()) << "the accepted import left no record in the agent's configuration";
+    EXPECT_EQ(recorded->anchors, 2u);
+    EXPECT_EQ(recorded->issuers, 2u);
+    EXPECT_EQ(recorded->signer, Trust::toHex(list.signerSpkiSha256));
+    EXPECT_FALSE(recorded->signerPinned) << "a first import establishes nothing, and the record must not claim it did";
+    EXPECT_TRUE(recorded->replayRefusalActive);
+    ASSERT_TRUE(recorded->signedAt.has_value());
+    EXPECT_EQ(*recorded->signedAt, kSignedEarlier);
+    EXPECT_EQ(recorded->origin, "import");
+
+    // On DISK, not merely in memory. A second store over the same file is the
+    // restart this record exists for: it is the only thing a client that has
+    // just started could be answered from.
+    Config::ConfigStore restarted(h.dir / "agent.conf", h.dir / "cache");
+    EXPECT_EQ(restarted.cscaAnchorState(), recorded) << "the record did not survive a restart";
+}
+
+TEST(CscaImportDbus, TheReadableStateIsServedFromTheRecordedConfiguration)
+{
+    AllowAuthorizer allow;
+    Harness h("served-from-config", allow);
+
+    // No import in this test at all: the report is placed where a restarted
+    // agent would find it, and the bus is then asked. The property and the
+    // configuration key carry the same name, so serving them from two
+    // different places would let the agent describe itself two ways with
+    // nothing to notice the difference.
+    Config::CscaAnchorState remembered;
+    remembered.anchors = 212;
+    remembered.issuers = 47;
+    remembered.replayRefusalActive = false;
+    remembered.signer = "ab12";
+    remembered.signerPinned = true;
+    remembered.acceptedAt = 1'700'000'000;
+    remembered.origin = "import";
+    h.config->recordCscaAnchorState(remembered);
+
+    const auto state = h.anchorState();
+    ASSERT_FALSE(state.empty()) << "the bus does not serve the state the agent remembers";
+    EXPECT_EQ(state.at("anchors").get<std::uint32_t>(), 212u);
+    EXPECT_EQ(state.at("issuers").get<std::uint32_t>(), 47u);
+    EXPECT_EQ(state.at("signer").get<std::string>(), "ab12");
+    EXPECT_TRUE(state.at("signerPinned").get<bool>());
+    EXPECT_EQ(state.at("acceptedAt").get<std::int64_t>(), 1'700'000'000);
+    EXPECT_EQ(state.at("origin").get<std::string>(), "import");
+    ASSERT_TRUE(state.contains("replayRefusalActive"));
+    EXPECT_FALSE(state.at("replayRefusalActive").get<bool>());
+    // Absence survives the trip through the agent's own memory: a remembered
+    // report carrying no signing time must not come back as one signed at the
+    // epoch.
+    EXPECT_FALSE(state.contains("signedAt")) << "a date was served for a report that carries none";
+}
+
+TEST(CscaImportDbus, TheAnchorStateCannotBeWrittenOverTheBus)
+{
+    AllowAuthorizer allow;
+    Harness h("read-only", allow);
+
+    const auto list = fixture::signMasterList({fixture::makeCsca("CSCA A", "AA")}, fixture::makeIndependentSigner());
+    TempFile file(h.dir / "in", "masterlist.ml", list.der);
+    ASSERT_EQ(h.importFd(file.fd()), "");
+
+    // The authorizer here says yes to everything, so a refusal can only come
+    // from the key's own read-only classification. That is the point: a client
+    // able to write this would be CLAIMING what passports are checked against
+    // without installing a single anchor.
+    std::map<std::string, sdbus::Variant> forged;
+    forged["anchors"] = sdbus::Variant{std::uint32_t{9999}};
+    forged["issuers"] = sdbus::Variant{std::uint32_t{195}};
+    forged["replayRefusalActive"] = sdbus::Variant{true};
+    EXPECT_EQ(h.setValue("CscaAnchorState", sdbus::Variant{forged}), "org.librescrs.Agent.Error.ReadOnlyConfig");
+    // Reset repeats the guard, because clearing the report is a write too:
+    // "this agent holds nothing" is as much a claim as any other.
+    EXPECT_EQ(h.reset("CscaAnchorState"), "org.librescrs.Agent.Error.ReadOnlyConfig");
+
+    const auto after = h.anchorState();
+    EXPECT_EQ(after.at("anchors").get<std::uint32_t>(), 1u) << "a refused write changed what a client reads";
+    EXPECT_EQ(after.at("signer").get<std::string>(), Trust::toHex(list.signerSpkiSha256));
+}
+
+TEST(CscaImportDbus, AnAcceptedImportAnnouncesTheChangeExactlyOnce)
+{
+    AllowAuthorizer allow;
+    Harness h("changed-signal", allow);
+
+    // AgentService wires this in production; replicate it, because the RECORD
+    // the import writes is what announces the change now. There is no
+    // hand-written emit on the import path any more, and a client that
+    // refetches whenever it is told to must be told once for one import --
+    // neither nought times nor twice.
+    h.config->setOnChanged([&h](const std::string& key) {
+        if (h.manager) {
+            h.manager->emitConfigChanged(key);
+        }
+    });
+
+    std::atomic<int> announced{0};
+    std::string announcedKey;
+    h.proxy->uponSignal("Changed").onInterface(sdbus::InterfaceName{kCfgIface}).call([&](const std::string& key) {
+        announcedKey = key;
+        announced.fetch_add(1, std::memory_order_acq_rel);
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(100)); // let the match rule propagate
+
+    TempFile file(h.dir / "in", "masterlist.ml", aValidMasterList());
+    ASSERT_GE(file.fd(), 0);
+    ASSERT_EQ(h.importFd(file.fd()), "");
+
+    for (int i = 0; i < 100 && announced.load(std::memory_order_acquire) == 0; ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    ASSERT_EQ(announced.load(std::memory_order_acquire), 1) << "the accepted import announced nothing";
+    EXPECT_EQ(announcedKey, "CscaAnchorState");
+
+    // Settle before counting: a second emit beside the store's own would arrive
+    // late rather than not at all, and would wake every listening client twice.
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    EXPECT_EQ(announced.load(std::memory_order_acquire), 1) << "one import announced more than one change";
+}
+
 TEST(CscaImportDbus, AChangedSignerIsRefusedOverTheWire)
 {
     AllowAuthorizer allow;
@@ -466,4 +648,157 @@ TEST(CscaImportDbus, AnUndatedListCannotStripADatedOneOverTheWire)
     const auto state = h.anchorState();
     EXPECT_TRUE(state.at("replayRefusalActive").get<bool>()) << "the protection was switched off from the wire";
     EXPECT_EQ(state.at("signedAt").get<std::int64_t>(), kSignedLater);
+}
+
+// --- a report the anchor cache does not bear out ----------------------------
+//
+// The record follows the CONFIGURATION file. What it describes is a directory
+// of anchor files plus the cache's own state file, either of which a person may
+// edit or delete; the configuration survives that, so the record goes on
+// describing an agent that is no longer there. Both halves err in the
+// OVERSTATING direction, which for a trust surface is the dangerous one:
+// missing anchors leave the COUNTS false, and a missing cache state leaves the
+// SIGNER false — a pin claimed over an agent that now follows nobody.
+//
+// Only the display is at stake, and the tests are written knowing it: every
+// verdict reads the cache itself and never this report, so no document can be
+// accepted on the strength of one.
+//
+// Reconciliation happens once, at startup, and asks only cheap questions:
+// whether an anchor file exists at all, and whether the cache establishes a
+// signer. Nothing is re-verified, and nothing in the cache is touched — which
+// is a property the last two cases here exist to hold on to.
+
+TEST(CscaImportDbus, ARememberedReportSurvivesARestartThatFindsItsAnchors)
+{
+    AllowAuthorizer allow;
+    Harness h("reconcile-intact", allow);
+
+    const auto list = fixture::signMasterList({fixture::makeCsca("CSCA A", "AA"), fixture::makeCsca("CSCA B", "BB")},
+                                              fixture::makeIndependentSigner());
+    TempFile file(h.dir / "in", "masterlist.ml", list.der);
+    ASSERT_EQ(h.importFd(file.fd()), "");
+
+    h.restart();
+
+    const auto state = h.anchorState();
+    ASSERT_FALSE(state.empty()) << "a restart discarded a report whose anchors are still on disk";
+    EXPECT_EQ(state.at("anchors").get<std::uint32_t>(), 2u);
+    EXPECT_EQ(state.at("signer").get<std::string>(), Trust::toHex(list.signerSpkiSha256));
+}
+
+TEST(CscaImportDbus, AReportWhoseAnchorCacheWasWipedIsNotServedAsCurrent)
+{
+    AllowAuthorizer allow;
+    Harness h("reconcile-wiped", allow);
+
+    const auto list = fixture::signMasterList({fixture::makeCsca("CSCA A", "AA"), fixture::makeCsca("CSCA B", "BB")},
+                                              fixture::makeIndependentSigner());
+    TempFile file(h.dir / "in", "masterlist.ml", list.der);
+    ASSERT_EQ(h.importFd(file.fd()), "");
+    ASSERT_FALSE(h.anchorState().empty());
+
+    // The whole cache directory, the way a person clearing out a cache would.
+    // The configuration file is elsewhere and is untouched by it.
+    std::error_code ec;
+    fs::remove_all(fs::path{h.config->cscaCacheDir()}, ec);
+    ASSERT_FALSE(ec);
+
+    h.restart();
+
+    EXPECT_TRUE(h.anchorState().empty()) << "the agent served counts for anchors it no longer holds";
+    EXPECT_FALSE(h.config->cscaAnchorState().has_value()) << "the stale report is still in the configuration";
+
+    // Where the pin actually lives, asserted rather than assumed: it went with
+    // the cache, not with the report, so the next list is a first import again
+    // — trusted on sight, and saying so. A record that had been feeding the
+    // pin would make this list a stranger's instead.
+    const auto next = fixture::signMasterList({fixture::makeCsca("CSCA X", "XX")}, fixture::makeIndependentSigner());
+    TempFile nextFile(h.dir / "in", "next.ml", next.der);
+    std::map<std::string, sdbus::Variant> summary;
+    ASSERT_EQ(h.importFd(nextFile.fd(), &summary), "");
+    EXPECT_FALSE(summary.at("signerPinned").get<bool>());
+}
+
+TEST(CscaImportDbus, AReportWhosePinnedSignerIsGoneIsNotServedAsCurrent)
+{
+    AllowAuthorizer allow;
+    Harness h("reconcile-unpinned", allow);
+
+    const auto list = fixture::signMasterList({fixture::makeCsca("CSCA A", "AA"), fixture::makeCsca("CSCA B", "BB")},
+                                              fixture::makeIndependentSigner());
+    TempFile file(h.dir / "in", "masterlist.ml", list.der);
+    ASSERT_EQ(h.importFd(file.fd()), "");
+    ASSERT_EQ(h.anchorState().at("signer").get<std::string>(), Trust::toHex(list.signerSpkiSha256));
+
+    // The other half of the same fault, and the easy one to miss: only the
+    // cache's own state file goes. The anchors stay, so the COUNTS a client
+    // reads are still true — and that is exactly why an implementation that
+    // only asks "are there anchors" walks straight past this. What is no
+    // longer true is the signer beside them: with nothing left to read the pin
+    // from, the agent follows nobody, so "pinned to X" describes a trust
+    // narrower than the one actually in force.
+    const fs::path cacheDir{h.config->cscaCacheDir()};
+    std::error_code ec;
+    ASSERT_TRUE(fs::remove(cacheDir / "state", ec)) << "the fixture removed nothing";
+    ASSERT_FALSE(ec);
+    ASSERT_TRUE(fs::exists(cacheDir / "anchors", ec)) << "the fixture removed more than the state file";
+
+    h.restart();
+
+    EXPECT_TRUE(h.anchorState().empty()) << "the agent named a publisher it no longer follows";
+    EXPECT_FALSE(h.config->cscaAnchorState().has_value()) << "the stale report is still in the configuration";
+
+    // The reconciliation reports; it does not tidy. The anchors it just
+    // declined to describe are still on disk, untouched.
+    EXPECT_TRUE(fs::exists(cacheDir / "anchors", ec))
+        << "the reconciliation deleted anchors it only had to stop describing";
+
+    // And the agent's behaviour agrees with what it now reports rather than
+    // with what it used to: no pin left, so the next list is a first import
+    // again, trusted on sight and saying so.
+    const auto next = fixture::signMasterList({fixture::makeCsca("CSCA X", "XX")}, fixture::makeIndependentSigner());
+    TempFile nextFile(h.dir / "in", "next.ml", next.der);
+    std::map<std::string, sdbus::Variant> summary;
+    ASSERT_EQ(h.importFd(nextFile.fd(), &summary), "");
+    EXPECT_FALSE(summary.at("signerPinned").get<bool>());
+}
+
+TEST(CscaImportDbus, DiscardingAStaleReportLeavesTheSignerPinStanding)
+{
+    AllowAuthorizer allow;
+    Harness h("reconcile-pin", allow);
+
+    const auto publisher = fixture::makeIndependentSigner();
+    const auto anchorA = fixture::makeCsca("CSCA A", "AA");
+    const auto first = fixture::signMasterList({anchorA}, publisher);
+    TempFile firstFile(h.dir / "in", "first.ml", first.der);
+    ASSERT_EQ(h.importFd(firstFile.fd()), "");
+
+    // Only the ANCHORS go. The cache's own state file stays, and that file is
+    // what the pin and the rotation rule are read from — so this is the case
+    // that would expose a reconciliation which "helpfully" cleared the cache
+    // too, or which had been serving the pin out of the configuration.
+    std::error_code ec;
+    fs::remove_all(fs::path{h.config->cscaCacheDir()} / "anchors", ec);
+    ASSERT_FALSE(ec);
+
+    h.restart();
+    EXPECT_TRUE(h.anchorState().empty()) << "counts were served for anchors that are gone";
+
+    // A stranger is still refused ...
+    const auto stranger =
+        fixture::signMasterList({fixture::makeCsca("CSCA X", "XX")}, fixture::makeIndependentSigner());
+    TempFile strangerFile(h.dir / "in", "stranger.ml", stranger.der);
+    EXPECT_EQ(h.importFd(strangerFile.fd()), "org.librescrs.Agent.Error.MasterListSignerChanged")
+        << "the wiped cache let a publisher this agent does not follow install anchors";
+
+    // ... and the publisher the agent DOES follow is recognised, not merely
+    // observed. signerPinned true is the pin being read; a blanket refusal
+    // above would satisfy the previous assertion on its own.
+    const auto second = fixture::signMasterList({anchorA, fixture::makeCsca("CSCA B", "BB")}, publisher);
+    TempFile secondFile(h.dir / "in", "second.ml", second.der);
+    std::map<std::string, sdbus::Variant> summary;
+    ASSERT_EQ(h.importFd(secondFile.fd(), &summary), "");
+    EXPECT_TRUE(summary.at("signerPinned").get<bool>()) << "the pin was discarded along with the report";
 }

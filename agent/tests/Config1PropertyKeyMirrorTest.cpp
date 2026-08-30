@@ -32,6 +32,15 @@
 // Today some file-only keys are published read-only and some are not, and this
 // guard deliberately says nothing about which -- it guards the wire-settable
 // surface and the dead-property case, not that editorial choice.
+//
+// NO EXEMPTIONS. This file once carried one: CscaAnchorState was a property
+// the agent DERIVED and no key the store owned, so the surplus direction had
+// to be told to ignore it. The store owns it now -- read-only, recorded by an
+// accepted import so a client that has just started can be told what is
+// installed -- and the exemption went with it rather than staying behind to
+// mask the next real surplus. Both directions therefore measure the whole
+// interface against the whole key set, with nothing hand-listed here at all,
+// which is what the header above wants of this file.
 
 #include <LibreSCRS/Agent/config/ConfigStore.h>
 
@@ -51,17 +60,6 @@ namespace {
 
 using LibreSCRS::Agent::Config::ConfigStore;
 using LibreSCRS::Agent::Config::Mutability;
-
-// Config1 also carries state the agent DERIVES rather than stores: what it
-// currently believes about its country-signing anchors. That is a property
-// with no configuration key behind it, and no question put to ConfigStore can
-// reveal it, because ConfigStore does not know it exists. It is named here --
-// and the first test below guards the naming from both sides, so this cannot
-// become the stale third artefact the file header warns about: the name must
-// still be a property (or the exemption is dead), and must still be absent
-// from the store (or the exemption is masking a real key the surplus
-// direction was written to find).
-const std::set<std::string> kDerivedStateProperties{"CscaAnchorState"};
 
 std::string slurp(const char* path)
 {
@@ -144,39 +142,17 @@ std::string joinSorted(const std::set<std::string>& names)
 
 } // namespace
 
-TEST(Config1PropertyKeyMirror, EveryKeyIsClassifiedAndTheDerivedStateExemptionStillHolds)
+TEST(Config1PropertyKeyMirror, EveryKeyTheStoreOwnsIsClassified)
 {
-    // Guards the guard. The bidirectional test below leans on two things that
-    // could rot without anything going red: that mutability() has an answer
-    // for every key it filters on, and that the derived-state exemption still
-    // describes the interface. Both are a smaller copy of the drift this file
-    // was written for.
+    // Guards the guard. The bidirectional test below leans on mutability()
+    // having an answer for every key it filters on: a key it cannot classify
+    // would drop out of the must-be-published set silently, exempted by an
+    // omission rather than by a decision. That is a smaller copy of the drift
+    // this file was written for.
     const std::set<std::string> unclassified = keysWithNoMutability();
     EXPECT_TRUE(unclassified.empty()) << "ConfigStore owns a key mutability() cannot classify, so the file-only "
                                          "filter below would drop it by omission rather than by decision: "
                                       << joinSorted(unclassified);
-
-    const std::string xml = slurp(LIBRELINUX_CONFIG1_XML);
-    ASSERT_FALSE(xml.empty()) << "could not read the interface at " << LIBRELINUX_CONFIG1_XML;
-    const std::set<std::string> declared = propertiesDeclaredInXml(xml);
-    ASSERT_FALSE(declared.empty()) << "the interface parsed to no properties at all, so the pattern no longer "
-                                      "matches how Config1.xml declares them";
-
-    const std::set<std::string> exemptButNotDeclared = difference(kDerivedStateProperties, declared);
-    EXPECT_TRUE(exemptButNotDeclared.empty())
-        << "a derived-state exemption names a property the interface no longer declares, so it now hides "
-           "nothing and would mask the next surplus instead: "
-        << joinSorted(exemptButNotDeclared);
-
-    std::set<std::string> exemptButAKey;
-    for (const std::string& name : kDerivedStateProperties) {
-        if (everyKeyTheStoreOwns().contains(name)) {
-            exemptButAKey.insert(name);
-        }
-    }
-    EXPECT_TRUE(exemptButAKey.empty()) << "a derived-state exemption names a key ConfigStore does own, so the "
-                                          "surplus direction is being told to ignore a real configuration key: "
-                                       << joinSorted(exemptButAKey);
 }
 
 TEST(Config1PropertyKeyMirror, XmlPropertiesAndStoreKeysAgreeInBothDirections)
@@ -198,9 +174,9 @@ TEST(Config1PropertyKeyMirror, XmlPropertiesAndStoreKeysAgreeInBothDirections)
                                         << joinSorted(missingFromXml);
 
     // Measured against every key, file-only included: a file-only key that IS
-    // published read-only is a choice, not a surplus.
-    const std::set<std::string> surplusInXml =
-        difference(difference(declared, everyKeyTheStoreOwns()), kDerivedStateProperties);
+    // published read-only is a choice, not a surplus. Nothing is subtracted
+    // from this beyond the store's own key set -- see the header.
+    const std::set<std::string> surplusInXml = difference(declared, everyKeyTheStoreOwns());
     EXPECT_TRUE(surplusInXml.empty()) << "the Config1 interface declares a property ConfigStore knows no key for, "
                                          "so the wire carries a name nothing behind it stores: "
                                       << joinSorted(surplusInXml);
