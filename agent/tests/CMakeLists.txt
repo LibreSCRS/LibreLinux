@@ -165,6 +165,23 @@ target_link_libraries(Operation1ErrorCodeXmlGuardTest PRIVATE
     GTest::gtest_main)
 add_test(NAME Operation1ErrorCodeXmlGuardTest COMMAND Operation1ErrorCodeXmlGuardTest)
 
+# Machine gate for the Config1 property surface: the <property> elements of
+# dbus/org.librescrs.Agent.Config1.xml against ConfigStore's key set, BOTH
+# ways. Nothing else compares the two -- a key added to the store without a
+# property, or a property naming no key, passes every other test here. The
+# file-only keys are exempted by asking ConfigStore::mutability(), never by a
+# list of spellings kept in the test. Bus-free: it reads the XML from the
+# source tree (same pattern as the guard above) and queries the store's static
+# key metadata.
+add_executable(Config1PropertyKeyMirrorTest Config1PropertyKeyMirrorTest.cpp)
+target_compile_definitions(Config1PropertyKeyMirrorTest PRIVATE
+    LIBRELINUX_CONFIG1_XML="${CMAKE_CURRENT_SOURCE_DIR}/../dbus/org.librescrs.Agent.Config1.xml")
+target_link_libraries(Config1PropertyKeyMirrorTest PRIVATE
+    LibreLinuxAgentCore
+    GTest::gtest
+    GTest::gtest_main)
+add_test(NAME Config1PropertyKeyMirrorTest COMMAND Config1PropertyKeyMirrorTest)
+
 # Machine gate for the sandbox's writable directories: while the unit confines
 # the home directory read-only, it must declare a directory for each of the
 # agent's write roots, or the writes fail with EROFS at runtime and nothing the
