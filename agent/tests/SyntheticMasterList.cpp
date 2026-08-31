@@ -22,6 +22,7 @@
 #include <mutex>
 #include <optional>
 #include <stdexcept>
+#include <string>
 #include <utility>
 
 namespace LibreSCRS::Agent::Test {
@@ -575,6 +576,90 @@ SyntheticMasterList signMasterListDated(std::vector<std::vector<std::uint8_t>> a
                                         std::int64_t signingTimeEpochSeconds)
 {
     return buildSignedList(std::move(anchors), signer, signingTimeEpochSeconds);
+}
+
+namespace {
+
+// RFC 4648 base64, which is what an LDIF `::` value carries.
+std::string base64(const std::vector<std::uint8_t>& bytes)
+{
+    static constexpr char kAlphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string out;
+    out.reserve(((bytes.size() + 2) / 3) * 4);
+    std::size_t i = 0;
+    for (; i + 3 <= bytes.size(); i += 3) {
+        const std::uint32_t triple = (static_cast<std::uint32_t>(bytes[i]) << 16) |
+                                     (static_cast<std::uint32_t>(bytes[i + 1]) << 8) |
+                                     static_cast<std::uint32_t>(bytes[i + 2]);
+        out.push_back(kAlphabet[(triple >> 18) & 0x3F]);
+        out.push_back(kAlphabet[(triple >> 12) & 0x3F]);
+        out.push_back(kAlphabet[(triple >> 6) & 0x3F]);
+        out.push_back(kAlphabet[triple & 0x3F]);
+    }
+    if (i < bytes.size()) {
+        const bool two = (bytes.size() - i) == 2;
+        const std::uint32_t triple =
+            (static_cast<std::uint32_t>(bytes[i]) << 16) | (two ? (static_cast<std::uint32_t>(bytes[i + 1]) << 8) : 0U);
+        out.push_back(kAlphabet[(triple >> 18) & 0x3F]);
+        out.push_back(kAlphabet[(triple >> 12) & 0x3F]);
+        out.push_back(two ? kAlphabet[(triple >> 6) & 0x3F] : '=');
+        out.push_back('=');
+    }
+    return out;
+}
+
+// One attribute line, FOLDED: RFC 2849 continues a logical line by starting the
+// next physical one with a single space. The portal's file is folded, so a
+// fixture that emitted one 1.7-megabyte line would be exercising a parser the
+// real input never reaches.
+void appendFolded(std::string& out, const std::string& description, const std::string& encoded)
+{
+    constexpr std::size_t kWidth = 78;
+    std::string line = description + ":: ";
+    std::size_t at = 0;
+    while (at < encoded.size()) {
+        const std::size_t room = kWidth - line.size();
+        const std::size_t take = std::min(room, encoded.size() - at);
+        line.append(encoded, at, take);
+        at += take;
+        out += line;
+        out += "\n";
+        line = " "; // the continuation marker, and the next line's first octet
+    }
+    if (line.size() > 1) {
+        out += line;
+        out += "\n";
+    }
+}
+
+} // namespace
+
+std::vector<std::uint8_t> makeLdifCollection(const std::vector<std::vector<std::uint8_t>>& lists,
+                                             bool strayBase64Attribute)
+{
+    std::string out = "version: 1\n\n";
+    out += "dn: dc=data,dc=download,dc=pkd,dc=icao,dc=int\n";
+    out += "dc: data\n";
+    out += "objectclass: top\n";
+    out += "objectclass: domain\n\n";
+
+    for (std::size_t i = 0; i < lists.size(); ++i) {
+        char country[3] = {static_cast<char>('A' + static_cast<char>(i / 26)),
+                           static_cast<char>('A' + static_cast<char>(i % 26)), '\0'};
+        out += std::string{"dn: o=csca-ml,c="} + country + ",dc=data,dc=download,dc=pkd,dc=icao,dc=int\n";
+        out += "objectclass: inetOrgPerson\n";
+        out += std::string{"sn: "} + country + "\n";
+        if (strayBase64Attribute) {
+            // Base64, and NOT a signed object. The portal encodes its `cn` this
+            // way whenever the value would otherwise need escaping.
+            const std::string label = std::string{"CSCA Master List "} + country;
+            out += "cn:: " + base64(std::vector<std::uint8_t>(label.begin(), label.end())) + "\n";
+        }
+        out += "pkdVersion: 528\n";
+        appendFolded(out, "pkdMasterListContent;binary", base64(lists[i]));
+        out += "\n";
+    }
+    return std::vector<std::uint8_t>(out.begin(), out.end());
 }
 
 std::vector<std::uint8_t> makeSignedNonMasterList()

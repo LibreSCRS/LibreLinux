@@ -94,6 +94,19 @@ struct SyntheticMasterList
                                                       const MasterListSigner& signer,
                                                       std::int64_t signingTimeEpochSeconds);
 
+// An LDIF directory export in the shape the ICAO Public Key Directory serves
+// its master list collection: a `version: 1` header, one record per list under
+// a `dn`, and the list itself base64 under `pkdMasterListContent;binary`,
+// folded at column 78 exactly as RFC 2849 asks. @p lists are embedded in the
+// order given, which is the order a reader of the file sees them.
+//
+// @p strayBase64Attribute adds a base64 `cn` beside the lists. The portal's own
+// file carries one, and it is not a signed object -- so a scan that counts every
+// base64 value counts one list too many, and only a fixture that carries one
+// can catch that.
+[[nodiscard]] std::vector<std::uint8_t> makeLdifCollection(const std::vector<std::vector<std::uint8_t>>& lists,
+                                                           bool strayBase64Attribute);
+
 // A properly signed CMS carrying a DIFFERENT eContentType (id-data). Without
 // it, "not a master list" is only ever tested with garbage that fails to
 // decode, so an importer that never looks at the content type would pass.

@@ -372,6 +372,194 @@ TEST(CscaImportDbus, AValidListIsImportedAndSummarised)
     EXPECT_EQ(state.at("signer").get<std::string>(), Trust::toHex(list.signerSpkiSha256));
 }
 
+// --- a collection, which is what the directory actually serves --------------
+//
+// One file, several master lists, each published and signed by a different
+// country. What the wire has to say about it is the whole question this section
+// answers, because the vocabulary it inherited was written for one publisher
+// and the file carries dozens.
+//
+// The rule they enforce together: NAMING one publisher out of many is the
+// thing to avoid, and an ABSENT key is how this vocabulary already spells
+// "that cannot be told" -- `signedAt` has meant exactly that for an undated
+// list since the first version of this interface. So the three single-
+// publisher keys go absent rather than picking a winner. A client built
+// before the collection existed reads a missing key and shows nothing; the
+// same client reading one of twenty-eight fingerprints under a label its
+// dialog renders as "the publisher" would show something FALSE, and the two
+// are not failures of the same size.
+
+TEST(CscaImportDbus, ACollectionIsImportedAsTheUnionOfItsLists)
+{
+    AllowAuthorizer allow;
+    Harness h("collection", allow);
+
+    // Two publishers, three anchors, two countries -- and one anchor carried
+    // by BOTH lists, because the lists in a real collection overlap and the
+    // union must collapse the repeat rather than count it twice.
+    const auto shared = fixture::makeCsca("CSCA Shared", "AA");
+    const auto first =
+        fixture::signMasterList({shared, fixture::makeCsca("CSCA One", "AA")}, fixture::makeIndependentSigner());
+    const auto second =
+        fixture::signMasterList({shared, fixture::makeCsca("CSCA Two", "BB")}, fixture::makeIndependentSigner());
+    // With the stray base64 attribute the portal's own export carries: a scan
+    // that counted every base64 value would offer one list too many here.
+    const auto ldif = fixture::makeLdifCollection({first.der, second.der}, /*strayBase64Attribute=*/true);
+
+    TempFile file(h.dir / "in", "collection.ldif", ldif);
+    ASSERT_GE(file.fd(), 0);
+
+    std::map<std::string, sdbus::Variant> summary;
+    ASSERT_EQ(h.importFd(file.fd(), &summary), "");
+
+    EXPECT_EQ(summary.at("anchors").get<std::uint32_t>(), 3u) << "the shared anchor was stored twice, or a list was "
+                                                                 "dropped";
+    EXPECT_EQ(summary.at("issuers").get<std::uint32_t>(), 2u);
+    EXPECT_EQ(summary.at("origin").get<std::string>(), "import");
+
+    const auto state = h.anchorState();
+    EXPECT_EQ(state.at("anchors").get<std::uint32_t>(), 3u);
+    EXPECT_EQ(state.at("issuers").get<std::uint32_t>(), 2u);
+}
+
+TEST(CscaImportDbus, ACollectionNamesNoPublisherAtAll)
+{
+    AllowAuthorizer allow;
+    Harness h("collection-unnamed", allow);
+
+    // BOTH lists dated, and dated DIFFERENTLY. That is what makes the absent
+    // `signedAt` below a decision rather than an artefact: there are two
+    // perfectly good dates here and no single one of them is the collection's.
+    const auto first = fixture::signMasterListDated({fixture::makeCsca("CSCA One", "AA")},
+                                                    fixture::makeIndependentSigner(), kSignedEarlier);
+    const auto second = fixture::signMasterListDated({fixture::makeCsca("CSCA Two", "BB")},
+                                                     fixture::makeIndependentSigner(), kSignedLater);
+    const auto ldif = fixture::makeLdifCollection({first.der, second.der}, /*strayBase64Attribute=*/false);
+
+    TempFile file(h.dir / "in", "collection.ldif", ldif);
+    std::map<std::string, sdbus::Variant> summary;
+    ASSERT_EQ(h.importFd(file.fd(), &summary), "");
+
+    EXPECT_FALSE(summary.contains("signer")) << "one publisher out of several was named as THE publisher";
+    EXPECT_FALSE(summary.contains("signedAt")) << "one publisher's signing time was served as the collection's";
+
+    // The property a settings dialog reads says the same, and goes on saying
+    // it after a restart -- the record is the only thing a client that has
+    // just connected can be answered from.
+    const auto state = h.anchorState();
+    EXPECT_FALSE(state.contains("signer"));
+    EXPECT_FALSE(state.contains("signedAt"));
+    EXPECT_EQ(state.at("anchors").get<std::uint32_t>(), 2u) << "what IS known was withheld along with what is not";
+
+    h.restart();
+    const auto afterRestart = h.anchorState();
+    EXPECT_FALSE(afterRestart.contains("signer")) << "the restart re-invented a publisher the import declined to name";
+    EXPECT_FALSE(afterRestart.contains("signedAt"));
+    EXPECT_EQ(afterRestart.at("anchors").get<std::uint32_t>(), 2u);
+}
+
+TEST(CscaImportDbus, ACollectionSaysWhetherEveryPublisherWasEstablished)
+{
+    AllowAuthorizer allow;
+    Harness h("collection-established", allow);
+
+    const auto signerA = fixture::makeIndependentSigner();
+    const auto signerB = fixture::makeIndependentSigner();
+    const auto firstA = fixture::signMasterListDated({fixture::makeCsca("CSCA A", "AA")}, signerA, kSignedEarlier);
+    const auto firstB = fixture::signMasterListDated({fixture::makeCsca("CSCA B", "BB")}, signerB, kSignedEarlier);
+
+    TempFile firstFile(h.dir / "in", "first.ldif",
+                       fixture::makeLdifCollection({firstA.der, firstB.der}, /*strayBase64Attribute=*/false));
+    std::map<std::string, sdbus::Variant> firstSummary;
+    ASSERT_EQ(h.importFd(firstFile.fd(), &firstSummary), "");
+    EXPECT_FALSE(firstSummary.at("signerPinned").get<bool>())
+        << "a trust-on-first-import claimed every publisher's identity had been established";
+
+    // The same two publishers again, each list newer than its own. Both are
+    // now on record, so both are MATCHED rather than merely observed.
+    const auto againA = fixture::signMasterListDated({fixture::makeCsca("CSCA A", "AA")}, signerA, kSignedLater);
+    const auto againB = fixture::signMasterListDated({fixture::makeCsca("CSCA B", "BB")}, signerB, kSignedLater);
+    TempFile againFile(h.dir / "in", "again.ldif",
+                       fixture::makeLdifCollection({againA.der, againB.der}, /*strayBase64Attribute=*/false));
+    std::map<std::string, sdbus::Variant> againSummary;
+    ASSERT_EQ(h.importFd(againFile.fd(), &againSummary), "");
+    EXPECT_TRUE(againSummary.at("signerPinned").get<bool>())
+        << "every publisher was established and the wire would not say so";
+    // Decided SEPARATELY from the naming, and this is the pair that shows it:
+    // the collection can be fully established and still have no one publisher
+    // to name. A surface may say "checked" here; it may not say "checked, and
+    // it was this one".
+    EXPECT_FALSE(againSummary.contains("signer")) << "an established collection named a publisher after all";
+}
+
+TEST(CscaImportDbus, APublisherStillFollowedAloneIsNamedAgain)
+{
+    AllowAuthorizer allow;
+    Harness h("collection-narrowed", allow);
+
+    // A single published list first, so exactly one publisher is on record --
+    // and the wire names it, because there IS one publisher to name.
+    const auto signerA = fixture::makeIndependentSigner();
+    const auto alone = fixture::signMasterListDated({fixture::makeCsca("CSCA A", "AA")}, signerA, kSignedEarlier);
+    TempFile aloneFile(h.dir / "in", "alone.ml", alone.der);
+    std::map<std::string, sdbus::Variant> aloneSummary;
+    ASSERT_EQ(h.importFd(aloneFile.fd(), &aloneSummary), "");
+    EXPECT_EQ(aloneSummary.at("signer").get<std::string>(), Trust::toHex(alone.signerSpkiSha256))
+        << "a single publisher stopped being named, which is a regression and not a generalisation";
+
+    // Now a collection carrying that publisher and a stranger: a signer this
+    // agent has no record of and whose certificate chains to nothing it holds.
+    // The stranger's list is refused and the other is taken, which is the
+    // partial outcome a collection makes ordinary.
+    const auto againA = fixture::signMasterListDated({fixture::makeCsca("CSCA A", "AA")}, signerA, kSignedLater);
+    const auto stranger = fixture::signMasterListDated({fixture::makeCsca("CSCA C", "CC")},
+                                                       fixture::makeIndependentSigner(), kSignedLater);
+    TempFile file(h.dir / "in", "mixed.ldif",
+                  fixture::makeLdifCollection({againA.der, stranger.der}, /*strayBase64Attribute=*/false));
+    std::map<std::string, sdbus::Variant> summary;
+    ASSERT_EQ(h.importFd(file.fd(), &summary), "");
+
+    // What the agent follows AFTERWARDS is what the wire describes, and it is
+    // one publisher again -- the stranger vouched for nothing, so its anchors
+    // are not in the store and its fingerprint is not in this report. The rule
+    // is about how many publishers are followed, never about how the file that
+    // narrowed them down happened to arrive.
+    EXPECT_EQ(summary.at("anchors").get<std::uint32_t>(), 1u) << "the refused list's anchors reached the store";
+    EXPECT_EQ(summary.at("signer").get<std::string>(), Trust::toHex(againA.signerSpkiSha256));
+    EXPECT_TRUE(summary.at("signerPinned").get<bool>()) << "the surviving publisher was matched against its record "
+                                                           "and the wire would not say so";
+    EXPECT_EQ(summary.at("signedAt").get<std::int64_t>(), kSignedLater);
+}
+
+TEST(CscaImportDbus, OneUndatedListInACollectionTurnsReplayRefusalOff)
+{
+    AllowAuthorizer allow;
+    Harness h("collection-undated", allow);
+
+    // One publisher dates its list and one does not, which is an ordinary
+    // Tuesday across dozens of countries. The aggregate is the WEAKEST of its
+    // parts: the undated publisher's anchors can be rolled back freely, and a
+    // surface told the protection is active could not know that.
+    const auto dated = fixture::signMasterListDated({fixture::makeCsca("CSCA Dated", "AA")},
+                                                    fixture::makeIndependentSigner(), kSignedEarlier);
+    const auto undated =
+        fixture::signMasterList({fixture::makeCsca("CSCA Undated", "BB")}, fixture::makeIndependentSigner());
+    TempFile file(h.dir / "in", "mixed-dates.ldif",
+                  fixture::makeLdifCollection({dated.der, undated.der}, /*strayBase64Attribute=*/false));
+
+    std::map<std::string, sdbus::Variant> summary;
+    ASSERT_EQ(h.importFd(file.fd(), &summary), "");
+
+    ASSERT_TRUE(summary.contains("replayRefusalActive")) << "the one key whose false is the interesting value went "
+                                                            "missing";
+    EXPECT_FALSE(summary.at("replayRefusalActive").get<bool>())
+        << "a dated majority reported a protection the undated publisher does not have";
+
+    const auto state = h.anchorState();
+    ASSERT_TRUE(state.contains("replayRefusalActive"));
+    EXPECT_FALSE(state.at("replayRefusalActive").get<bool>());
+}
+
 TEST(CscaImportDbus, AnchorStateIsEmptyUntilSomethingIsImported)
 {
     AllowAuthorizer allow;

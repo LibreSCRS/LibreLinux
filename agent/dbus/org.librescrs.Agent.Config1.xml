@@ -57,39 +57,84 @@
          has only just connected — and therefore has no import reply to read —
          is answered from it. Changed fires for the key like any other.
 
+         SEVERAL PUBLISHERS AT ONCE. What the ICAO directory serves is a
+         collection: dozens of master lists, each published and signed by a
+         different country, imported in one action. This dict was written when a
+         publisher meant ONE publisher, so the three members that named one now
+         speak for the whole, and each does it the same way — say what is true of
+         every publisher taken in, and where the whole has no answer, be ABSENT.
+         Absence is a shape this dict has always had (an undated list has always
+         left signedAt out), and it is the shape a reader can act on: a client
+         that finds no signer shows none, where a client handed one fingerprint
+         out of twenty-eight would show a specific untruth under a label its
+         dialog reads as "the publisher".
+
          Keys, when present:
            anchors      u  anchors held. INCLUDES CSCA link certificates, which
                            are anchors like any other, so this is not a count of
-                           self-signed roots.
+                           self-signed roots. For a collection, the UNION of what
+                           the accepted lists carried, exact repeats collapsed.
            issuers      u  distinct issuing countries among those anchors.
            signer       s  lowercase hex SHA-256 over the publisher's
                            SubjectPublicKeyInfo — the fingerprint a person is
-                           shown, and the value the next import is pinned to.
-           signerPinned b  whether the import ESTABLISHED that publisher's
-                           identity — matched the fingerprint, or built a path
-                           from the signer to an anchor already held — rather
-                           than merely observing it. FALSE after a
+                           shown, and the value the next import from that
+                           publisher is measured against. Present only while the
+                           agent follows EXACTLY ONE publisher, which is every
+                           single published list; ABSENT once several are
+                           followed, because there is then no publisher for this
+                           to name and naming one of them would be a specific
+                           false statement rather than a vague one.
+           signerPinned b  whether the import ESTABLISHED the identity of EVERY
+                           publisher it took in — matched the fingerprint, or
+                           built a path from the signer to an anchor already
+                           held — rather than merely observing it. The weakest of
+                           its parts, deliberately: one publisher admitted
+                           unchecked among several is one whose anchors arrived
+                           on a first sighting. FALSE after a
                            trust-on-first-import: a surface that renders
                            "authenticity verified" over a false here claims more
-                           than was measured.
+                           than was measured. ALWAYS present.
            acceptedAt   x  seconds since the epoch when the AGENT accepted the
-                           list. Under no publisher's control, and not a claim
-                           about the list itself.
+                           file. Under no publisher's control, and not a claim
+                           about any list in it.
            signedAt     x  seconds since the epoch when the list says it was
                            SIGNED, from the CMS signingTime signed attribute.
                            ABSENT when the list carries none, which CMS permits;
                            there is no zero sentinel, because a list signed at
                            the epoch and a list with no date must not read alike.
+                           ABSENT for a collection too, and the two cases read
+                           alike on purpose: several publishers sign at several
+                           times, and no one of those is the collection's.
+                           Present, like signer, only while exactly one publisher
+                           is followed.
            replayRefusalActive b
                            whether a later import can be refused for rolling the
                            anchors back. ALWAYS present when anything has been
                            imported, because its FALSE is the value worth
-                           knowing: it means the accepted list carried no date,
-                           so "is this older than what I have" cannot be answered
-                           at all. A surface that stays silent leaves a person
-                           unable to tell "this is safe" from "this cannot be
-                           checked".
-           origin       s  where the anchors came from ("import"). -->
+                           knowing: it means an accepted list carried no date, so
+                           "is this older than what I have" cannot be answered at
+                           all. Answered for the WHOLE and, like signerPinned,
+                           the weakest of its parts — one undated list among
+                           twenty-eight is one publisher whose anchors can be
+                           rolled back freely. A surface that stays silent leaves
+                           a person unable to tell "this is safe" from "this
+                           cannot be checked".
+           origin       s  where the anchors came from ("import").
+
+         WHAT THIS DICT DOES NOT SAY, so a client does not go looking for it:
+         HOW MANY publishers were taken in, and how many of those were
+         established. Both would be honest and neither is reported. This
+         property is served from what the agent RECORDED, that record is what
+         survives a restart, and it has no member able to carry a count — so
+         such a key could only be present in the import reply and gone from the
+         property a moment later, which is a worse answer than none. The numbers
+         are logged instead.
+
+         A CLIENT BUILT BEFORE COLLECTIONS reads exactly the keys it always
+         read. No key was removed and none changed type; the three that describe
+         one publisher are simply absent when there is no one publisher, and
+         signerPinned answers for all of them instead of for one — never in the
+         direction that would let an older dialog claim more than before. -->
     <property name="CscaAnchorState" type="a{sv}"  access="read"/>
     <property name="DefaultReason"   type="s"      access="read"/>
     <property name="DefaultLocation" type="s"      access="read"/>
@@ -103,14 +148,38 @@
       <arg name="key" type="s" direction="in"/>
     </method>
 
-    <!-- Install country-signing trust anchors from a signed ICAO master list.
+    <!-- Install country-signing trust anchors from signed ICAO master lists.
          Behind polkit org.librescrs.agent.configure.trust (see above).
+
+         A FILE IS NOT A LIST. Two shapes are taken and nothing else is guessed
+         at: ONE master list as published, or the DIRECTORY EXPORT (RFC 2849
+         LDIF) the ICAO Public Key Directory actually serves, which carries a
+         collection — dozens of master lists, each published and signed by a
+         different country. Everything below is stated per LIST: each is verified
+         against its own signer, each publisher carries its own record, and the
+         trust and replay rules are applied to each. The anchors installed are
+         the UNION of the lists that survived all of it. What a file holds is
+         decided HERE and not by the client that passed it: a client that decided
+         what counts as a master list would be deciding what this agent may be
+         asked to believe, and it is not the trust boundary.
 
          An import is a one-shot INPUT, not a source: the file a person picks may
          live in ~/Downloads and be gone tomorrow, so nothing about it is
          remembered as a place to fetch from. The accepted anchors REPLACE the
          cached set, because a master list is a complete statement of what its
          publisher vouches for and merging would keep anchors it has withdrawn.
+         The same holds of the union for a collection.
+
+         PARTIAL OUTCOMES ARE ORDINARY, not an edge. Countries publish on their
+         own schedules, so a collection in which two lists are stale and
+         twenty-six are current is what a person downloads on an ordinary
+         Tuesday. An import takes what verifies: nothing is installed that was
+         not verified and admitted, and one publisher's stale list does not deny
+         a person the others. An import that admits NO list at all is a refusal
+         like any other and leaves the stored anchors untouched — and a refusal
+         over a collection names the reason the FIRST refused list gave, because
+         ranking one publisher's failure above another's is not something this
+         agent knows how to do.
 
          masterList is a PLAIN descriptor, not a sealed memfd. Master-list data
          is public: sealing is the agent's vocabulary for secrets, and using it
@@ -120,12 +189,15 @@
          would stall every other client.
 
          TRUST. There is nothing to check a first list against — a master list is
-         what supplies anchors — so the first accepted list establishes the
-         publisher and its fingerprint is reported for a person to recognise.
-         Later lists must be that same publisher, or one that descends from an
-         authority the PREVIOUS list carried. Anything else is refused and the
-         stored anchors are left untouched: a lawful key rotation and an attack
-         are indistinguishable from here, so silently accepting one accepts both.
+         what supplies anchors — so the first accepted list establishes its
+         publisher, and where there is exactly one its fingerprint is reported
+         for a person to recognise. A later list must come from a publisher
+         already on record, or from one that descends from an authority a
+         PREVIOUS import carried. Anything else is refused: a lawful key rotation
+         and an attack are indistinguishable from here, so silently accepting one
+         accepts both. A list in a file may never vouch for a signer in the same
+         file, whichever order they arrive in — that would be the circular check
+         this design exists to avoid, one level up.
 
          A rotating publisher's certificate is taken from the SIGNER the incoming
          list's own verification resolved, so a client hands over the file and
@@ -133,17 +205,21 @@
          is unauthenticated: anybody may drop anybody's certificate in there
          without touching a signature.
 
-         REPLAY. Once a list that carries a signingTime has been accepted, a
-         later list must be signed STRICTLY later, and a list carrying no
-         signingTime at all is refused. The asymmetry is deliberate. signingTime
-         is optional in CMS, so refusing every undated list would turn the
-         feature off for a publisher that does not date its lists — but letting
-         an undated list replace a dated one would let an attacker STRIP a
-         protection this installation already had, and roll the anchors back
-         afterwards at will. Nothing is ever refused for a property the ecosystem
-         may not provide, and nothing already held is ever given up. Until a
-         dated list has been accepted the refusal cannot operate at all, and
-         CscaAnchorState says so through replayRefusalActive.
+         REPLAY, and it is measured PER PUBLISHER. Once a list that carries a
+         signingTime has been accepted from a publisher, a later list from that
+         same publisher must be signed STRICTLY later, and one carrying no
+         signingTime at all is refused. Measuring a list against another
+         country's date would refuse whichever country publishes least often,
+         which is not a rollback and not a threat. The asymmetry over undated
+         lists is deliberate. signingTime is optional in CMS, so refusing every
+         undated list would turn the feature off for a publisher that does not
+         date its lists — but letting an undated list replace a dated one would
+         let an attacker STRIP a protection this installation already had, and
+         roll the anchors back afterwards at will. Nothing is ever refused for a
+         property the ecosystem may not provide, and nothing already held is ever
+         given up. Until a dated list has been accepted the refusal cannot
+         operate at all, and CscaAnchorState says so through
+         replayRefusalActive — for the whole, and as the weakest of its parts.
 
          The reply is the same dict as the CscaAnchorState property above.
 
@@ -158,12 +234,17 @@
            org.librescrs.Agent.Error.MalformedMasterList        content unreadable
            org.librescrs.Agent.Error.BadMasterListSignature     signature does not hold
            org.librescrs.Agent.Error.MasterListSignerChanged    a publisher the agent does
-                                                                not follow. The message
-                                                                carries BOTH fingerprints,
-                                                                because deciding between a
-                                                                rotation and an attack is a
-                                                                person's job, not the
-                                                                agent's
+                                                                not follow. For a single
+                                                                list the message carries
+                                                                BOTH fingerprints, because
+                                                                deciding between a rotation
+                                                                and an attack is a person's
+                                                                job, not the agent's; for a
+                                                                collection it names
+                                                                neither, since one
+                                                                fingerprint out of dozens
+                                                                would say something the
+                                                                reason does not
            org.librescrs.Agent.Error.MasterListReplayed         authentic, and not newer
                                                                 than the list already
                                                                 installed — older, dated

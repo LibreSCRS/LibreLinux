@@ -109,6 +109,35 @@ ReadInput readInput(int fd, std::size_t cap)
     }
 }
 
+// Whether the accepting import established EVERY publisher it took in — matched
+// each against a record already held, or built a path from it to an anchor
+// already held. False when there was nothing on record to check against, and
+// false when one publisher among several arrived unchecked.
+//
+// The weakest of the parts, on purpose. "Most of them were established" is not
+// a statement a person can act on: the unestablished one is precisely the
+// publisher whose anchors got in on a first sighting, and it is the one they
+// would want to be told about.
+//
+// Written over the whole set rather than over the first record, and not because
+// a mixed set is easy to produce today — an import into an empty store
+// establishes nobody and an import into a populated one admits only publishers
+// it could check, so the two outcomes are uniform. This says what is true of
+// any set the import may hand it, which is a claim that survives that rule
+// changing; reading one record and calling it the aggregate would not.
+bool everyPublisherEstablished(const Trust::AnchorState& state)
+{
+    if (state.signers.empty()) {
+        return false;
+    }
+    for (const Trust::AcceptedSigner& signer : state.signers) {
+        if (!signer.identityEstablished) {
+            return false;
+        }
+    }
+    return true;
+}
+
 // What an accepted import leaves in the agent's own configuration.
 //
 // The import reply answers the client that performed the import. A client that
@@ -117,16 +146,49 @@ ReadInput readInput(int fd, std::size_t cap)
 // LastTsaUrl has, and read-only for a stronger reason: a client able to write
 // it would be claiming what passports are checked against without installing a
 // single anchor.
+//
+// AN IMPORT NOW TAKES IN SEVERAL PUBLISHERS. What the directory serves is a
+// collection: dozens of master lists, each published and signed by a different
+// country, and an import that admits them holds one record per publisher. The
+// three members below that were written for ONE publisher therefore have to
+// describe many, and each is resolved the same way — report what is true of the
+// WHOLE, and where the whole has no answer, say nothing rather than pick a
+// winner out of the parts.
+//
+//   * `signer` and `signedAt` are filled only when the agent follows EXACTLY
+//     ONE publisher, which is every single published list and was the only case
+//     that ever existed before. With several there is no such thing as "the
+//     publisher" or "the date", and naming one of them would be a SPECIFIC
+//     false statement rather than a vague one. The refusal path already reports
+//     its fingerprints under exactly this rule.
+//   * `signerPinned` is the AGGREGATE, and deliberately the weakest of its
+//     parts: true only when EVERY accepted publisher was established. For one
+//     publisher that is the identical statement it always made. For several it
+//     is the only reading a surface may render "authenticity verified" over.
+//     The discipline replayRefusalActive is already defined with, for the same
+//     reason.
+//
+// WHAT IS NOT REPORTED, and is absent rather than approximated: HOW MANY
+// publishers were taken in, and how many of those were established. Both are
+// honest things to say and neither can be said from here — this record is the
+// only thing that survives a restart, it has no member able to carry a count,
+// and a key present in the import reply but gone from the property a moment
+// later would be worse than the silence. Those numbers go to the log instead,
+// where they cost no interface.
 Config::CscaAnchorState toRecordedState(const Trust::AnchorState& state)
 {
+    // Exactly one publisher: everything the single-publisher vocabulary was
+    // written to say is true of it, so all of it is said.
+    const Trust::AcceptedSigner* only = state.signers.size() == 1 ? &state.signers.front() : nullptr;
+
     Config::CscaAnchorState out;
     out.anchors = state.anchorCount;
     out.issuers = state.issuerCount;
     out.replayRefusalActive = state.replayRefusalActive();
-    out.signer = Trust::toHex(state.signer);
-    out.signerPinned = state.signerPinned;
+    out.signer = only != nullptr ? Trust::toHex(only->fingerprint) : std::string{};
+    out.signerPinned = everyPublisherEstablished(state);
     out.acceptedAt = state.acceptedAt;
-    out.signedAt = state.signedAt;
+    out.signedAt = only != nullptr ? only->signedAt : std::nullopt;
     out.origin = state.origin;
     return out;
 }
@@ -142,7 +204,20 @@ std::map<std::string, sdbus::Variant> anchorStateDict(const std::optional<Config
     }
     out["anchors"] = sdbus::Variant{state->anchors};
     out["issuers"] = sdbus::Variant{state->issuers};
-    out["signer"] = sdbus::Variant{state->signer};
+    if (!state->signer.empty()) {
+        // ABSENT when the import took in several publishers, because there is
+        // then no publisher for this to name. A client written before
+        // collections existed reads a missing key and shows nothing, which is
+        // what is true. That same client handed one fingerprint out of
+        // twenty-eight would show it under a label its dialog renders as "the
+        // publisher" — and on a trust surface a wrong answer and no answer are
+        // not failures of the same size.
+        out["signer"] = sdbus::Variant{state->signer};
+    }
+    // ALWAYS present, and now an aggregate: true only when EVERY publisher the
+    // import took in was established. Unchanged in meaning for the single
+    // publisher it used to describe, and for several the only reading that
+    // cannot overstate — see toRecordedState.
     out["signerPinned"] = sdbus::Variant{state->signerPinned};
     if (state->acceptedAt) {
         out["acceptedAt"] = sdbus::Variant{*state->acceptedAt};
@@ -153,7 +228,11 @@ std::map<std::string, sdbus::Variant> anchorStateDict(const std::optional<Config
     out["replayRefusalActive"] = sdbus::Variant{state->replayRefusalActive};
     if (state->signedAt) {
         // Omitted rather than zeroed when the list carried no date: a sentinel
-        // would be indistinguishable from a list signed at the epoch.
+        // would be indistinguishable from a list signed at the epoch. Omitted
+        // for a second reason since collections — several publishers sign at
+        // several times and no one of them is the collection's — and the two
+        // read alike to a client on purpose, because absence has always meant
+        // "there is no one date to show here".
         out["signedAt"] = sdbus::Variant{*state->signedAt};
     }
     out["origin"] = sdbus::Variant{state->origin};
@@ -164,17 +243,19 @@ std::map<std::string, sdbus::Variant> anchorStateDict(const std::optional<Config
 //
 // The report follows the CONFIGURATION file. What it describes lives in the
 // anchor cache: the anchor files themselves, and beside them the cache's own
-// state file, which carries the signer this agent follows. A person may edit
-// or delete either, and the configuration file survives it — so the report
+// state file, which carries the publishers this agent follows. A person may
+// edit or delete either, and the configuration file survives it — so the report
 // goes on describing an agent that is no longer there. Both halves overstate,
 // which on a trust surface is the direction that matters:
 //
 //   * the ANCHORS are gone, and the counts name anchors that are not there;
-//   * the cache's STATE is gone, and `signer` / `signerPinned` name a
-//     publisher the agent no longer follows. With nothing left to read the pin
-//     from, the next list is a trust-on-first-import, so a surface saying
-//     "pinned to X" is claiming a NARROWER trust than the one actually in
-//     force. The counts beside it may still be perfectly true, which is what
+//   * the cache's STATE is gone, and `signer` / `signerPinned` describe
+//     publishers the agent no longer follows. With nothing left to read the
+//     records from, the next list is a trust-on-first-import, so a surface
+//     saying "pinned to X" is claiming a NARROWER trust than the one actually
+//     in force. After a collection there is no `signer` to be wrong and
+//     `signerPinned` overstates alone, which makes it thinner and no less
+//     false. The counts beside it may still be perfectly true, which is what
 //     makes this half the easy one to walk past.
 //
 // The harm is bounded and worth stating exactly: every verdict reads the cache
@@ -655,10 +736,22 @@ std::map<std::string, sdbus::Variant> ManagerObject::ImportCscaMasterList(const 
     }
 
     // Deliberately says what was DONE, not that anything was proved: on a first
-    // import signerPinned is false, and a client that renders "authenticity
-    // verified" over it is claiming more than the agent measured.
-    log::infof("country signing anchors imported: anchors={} issuers={} pinned={}", imported->anchorCount,
-               imported->issuerCount, imported->signerPinned);
+    // import nothing is established, and a client that renders "authenticity
+    // verified" over that is claiming more than the agent measured.
+    //
+    // The counts the WIRE cannot carry live here. How many publishers the file
+    // was taken in from, how many of those were established, and how many of
+    // its lists contributed nothing are the numbers that explain a smaller
+    // anchor count than a person expected — the recorded state has no member to
+    // put them in, and a log line costs no interface.
+    std::size_t established = 0;
+    for (const Trust::AcceptedSigner& signer : imported->signers) {
+        established += signer.identityEstablished ? 1U : 0U;
+    }
+    log::infof("country signing anchors imported: anchors={} issuers={} publishers={} established={} lists={} "
+               "refused={}",
+               imported->anchorCount, imported->issuerCount, imported->signers.size(), established,
+               imported->listsOffered, imported->refusedLists.size());
 
     // Remember it. The reply below tells THIS client what it just installed;
     // the record is what tells the next client to connect, which has no reply
