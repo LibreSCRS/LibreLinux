@@ -15,7 +15,7 @@
 #include <LibreSCRS/Agent/pkcs11/Pkcs11Broker.h>
 #include <LibreSCRS/Agent/Reply.h>
 #include "SealedMemfdCreator.h" // shared sealed-memfd creator (matches the producer)
-#include "trust/CscaAnchorImport.h"
+#include <LibreSCRS/Agent/trust/CscaAnchorImport.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #include <array>

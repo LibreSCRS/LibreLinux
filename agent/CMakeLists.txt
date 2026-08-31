@@ -112,8 +112,6 @@ add_library(LibreLinuxAgentCore STATIC
     src/operations/ActivateSigningKeyOperation.cpp
     src/dbus/ManagerObject.h
     src/dbus/ManagerObject.cpp
-    src/trust/CscaAnchorImport.h
-    src/trust/CscaAnchorImport.cpp
     src/dbus/Pkcs11OutcomeNames.h
     src/dbus/Pkcs11OutcomeNames.cpp
     src/dbus/CredentialOutcomeNames.h
@@ -135,11 +133,9 @@ target_link_libraries(LibreLinuxAgentCore
         SDBusCpp::sdbus-c++
         LibreAgent::Core # imported neutral core (re-exports SmartCard/Plugin PUBLIC)
         librelinux-common # shared sealed-memfd creator + pinned /proc readers (header-only)
-        # The published country-signing master-list reader, and the certificate
-        # parser the anchor count is read with. Both are LibreMiddleware public
-        # API: the agent makes no cryptographic judgement of its own and links
-        # no crypto library directly — a locally reinvented fingerprint or path
-        # build is the failure this consumes LM precisely to avoid.
+        # LibreSCRS::Trust: main.cpp still uses TrustStoreService directly.
+        # LibreSCRS::Certificate: unused at this level now that the master-list
+        # reader that needed it moved to the shared agent core; kept as-is.
         LibreSCRS::Trust
         LibreSCRS::Certificate
     PRIVATE

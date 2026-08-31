@@ -21,7 +21,7 @@
 //     raises, so the error NAME alone says which check ran first.
 
 #include "SyntheticMasterList.h"
-#include "trust/CscaAnchorImport.h"
+#include <LibreSCRS/Agent/trust/CscaAnchorImport.h>
 
 #include <LibreSCRS/Agent/backend/Authorizer.h>
 #include <LibreSCRS/Agent/config/ConfigStore.h>
@@ -39,6 +39,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <map>
 #include <string>
 #include <thread>
@@ -801,4 +802,39 @@ TEST(CscaImportDbus, DiscardingAStaleReportLeavesTheSignerPinStanding)
     std::map<std::string, sdbus::Variant> summary;
     ASSERT_EQ(h.importFd(secondFile.fd(), &summary), "");
     EXPECT_TRUE(summary.at("signerPinned").get<bool>()) << "the pin was discarded along with the report";
+}
+
+// --- who is told where the anchors are -------------------------------------
+//
+// This closes a gap that a real passport on a dogfood machine found: an
+// import wrote anchors into the cache, and the plugin that judges a document
+// was never told the directory existed. That the published directory really
+// is the one an import wrote into is proved on the shared-library side, where
+// AnchorCache and publishAnchorDirectory now live. What only this repository
+// can prove is that ITS OWN startup path makes the call, with the CONFIGURED
+// directory — which is what the guard below reads off this file's neighbour,
+// AgentService.cpp.
+
+// The composition root really makes the call, and makes it with the CONFIGURED
+// cache directory rather than one rebuilt from the cache root. Read off the
+// shipped source, the way this repository's other composition-root guards are:
+// AgentService::registerOnBus needs a session bus and a PC/SC monitor that CI
+// has not got, so there is no way to drive it here — but a wiring line that
+// silently goes missing is the whole defect this closes, and the guard is a
+// good deal better than nothing watching it at all.
+//
+// The configured value matters and is asserted for itself: CscaCacheDir is a
+// settable key, so an installation that has set it imports into one directory,
+// and a path rebuilt from the cache root would have the plugins read another.
+TEST(CscaAnchorPublication, TheAgentPublishesTheConfiguredDirectoryAtStartup)
+{
+    std::ifstream in(LIBRELINUX_AGENTSERVICE_CPP, std::ios::binary);
+    ASSERT_TRUE(in) << "AgentService source path not wired";
+    const std::string src{std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
+    ASSERT_FALSE(src.empty());
+
+    EXPECT_NE(src.find("publishAnchorDirectory("), std::string::npos)
+        << "nothing hands the card plugins the anchors this agent holds";
+    EXPECT_NE(src.find("configStore().cscaCacheDir()"), std::string::npos)
+        << "the published directory must come from the CONFIGURED cache dir, not one rebuilt from the cache root";
 }

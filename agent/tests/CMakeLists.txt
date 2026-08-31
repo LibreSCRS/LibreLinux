@@ -589,8 +589,8 @@ set_tests_properties(CredentialsDbusTest PROPERTIES TIMEOUT 120)
 #
 # The synthetic master-list fixture mints its certificates with the SYSTEM
 # OpenSSL. That dependency is the test's alone: the agent consumes the published
-# LibreMiddleware trust API and links no crypto library of its own, which is the
-# property CscaAnchorImport.cpp exists to preserve.
+# LibreMiddleware trust API and links no crypto library of its own — a property
+# of the anchor import that now lives in the shared agent library.
 find_package(OpenSSL REQUIRED COMPONENTS Crypto)
 add_library(SyntheticMasterList STATIC SyntheticMasterList.cpp)
 target_include_directories(SyntheticMasterList PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
@@ -598,28 +598,16 @@ target_link_libraries(SyntheticMasterList PUBLIC OpenSSL::Crypto)
 target_compile_features(SyntheticMasterList PUBLIC cxx_std_23)
 set_target_properties(SyntheticMasterList PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
-# Trust bootstrap away from D-Bus: first import, pin, rotation, and the
-# refusals — including the link certificate that a self-signed-only filter
-# would drop.
-add_executable(CscaAnchorImportTest CscaAnchorImportTest.cpp)
-# The composition-root guard at the foot of the file reads the shipped
-# AgentService source: registerOnBus needs a session bus and a PC/SC monitor,
-# so the one line that hands the plugins this directory cannot be driven here.
-target_compile_definitions(CscaAnchorImportTest PRIVATE
-    LIBRELINUX_AGENTSERVICE_CPP="${CMAKE_CURRENT_SOURCE_DIR}/../src/AgentService.cpp")
-target_link_libraries(CscaAnchorImportTest PRIVATE
-    LibreLinuxAgentCore
-    SyntheticMasterList
-    GTest::gtest
-    GTest::gtest_main)
-add_test(NAME CscaAnchorImportTest COMMAND CscaAnchorImportTest)
-set_tests_properties(CscaAnchorImportTest PROPERTIES TIMEOUT 120)
-
 # Config1.ImportCscaMasterList over a private session bus: the authorise ->
 # rate-limit -> read ORDER (proved by the descriptor's own file offset, not by
 # the error name, which an implementation with the checks reversed also
 # returns), the descriptor discipline, and the accepted path.
 add_executable(CscaImportDbusTest CscaImportDbusTest.cpp)
+# The composition-root guard at the foot of the file reads the shipped
+# AgentService source: registerOnBus needs a session bus and a PC/SC monitor,
+# so the one line that hands the plugins this directory cannot be driven here.
+target_compile_definitions(CscaImportDbusTest PRIVATE
+    LIBRELINUX_AGENTSERVICE_CPP="${CMAKE_CURRENT_SOURCE_DIR}/../src/AgentService.cpp")
 target_link_libraries(CscaImportDbusTest PRIVATE
     LibreLinuxAgentCore
     SyntheticMasterList

@@ -10,8 +10,8 @@
 #include <LibreSCRS/Agent/backend/Logging.h>
 #include "PolkitAuthorizer.h"
 #include <LibreSCRS/Agent/pkcs11/Pkcs11Broker.h>
+#include <LibreSCRS/Agent/trust/CscaAnchorImport.h> // publishAnchorDirectory (where the anchors a person imported live)
 #include <LibreSCRS/Plugin/CardPluginService.h>
-#include "trust/CscaAnchorImport.h" // publishAnchorDirectory (where the anchors a person imported live)
 #include <sdbus-c++/IConnection.h>
 #include <sdbus-c++/sdbus-c++.h>
 #include <systemd/sd-daemon.h>
