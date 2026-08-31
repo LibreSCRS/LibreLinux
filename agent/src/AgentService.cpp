@@ -10,6 +10,8 @@
 #include <LibreSCRS/Agent/backend/Logging.h>
 #include "PolkitAuthorizer.h"
 #include <LibreSCRS/Agent/pkcs11/Pkcs11Broker.h>
+#include <LibreSCRS/Plugin/CardPluginService.h>
+#include "trust/CscaAnchorImport.h" // publishAnchorDirectory (where the anchors a person imported live)
 #include <sdbus-c++/IConnection.h>
 #include <sdbus-c++/sdbus-c++.h>
 #include <systemd/sd-daemon.h>
@@ -299,6 +301,24 @@ bool AgentService::registerOnBus()
         // before any operation can run: two dialogs can stand at once, so each
         // has to name the reader it belongs to.
         m_core->promptSerializer().setReaderIdentityResolver(makeResolveReaderIdentity(*m_exporter));
+
+        // Tell the card plugins where this agent keeps the country signing
+        // certificates a person has imported. HERE and not in main(), where the
+        // registry is built: the directory is named by the configuration, and
+        // the configuration only exists once the core above has been emplaced.
+        // A path rebuilt from the cache root at construction time would be
+        // right for a default installation and quietly wrong for one that has
+        // set CscaCacheDir — anchors imported into one directory, documents
+        // judged against another, and nothing on screen to say so.
+        //
+        // Published once, before the tree is exported, so no document can be
+        // read against an unconfigured plugin. Only the directory travels; a
+        // master list imported later is picked up by the next read.
+        if (m_pluginService != nullptr) {
+            const auto anchorDir =
+                Trust::publishAnchorDirectory(*m_pluginService, m_core->configStore().cscaCacheDir());
+            log::infof("country-signing anchors for card plugins: {}", anchorDir.string());
+        }
 
         // Wire the core registry's presence observers to the transport (the natural
         // presence sink). Done now that both exist; at teardown the core (holding

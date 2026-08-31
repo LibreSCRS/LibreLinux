@@ -42,6 +42,11 @@
 #include <string>
 #include <vector>
 
+// Forward decl — only a reference appears below, in publishAnchorDirectory.
+namespace LibreSCRS::Plugin {
+class CardPluginService;
+}
+
 namespace LibreSCRS::Agent::Trust {
 
 // The largest master list the agent will ingest. A published ICAO list runs to a
@@ -149,6 +154,18 @@ class AnchorCache
 public:
     explicit AnchorCache(std::filesystem::path dir);
 
+    // Where the anchor FILES are, under the cache directory this was built
+    // with — the directory something outside this process has to be handed if
+    // it is to judge a document against what was imported.
+    //
+    // A method rather than a name spelled again at each call site, and the
+    // reason is a defect that reached a person's desk: the import wrote five
+    // certificates here, a card plugin was never told the directory existed,
+    // and the badge on a real passport read "no country signing certificates
+    // have been imported" while five of them sat on disk. Two halves that each
+    // knew the layout, and no seam where they had to agree.
+    [[nodiscard]] std::filesystem::path anchorsDirectory() const;
+
     // Absent or unreadable state reads as "believes nothing", never as an error:
     // a first run and a wiped cache are the same situation.
     [[nodiscard]] AnchorState state() const;
@@ -189,5 +206,29 @@ private:
 
 // Lowercase hex, for showing a fingerprint to a person or putting one on the wire.
 [[nodiscard]] std::string toHex(const SignerFingerprint& fingerprint);
+
+// Tell every card plugin @p plugins loaded where this agent keeps the country
+// signing certificates it has imported, and answer with the directory that was
+// published.
+//
+// WHY THE AGENT HAS TO SAY IT. A plugin verifying a travel document's passive
+// authentication needs country signing certificates, and it is not allowed to
+// go looking for them: the directory used to be named by an environment
+// variable, which anything running as the person at the keyboard can set, so a
+// forged document could be reported as chaining to a national authority on the
+// say-so of whoever set it. That read was removed and nothing replaced it —
+// which is why anchors a person really had imported were reported as absent.
+// The path has to arrive from the process that holds them, which is this one.
+//
+// @param cacheDir the agent's configured country-signing cache directory,
+//        i.e. ConfigStore::cscaCacheDir(). The SAME value the import writes
+//        under: pass the configured one and never a path rebuilt from the
+//        cache root, or an installation that has set CscaCacheDir imports into
+//        one directory and reads from another with nothing to say so.
+// @return the directory published, which is @ref AnchorCache::anchorsDirectory
+//         for @p cacheDir. Returned so a caller can log it and a test can
+//         compare it against where an import really landed.
+std::filesystem::path publishAnchorDirectory(LibreSCRS::Plugin::CardPluginService& plugins,
+                                             const std::filesystem::path& cacheDir);
 
 } // namespace LibreSCRS::Agent::Trust

@@ -3,6 +3,7 @@
 #include "trust/CscaAnchorImport.h"
 
 #include <LibreSCRS/Certificate/ParsedCertificate.h>
+#include <LibreSCRS/Plugin/CardPluginService.h>
 #include <LibreSCRS/Trust/CscaMasterList.h>
 
 #include <algorithm>
@@ -195,6 +196,11 @@ AnchorState AnchorCache::state() const
     out.signer = *signer;
     out.present = true;
     return out;
+}
+
+fs::path AnchorCache::anchorsDirectory() const
+{
+    return m_dir / kAnchorsDirName;
 }
 
 std::vector<std::vector<std::uint8_t>> AnchorCache::anchors() const
@@ -409,6 +415,23 @@ std::expected<AnchorState, Refusal> importMasterList(const std::vector<std::uint
 
     return std::unexpected(
         Refusal{ImportRefusal::SignerChanged, unpinned->signerSpkiSha256, prior.signer, std::nullopt, std::nullopt});
+}
+
+fs::path publishAnchorDirectory(LibreSCRS::Plugin::CardPluginService& plugins, const fs::path& cacheDir)
+{
+    // Built through AnchorCache rather than by joining "anchors" here: the
+    // cache owns its own layout, and a second spelling of it is exactly the
+    // kind of near-agreement that reads as working until the day it does not.
+    const AnchorCache cache{cacheDir};
+    const fs::path dir = cache.anchorsDirectory();
+
+    // The DIRECTORY, not its contents, and it is published whether or not it
+    // exists yet. A person who imports a master list after the agent started
+    // has to be believed by the next document read without a restart, and an
+    // absent directory is answered "no anchors" by the reader on the other
+    // side — which is the truth until the import lands.
+    plugins.setCscaAnchorDirectory(dir);
+    return dir;
 }
 
 } // namespace LibreSCRS::Agent::Trust

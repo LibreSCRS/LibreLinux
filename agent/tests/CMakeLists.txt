@@ -602,6 +602,11 @@ set_target_properties(SyntheticMasterList PROPERTIES POSITION_INDEPENDENT_CODE O
 # refusals — including the link certificate that a self-signed-only filter
 # would drop.
 add_executable(CscaAnchorImportTest CscaAnchorImportTest.cpp)
+# The composition-root guard at the foot of the file reads the shipped
+# AgentService source: registerOnBus needs a session bus and a PC/SC monitor,
+# so the one line that hands the plugins this directory cannot be driven here.
+target_compile_definitions(CscaAnchorImportTest PRIVATE
+    LIBRELINUX_AGENTSERVICE_CPP="${CMAKE_CURRENT_SOURCE_DIR}/../src/AgentService.cpp")
 target_link_libraries(CscaAnchorImportTest PRIVATE
     LibreLinuxAgentCore
     SyntheticMasterList

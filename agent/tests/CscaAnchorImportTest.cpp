@@ -22,12 +22,16 @@
 #include "SyntheticMasterList.h"
 #include "trust/CscaAnchorImport.h"
 
+#include <LibreSCRS/Plugin/CardPluginService.h>
+
 #include <gtest/gtest.h>
 
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <string>
 #include <vector>
 
@@ -574,4 +578,79 @@ TEST(CscaAnchorImport, ARotationCannotCarryAnOlderListIn)
     ASSERT_FALSE(refused.has_value()) << "a key rotation was a way around the replay rule";
     EXPECT_EQ(refused.error().reason, Trust::ImportRefusal::Replayed);
     EXPECT_EQ(cache.state().signer, first.signerSpkiSha256) << "a refused import must not move the pin";
+}
+
+// --- who is told where the anchors are -------------------------------------
+//
+// The two below close a gap that a real passport on a dogfood machine found.
+// A person had imported a master list; this file's subject accepted it and
+// wrote five certificates into the cache; the agent's own state property said
+// five anchors, one issuer. The badge on the document still read "no country
+// signing certificates have been imported", because the card plugin that
+// judges a document was never told the directory existed. Every test in three
+// repositories was green: each half was tested against itself, and nothing
+// tested the seam between them — which did not exist.
+
+// The directory the agent publishes to its plugins is the one an import really
+// wrote into. Asserted against the FILES, not against a second spelling of the
+// layout: two constants that agree is what this already had.
+TEST(CscaAnchorPublication, ThePublishedDirectoryIsWhereAnImportReallyWrote)
+{
+    const CacheDir dir("publish-agreement");
+    Trust::AnchorCache cache(dir.path());
+
+    const auto anchorA = makeCsca("CSCA A", "AA");
+    const auto anchorB = makeCsca("CSCA B", "BB");
+    const auto list = signMasterList({anchorA, anchorB}, makeIndependentSigner());
+    const auto accepted = Trust::importMasterList(list.der, cache, kNow);
+    ASSERT_TRUE(accepted.has_value());
+    ASSERT_EQ(accepted->anchorCount, 2u);
+
+    // No plugin directory here, so the registry loads nothing — this is about
+    // the VALUE that gets published. Which plugin receives it, and what it does
+    // with it, is settled where the plugin lives.
+    LibreSCRS::Plugin::CardPluginService plugins{fs::path{dir.path() / "no-plugins-here"}};
+    const fs::path published = Trust::publishAnchorDirectory(plugins, dir.path());
+
+    EXPECT_EQ(published, cache.anchorsDirectory());
+    ASSERT_TRUE(fs::is_directory(published)) << "the published path is not a directory that exists: " << published;
+
+    std::vector<fs::path> written;
+    for (const auto& entry : fs::directory_iterator(published)) {
+        if (entry.is_regular_file()) {
+            written.push_back(entry.path());
+        }
+    }
+    EXPECT_EQ(written.size(), 2u) << "the import's certificates are not in the directory the agent publishes";
+
+    // And the bytes really are the anchors, so a directory of two unrelated
+    // files could not pass.
+    const auto held = cache.anchors();
+    ASSERT_EQ(held.size(), 2u);
+    EXPECT_TRUE(holds(held, anchorA));
+    EXPECT_TRUE(holds(held, anchorB));
+}
+
+// The composition root really makes the call, and makes it with the CONFIGURED
+// cache directory rather than one rebuilt from the cache root. Read off the
+// shipped source, the way this repository's other composition-root guards are:
+// AgentService::registerOnBus needs a session bus and a PC/SC monitor that CI
+// has not got, so there is no way to drive it here — but a wiring line that
+// silently goes missing is the whole defect this closes, and the guard is a
+// good deal better than nothing watching it at all.
+//
+// The configured value matters and is asserted for itself: CscaCacheDir is a
+// settable key, so an installation that has set it imports into one directory,
+// and a path rebuilt from the cache root would have the plugins read another.
+TEST(CscaAnchorPublication, TheAgentPublishesTheConfiguredDirectoryAtStartup)
+{
+    std::ifstream in(LIBRELINUX_AGENTSERVICE_CPP, std::ios::binary);
+    ASSERT_TRUE(in) << "AgentService source path not wired";
+    const std::string src{std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
+    ASSERT_FALSE(src.empty());
+
+    EXPECT_NE(src.find("publishAnchorDirectory("), std::string::npos)
+        << "nothing hands the card plugins the anchors this agent holds";
+    EXPECT_NE(src.find("configStore().cscaCacheDir()"), std::string::npos)
+        << "the published directory must come from the CONFIGURED cache dir, not one rebuilt from the cache root";
 }
