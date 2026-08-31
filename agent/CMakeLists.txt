@@ -134,10 +134,12 @@ target_link_libraries(LibreLinuxAgentCore
         LibreAgent::Core # imported neutral core (re-exports SmartCard/Plugin PUBLIC)
         librelinux-common # shared sealed-memfd creator + pinned /proc readers (header-only)
         # LibreSCRS::Trust: main.cpp still uses TrustStoreService directly.
-        # LibreSCRS::Certificate: unused at this level now that the master-list
-        # reader that needed it moved to the shared agent core; kept as-is.
+        # LibreSCRS::Certificate was dropped here once the master-list reader
+        # that needed it moved to the shared agent core: nothing under agent/
+        # includes a LibreSCRS/Certificate header any more, and the link was
+        # kept only because removing it had not been measured. It has been now
+        # -- the target builds and links without it.
         LibreSCRS::Trust
-        LibreSCRS::Certificate
     PRIVATE
         PkgConfig::Systemd) # sd_notify / sd-event in EventLoopPoster + AgentService
 set_target_properties(LibreLinuxAgentCore PROPERTIES POSITION_INDEPENDENT_CODE ON)
