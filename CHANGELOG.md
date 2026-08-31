@@ -55,6 +55,26 @@ and its secure PIN/CAN entry prompter, plus a client PKCS#11 module.
   SSRF guard backed by a best-effort egress allowlist. The agent
   rate-limits signing and card-use requests to cap abuse under the
   default-allow posture.
+- **Country-signing trust anchors.** The agent installs the CSCA
+  certificates an electronic passport's signature is checked against,
+  from signed ICAO master lists a person supplies. It takes both shapes
+  a reader can arrive with: one published master list, or the directory
+  export the ICAO Public Key Directory serves, which carries a
+  separately signed list for every publishing country — installed in one
+  action, with one authorization. The file is handed over as an open
+  descriptor, so nothing is read from a path the agent was merely told
+  about, and the request is gated through **polkit** on the
+  trust-elevation tier, like the trusted lists it sits beside.
+
+  Every list is verified against its own signer and the anchors kept are
+  the union of the ones that survived; a list that does not verify is
+  refused on its own without costing the rest. A publisher's later list
+  must be strictly newer than the one already taken from that publisher,
+  so a rollback to withdrawn anchors is refused. What the agent holds is
+  readable over the session bus — how many anchors, how many issuing
+  countries, and whether every publisher behind them was established —
+  and is deliberately silent where a collection has no single answer to
+  give.
 - **Client-facing error contract.** Every operation reports a stable,
   documented phase / status / error-code over D-Bus, with both an
   i18n message key and a fallback string, and a recovery path for
