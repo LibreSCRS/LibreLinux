@@ -239,79 +239,6 @@ std::map<std::string, sdbus::Variant> anchorStateDict(const std::optional<Config
     return out;
 }
 
-// Discard a recorded anchor report the anchor cache does not bear out.
-//
-// The report follows the CONFIGURATION file. What it describes lives in the
-// anchor cache: the anchor files themselves, and beside them the cache's own
-// state file, which carries the publishers this agent follows. A person may
-// edit or delete either, and the configuration file survives it — so the report
-// goes on describing an agent that is no longer there. Both halves overstate,
-// which on a trust surface is the direction that matters:
-//
-//   * the ANCHORS are gone, and the counts name anchors that are not there;
-//   * the cache's STATE is gone, and `signer` / `signerPinned` describe
-//     publishers the agent no longer follows. With nothing left to read the
-//     records from, the next list is a trust-on-first-import, so a surface
-//     saying "pinned to X" is claiming a NARROWER trust than the one actually
-//     in force. After a collection there is no `signer` to be wrong and
-//     `signerPinned` overstates alone, which makes it thinner and no less
-//     false. The counts beside it may still be perfectly true, which is what
-//     makes this half the easy one to walk past.
-//
-// The harm is bounded and worth stating exactly: every verdict reads the cache
-// itself and never this report, so no document can be accepted on the strength
-// of a stale one. What breaks is a settings screen that contradicts what
-// reading a passport says, which corrodes trust in the display without being a
-// false green.
-//
-// CLEARED, not marked stale, and the two considerations that pull against each
-// other turn out not to conflict here:
-//
-//   * the pin and the rotation rule read the CACHE — AnchorCache::state for the
-//     signer it follows, AnchorCache::anchors for the path build a lawful
-//     rotation is checked against. Neither has ever read this record. Clearing
-//     it therefore cannot let any publisher re-establish trust on a wiped
-//     cache, which would be a far worse bug than the display one being fixed.
-//     Nothing in the cache is touched from here — this reports, it does not
-//     tidy — so a pin that outlived its anchors goes on refusing a stranger's
-//     list, and anchors that outlived the pin stay on disk;
-//   * absence is the only honest spelling this vocabulary has. A zeroed report
-//     means "a list was accepted and it vouched for nothing" — a different
-//     claim, and a false one. The empty dict already means "nothing installed
-//     that can be reported from here", which after either wipe is true.
-//
-// Both questions are cheap and neither re-verifies anything: an anchor probe
-// that stops at the first file it finds, and the small state file the cache
-// parses anyway. Startup latency is a real cost.
-//
-// STARTUP ONLY, and it is a deliberate trade a reader should not have to
-// discover: a cache wiped while the agent is running reads stale until the
-// next start. Catching that would mean watching the directory for the life of
-// the process — a standing cost, and a race with every import, for a display
-// that restarting already corrects.
-void discardStaleAnchorReport(Config::ConfigStore& config)
-{
-    if (!config.cscaAnchorState()) {
-        return; // nothing recorded, so there is no claim to be wrong about
-    }
-    const Trust::AnchorCache cache{config.cscaCacheDir()};
-    const bool anchorsHeld = cache.holdsAnchor();
-    // Reads false for an absent, unreadable or corrupt state file alike — every
-    // one of which is the cache saying it establishes no signer, which is the
-    // thing the report would otherwise keep claiming.
-    const bool signerHeld = cache.state().present;
-    if (anchorsHeld && signerHeld) {
-        return;
-    }
-    log::warnf("country signing anchors: the recorded report is not borne out by the cache (anchors held={}, pinned "
-               "signer held={}); discarding the report — nothing in the cache is touched by this",
-               anchorsHeld, signerHeld);
-    // Reset rather than a record of zeros, for the reason above. fromDbus is
-    // false: the key is ReadOnly on the wire and this is the agent clearing its
-    // own state, the same standing recordCscaAnchorState writes it under.
-    (void)config.resetKey("CscaAnchorState", /*fromDbus=*/false);
-}
-
 [[noreturn]] void throwRefusal(const Trust::Refusal& refusal)
 {
     switch (refusal.reason) {
@@ -367,10 +294,17 @@ ManagerObject::ManagerObject(sdbus::IConnection& connection, sdbus::ObjectPath p
     // startup — the store has just been loaded from its file, and
     // AgentService::registerOnBus builds this object while the event loop is
     // only entered afterwards in run(), so no client can have read the stale
-    // report and none can read it after. It belongs to the object that SERVES
-    // the property rather than to the composition root: not serving a report
-    // known to be stale is this object's own obligation.
-    discardStaleAnchorReport(m_config);
+    // report and none can read it after. WHEN to do it belongs to the object
+    // that SERVES the property rather than to the composition root: not
+    // serving a report known to be stale is this object's own obligation.
+    //
+    // WHAT it does is the shared library's, and deliberately not ours: the
+    // decision reads the configuration store and the anchor cache and touches
+    // no bus, so a copy of it here would have been a second implementation of
+    // a trust-policy rule for every other host to diverge from. See
+    // Trust::discardStaleAnchorReport's own header for the rule and for why
+    // absence rather than a zeroed report is the honest spelling.
+    Trust::discardStaleAnchorReport(m_config);
     registerAdaptor();
 }
 
