@@ -109,35 +109,6 @@ ReadInput readInput(int fd, std::size_t cap)
     }
 }
 
-// Whether the accepting import established EVERY publisher it took in — matched
-// each against a record already held, or built a path from it to an anchor
-// already held. False when there was nothing on record to check against, and
-// false when one publisher among several arrived unchecked.
-//
-// The weakest of the parts, on purpose. "Most of them were established" is not
-// a statement a person can act on: the unestablished one is precisely the
-// publisher whose anchors got in on a first sighting, and it is the one they
-// would want to be told about.
-//
-// Written over the whole set rather than over the first record, and not because
-// a mixed set is easy to produce today — an import into an empty store
-// establishes nobody and an import into a populated one admits only publishers
-// it could check, so the two outcomes are uniform. This says what is true of
-// any set the import may hand it, which is a claim that survives that rule
-// changing; reading one record and calling it the aggregate would not.
-bool everyPublisherEstablished(const Trust::AnchorState& state)
-{
-    if (state.signers.empty()) {
-        return false;
-    }
-    for (const Trust::AcceptedSigner& signer : state.signers) {
-        if (!signer.identityEstablished) {
-            return false;
-        }
-    }
-    return true;
-}
-
 // What an accepted import leaves in the agent's own configuration.
 //
 // The import reply answers the client that performed the import. A client that
@@ -186,7 +157,7 @@ Config::CscaAnchorState toRecordedState(const Trust::AnchorState& state)
     out.issuers = state.issuerCount;
     out.replayRefusalActive = state.replayRefusalActive();
     out.signer = only != nullptr ? Trust::toHex(only->fingerprint) : std::string{};
-    out.signerPinned = everyPublisherEstablished(state);
+    out.signerPinned = state.everyPublisherEstablished();
     out.acceptedAt = state.acceptedAt;
     out.signedAt = only != nullptr ? only->signedAt : std::nullopt;
     out.origin = state.origin;
