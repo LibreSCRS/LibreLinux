@@ -262,6 +262,57 @@
       <arg name="state"      type="a{sv}" direction="out"/>
     </method>
 
+    <!-- Discard every country signing anchor this agent holds, and the publisher
+         it follows with them.
+
+         WHY THIS EXISTS. The rotation rule refuses a master list signed by a
+         publisher the agent does not follow unless it chains to an anchor a
+         previous import carried. That is right, and it has a consequence nobody
+         chose: an installation that imported one country's list and is then
+         offered the ICAO collection has every one of those lists refused,
+         because none of those publishers leads back to the anchors already
+         held. Without this the protection against rotation is also a trap, and
+         the only way out was knowing about a cache directory and deleting it by
+         hand — outside the authorisation that covers every other change here.
+
+         NOT Reset("CscaAnchorState"), which would have needed no new method.
+         The anchors and the pin live in the CACHE; Reset reaches only the
+         configuration, so it would clear the REPORT and leave the pin standing
+         — a surface saying nothing is installed while every later list is still
+         refused. That is this method's own reason for existing, reintroduced
+         with no trace of it anywhere.
+
+         Takes no argument: there is one anchor store and this empties it.
+         Naming a single publisher would describe an operation that does not
+         exist, since the rotation rule is applied against the whole set.
+
+         Answers what was DESTROYED rather than what remains — after the fact
+         there is nothing left on disk to read it from, and a surface that asked
+         a person to confirm this has to be able to tell them what happened.
+         anchorsForgotten is what the agent BELIEVED it held (its cache record),
+         not a count of files.
+
+         Rides org.librescrs.agent.configure.trust, like the import and for the
+         stronger version of the same reason.
+
+         NO per-caller flood bound, unlike ImportCscaMasterList: that bound
+         exists because the import reads a descriptor the caller hands over.
+         This takes no input and is idempotent.
+
+         Rejections:
+           org.librescrs.Agent.Error.NotAuthorized           caller not permitted
+           org.librescrs.Agent.Error.AnchorCacheNotWritable  the anchors could not
+                                                             be removed — said out
+                                                             loud, and NOTHING was
+                                                             changed, the recorded
+                                                             report included
+
+         Holding nothing is NOT a rejection: it answers zeros. -->
+    <method name="ForgetCscaAnchors">
+      <arg name="anchorsForgotten" type="t" direction="out"/>
+      <arg name="hadPinnedSigner"  type="b" direction="out"/>
+    </method>
+
     <signal name="Changed">
       <arg name="key" type="s"/>
     </signal>

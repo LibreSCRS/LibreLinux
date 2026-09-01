@@ -668,6 +668,47 @@ std::map<std::string, sdbus::Variant> ManagerObject::ImportCscaMasterList(const 
     return anchorStateDict(recorded);
 }
 
+std::tuple<uint64_t, bool> ManagerObject::ForgetCscaAnchors()
+{
+    // Authorise FIRST and touch nothing before that answer. The action is the
+    // trust one for the stronger version of the import's reason — this does not
+    // name where anchors may come from, it throws away the ones a passport is
+    // checked against.
+    //
+    // NO flood bound here, unlike the import, and the asymmetry is deliberate:
+    // that bound exists because the import READS a descriptor the caller hands
+    // over, and a refused caller must not be able to make the agent read to the
+    // cap. This takes no input, unlinks three paths, and is idempotent — a
+    // second call finds nothing. Spending the import's per-caller budget on it
+    // would also mean a client that forgot could then be refused an IMPORT for
+    // an unrelated reason. Shape is handleSetConfig's trust tier: authorise,
+    // then act. Agreed with the socket host so both answer alike.
+    const std::string sender = callerBusName();
+    if (!m_authorizer.authorize(kActionConfigureTrust, CallerToken{sender})) {
+        throw sdbus::Error{sdbus::Error::Name{kErrNotAuthorized}, "Not authorized to forget country signing anchors"};
+    }
+
+    // The library decides WHAT a forget is and in which order the two halves
+    // go; this host decides only that it may happen. Nothing about the order is
+    // spelled again here, deliberately: a second spelling of it is how the two
+    // hosts would come to disagree about a trust-policy rule.
+    const auto forgotten = Trust::forgetCscaAnchors(m_config);
+    if (!forgotten) {
+        // Said out loud rather than reported as a successful forget that kept
+        // everything. Nothing was changed — the recorded report included, since
+        // with the anchors still on disk it is the only thing describing them.
+        throw sdbus::Error{sdbus::Error::Name{kErrAnchorCacheNotWritable},
+                           "The country signing anchors could not be removed; nothing was changed"};
+    }
+
+    // No explicit emit: clearing the record fires Changed("CscaAnchorState")
+    // through the store, the same path the import's record takes, and a second
+    // signal for one action would make a client redraw twice.
+    log::infof("country signing anchors forgotten: anchors={} hadPinnedSigner={}", forgotten->anchors,
+               forgotten->hadPinnedSigner);
+    return {forgotten->anchors, forgotten->hadPinnedSigner};
+}
+
 void ManagerObject::emitConfigChanged(const std::string& key) noexcept
 {
     try {

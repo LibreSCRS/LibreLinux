@@ -97,6 +97,7 @@ private:
     // Authorise, then rate-limit, THEN read the descriptor: a refused caller
     // must not be able to make the agent read anything.
     std::map<std::string, sdbus::Variant> ImportCscaMasterList(const sdbus::UnixFd& masterList) override;
+    std::tuple<uint64_t, bool> ForgetCscaAnchors() override;
 
     // Pkcs11_1 — low-level PKCS#11 broker. The card-touching methods are sdbus-c++
     // ASYNC methods (org.freedesktop.DBus.Method.Async): each resolves the caller
