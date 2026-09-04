@@ -13,6 +13,12 @@ on:
   pull_request:
     branches: [main]
 
+  # Manual runs. Without this a job that is deliberately not part of every pull
+  # request -- a coverage pass that takes an hour, say -- cannot be started at
+  # all: a branch that is not a pull request gets no run, and a gate that cannot
+  # be triggered is green by construction.
+  workflow_dispatch:
+
 jobs:
   format-check:
     # Self-contained: the format gate needs neither LibreMiddleware nor the
@@ -33,9 +39,27 @@ jobs:
           sudo apt-get install -y clang-format-21
 
       - name: Check clang-format
+        # The roots live in ci/format-dirs.txt, which the scope check below
+        # reads too: a directory nobody formats cannot appear without one of
+        # these two steps saying so.
+        #
+        # -print0/-0 for paths with spaces, a parenthesised extension filter so
+        # the -o cannot swallow the directory list, and -r because without it an
+        # empty result makes clang-format read stdin and hang rather than fail.
+        # One wedged job in this project cost most of a working afternoon.
         run: |
-          find agent prompter common pkcs11-module e2e -name "*.cpp" -o -name "*.h" \
-            | xargs clang-format-21 --dry-run --Werror
+          mapfile -t dirs < <(grep -v '^#' ci/format-dirs.txt)
+          find "${dirs[@]}" \
+            \( -name '*.cpp' -o -name '*.h' -o -name '*.hpp' -o -name '*.mm' \) -print0 \
+            | xargs -0 -r clang-format-21 --dry-run --Werror
+
+      - name: Check every tracked source is reachable by the formatter
+        run: ./ci/scripts/check-format-scope.sh
+
+      - name: Check every skip carries a reason
+        # A test that skips without saying why is indistinguishable from a test
+        # that passed. Costs a second and builds nothing.
+        run: ./ci/scripts/check-skip-reasons.sh
 
   build-linux:
     # Arch container: LibreLinux's runtime deps (sdbus-c++ >= 2.0, libsystemd)
@@ -133,7 +157,24 @@ jobs:
 
       - name: Build (agent + prompter)
         working-directory: LibreLinux
-        run: cmake --build build -j4
+        run: |
+          # set -o pipefail is explicit: without it `| tee` reports tee's status
+          # and a failed build becomes a green step, after which the warning
+          # check measures a log that was never produced.
+          set -o pipefail
+          LC_ALL=C cmake --build build -j4 2>&1 | tee build.log
+
+      - name: Check the warning baseline
+        # Counted by the [-Wname] tag, never by the message text: diagnostics
+        # are localised. An unknown compiler is reported, not failed -- this
+        # runner and the machine that recorded the baseline do not agree on a
+        # diagnostic set, and neither is authoritative over the other.
+        working-directory: LibreLinux
+        run: ./ci/scripts/warning-gate.py --check build.log --build-dir build
+
+      - name: Check the discovered test set
+        working-directory: LibreLinux
+        run: ./ci/scripts/test-manifest-gate.sh --check build linux
 
       # --- e2e harness compiles ---------------------------------------------
       # The hardware-acceptance clients under e2e/ are deliberately outside the
@@ -173,7 +214,28 @@ jobs:
         working-directory: LibreLinux
         env:
           QT_QPA_PLATFORM: offscreen
-        run: dbus-run-session -- ctest --test-dir build --output-on-failure --no-tests=error
+        run: |
+          # The pipe is removed rather than patched. The runner's default shell
+          # for a `run:` step is `bash -e {0}` WITHOUT pipefail, so
+          # `ctest ... | tee ctest.log` reports the status of tee: a failed
+          # suite showed as a green step, and a check reading that log
+          # afterwards passed too. With no pipe there is no question about what
+          # the default is. Measured: the old shape exits 0 on a ctest that
+          # fails, this one exits 1.
+          set +e
+          dbus-run-session -- ctest --test-dir build --output-on-failure --no-tests=error > ctest.log 2>&1
+          rc=$?
+          set -e
+          cat ctest.log
+          echo "ctest rc=$rc"
+          exit "$rc"
+
+      - name: Check the skip ledger
+        # always(): the ledger's whole point is the run where something did not
+        # run, including runs where something also failed.
+        if: always()
+        working-directory: LibreLinux
+        run: ./ci/scripts/skip-ledger.sh --check ctest.log linux
 
       # --- PKCS#11 ownership -----------------------------------------------
       # Install rules cannot prove registration: the declaration once landed
@@ -215,3 +277,120 @@ jobs:
             -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=thread"
           cmake --build build-tsan --target BusExporterReaderRaceTest ReaderRemoveDrainTest AgentShutdownUnderLoadTest TypedChannelWedgeDrainTest SignSeamWedgeDrainTest TransportCaptureGuardTest -j4
           dbus-run-session -- ctest --test-dir build-tsan -R "BusExporterReaderRace|ReaderRemoveDrain|AgentShutdownUnderLoad|TypedChannelWedgeDrain|SignSeamWedgeDrain|TransportCaptureGuard" --output-on-failure --no-tests=error
+
+  coverage:
+    # Arch container: LibreLinux's runtime deps (sdbus-c++ >= 2.0, libsystemd)
+    # are not reliably packaged on ubuntu apt, and the owner's dev/target env
+    # is Arch/Manjaro. pacman provides sdbus-cpp 2.x, libsystemd, pcsclite,
+    # OpenSC (for LibreMiddleware), gtest, qt6/kf6 (for the prompter), and
+    # dbus-run-session for the agent/prompter integration tests.
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    env:
+      # Where LibreMiddleware is installed and where LibreLinux finds it.
+      LM_PREFIX: /opt/libremiddleware
+      # Git ref of LibreMiddleware to build against. Track its trunk during the
+      # development cycle (LibreCelik does the same); pin to a release tag once
+      # LibreMiddleware tags releases. find_package(LibreMiddleware 4.2) in
+      # CMakeLists.txt enforces the required version independently of this ref.
+      MIDDLEWARE_REF: main
+    # Not on pull_request: this pass costs an hour and the moment a
+    # function actually lands is the push to main. Manual only until one
+    # measured run says what it really costs on a hosted runner.
+    if: github.event_name == 'workflow_dispatch'
+    timeout-minutes: 120
+    steps:
+      - name: Install system dependencies
+        run: |
+          pacman -Syu --noconfirm
+          pacman -S --noconfirm --needed \
+            base-devel cmake ninja git pkgconf \
+            sdbus-cpp systemd-libs \
+            openssl pcsclite opensc \
+            gtest dbus \
+            p11-kit \
+            python-jsonschema \
+            qt6-base kcoreaddons ki18n
+
+      - name: Generate a UTF-8 locale
+        # The bare Arch container ships only the C / C.UTF-8 locales, under which
+        # the C library's gettext (which ki18n uses to read .mo catalogs)
+        # suppresses translation entirely. PromptCatalogResolutionTest proves the
+        # sr Cyrillic-primary prompter catalog resolves end-to-end and therefore
+        # needs a real UTF-8 locale present; generate en_US.UTF-8 (the test's own
+        # CTest properties set LANG=en_US.UTF-8 + LANGUAGE=sr). Without this a
+        # broken/empty sr msgstr would ship green (the documented ki18n/gettext
+        # C-locale pitfall).
+        run: |
+          echo 'en_US.UTF-8 UTF-8' >> /etc/locale.gen
+          locale-gen
+
+      - uses: actions/checkout@v4
+        with:
+          path: LibreLinux
+
+      # --- LibreMiddleware: build from source + install to a prefix ---------
+      # Mirrors LibreCelik's CI, which builds LibreMiddleware (it FetchContent's
+      # it transitively). LibreLinux requires the installed CONFIG package, so
+      # we build + `cmake --install` it explicitly. SHARED + plugins ON because
+      # the agent dlopen's the card plugins at runtime; native signing backend
+      # (the CI default) — DSS is only a test oracle.
+      - name: Checkout LibreMiddleware
+        uses: actions/checkout@v4
+        with:
+          repository: LibreSCRS/LibreMiddleware
+          ref: ${{ env.MIDDLEWARE_REF }}
+          path: LibreMiddleware
+          fetch-depth: 0
+          submodules: recursive   # LM vendors OpenSC as a git submodule (thirdparty/opensc-source)
+
+      - name: Build & install LibreMiddleware (Release, SHARED)
+        working-directory: LibreMiddleware
+        run: |
+          cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$LM_PREFIX" \
+            -DLIBREMIDDLEWARE_BUILD_SHARED=ON
+          cmake --build build -j4
+          cmake --install build
+
+      # --- LibreLinux: configure / build (default system mode) --------------
+      # NOT LIBRELINUX_USER_INSTALL — that mode targets per-user XDG dirs for
+      # dogfooding. CI builds the packaging layout (system prefix), which is
+      # what distro packages ship.
+
+      - name: Install gcovr
+        # Pinned: the baseline records the gcovr version it was measured with
+        # and the gate refuses to compare across versions, because the exclude
+        # semantics that decide the denominator have changed between them.
+        run: python3 -m pip install --break-system-packages 'gcovr==8.6'
+
+      - name: Configure (coverage)
+        working-directory: LibreLinux
+        run: cmake --preset coverage -DCMAKE_PREFIX_PATH="$LM_PREFIX"
+
+      - name: Build
+        working-directory: LibreLinux
+        run: cmake --build build-cov -j4
+
+      - name: Test
+        working-directory: LibreLinux
+        run: |
+          set +e
+          dbus-run-session -- ctest --test-dir build-cov --output-on-failure --no-tests=error > ctest.log 2>&1
+          rc=$?
+          set -e
+          cat ctest.log
+          echo "ctest rc=$rc"
+          exit "$rc"
+
+      - name: Check coverage against the baseline
+        working-directory: LibreLinux
+        # The committed baseline was measured with a different compiler than
+        # this runner uses, so the FIRST authorised run of this job is expected
+        # to refuse to compare and say so. Refusing is the design: a coverage
+        # number carries the configuration it was measured under, and comparing
+        # across configurations is how a gap becomes an artefact. Record a
+        # runner-side baseline with --update, review it in the same commit, and
+        # from then on this step is a ratchet.
+        run: ./ci/scripts/coverage-gate.py --check build-cov

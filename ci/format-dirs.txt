@@ -1,0 +1,5 @@
+agent
+prompter
+common
+pkcs11-module
+e2e
