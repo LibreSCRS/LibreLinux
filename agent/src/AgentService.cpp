@@ -4,8 +4,8 @@
 #include "AgentCoreSeams.h" // makeResolveReaderCard / makeResolveCardKey (transport seams)
 #include "AgentFrontend.h"
 #include "AgentInterfaceNames.h"
-#include "AgentObjectPath.h"   // agentObjectPath (card ObjectId -> cache-key path)
-#include "CardRemovalCaches.h" // invalidateCardRemovalCaches (shared with the removal test)
+#include "AgentObjectPath.h"                         // agentObjectPath (card ObjectId -> cache-key path)
+#include <LibreSCRS/Agent/cache/CardRemovalCaches.h> // invalidateCardRemovalCaches (shared with the removal test)
 #include "EventLoopPoster.h"
 #include <LibreSCRS/Agent/backend/Logging.h>
 #include "PolkitAuthorizer.h"

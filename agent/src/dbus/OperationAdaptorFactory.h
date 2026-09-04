@@ -1,16 +1,16 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 // SPDX-FileCopyrightText: 2026 hirashix0
 #pragma once
-#include "operations/ActivateSigningKeyOperation.h"
-#include "operations/GetPhotoOperation.h"
-#include "operations/ListCredentialsOperation.h"
-#include "operations/ManagePinOperation.h"
+#include <LibreSCRS/Agent/operations/ActivateSigningKeyOperation.h>
+#include <LibreSCRS/Agent/operations/GetPhotoOperation.h>
+#include <LibreSCRS/Agent/operations/ListCredentialsOperation.h>
+#include <LibreSCRS/Agent/operations/ManagePinOperation.h>
 #include <LibreSCRS/Agent/operations/OperationBase.h>
-#include "operations/ReadCertificatesOperation.h"
-#include "operations/ReadIdentityOperation.h"
-#include "operations/ReadTokenInfoOperation.h"
-#include "operations/SignBatchOperation.h"
-#include "operations/SignOperation.h"
+#include <LibreSCRS/Agent/operations/ReadCertificatesOperation.h>
+#include <LibreSCRS/Agent/operations/ReadIdentityOperation.h>
+#include <LibreSCRS/Agent/operations/ReadTokenInfoOperation.h>
+#include <LibreSCRS/Agent/operations/SignBatchOperation.h>
+#include <LibreSCRS/Agent/operations/SignOperation.h>
 #include <sdbus-c++/IConnection.h>
 #include <sdbus-c++/Types.h>
 #include <memory>

@@ -12,19 +12,19 @@
 #include "dbus/ObjectManagerSignals.h" // emitObjectManagerAdded/Removed
 #include "dbus/OperationAdaptorFactory.h"
 #include "dbus/OperationPath.h"
-#include "operations/ActivateSigningKeyOperation.h"
-#include "operations/GetPhotoOperation.h"
-#include "operations/ListCredentialsOperation.h"
-#include "operations/ManagePinOperation.h"
+#include <LibreSCRS/Agent/operations/ActivateSigningKeyOperation.h>
+#include <LibreSCRS/Agent/operations/GetPhotoOperation.h>
+#include <LibreSCRS/Agent/operations/ListCredentialsOperation.h>
+#include <LibreSCRS/Agent/operations/ManagePinOperation.h>
 #include <LibreSCRS/Agent/operations/OperationManager.h>
 #include <LibreSCRS/Agent/operations/PinChangeFlow.h> // PinManageRequest, validatePinManageRequest
 #include <LibreSCRS/Agent/operations/PromptSerializer.h>
 #include <LibreSCRS/Agent/operations/RateLimiter.h>
-#include "operations/ReadCertificatesOperation.h"
-#include "operations/ReadIdentityOperation.h"
-#include "operations/ReadTokenInfoOperation.h"
+#include <LibreSCRS/Agent/operations/ReadCertificatesOperation.h>
+#include <LibreSCRS/Agent/operations/ReadIdentityOperation.h>
+#include <LibreSCRS/Agent/operations/ReadTokenInfoOperation.h>
 #include <LibreSCRS/Agent/operations/BatchSignFlow.h> // isValidBatchDocumentCount, BatchDocumentInput
-#include "operations/SignOperation.h"
+#include <LibreSCRS/Agent/operations/SignOperation.h>
 #include <LibreSCRS/Agent/operations/SignatureParams.h>
 #include <LibreSCRS/Agent/util/CallerLabel.h>       // sanitizeLabel (neutral core)
 #include <LibreSCRS/Agent/value/CredentialRecord.h> // CredentialSnapshot, EntryError

@@ -91,6 +91,17 @@ target_link_libraries(TransportCaptureGuardTest PRIVATE
     GTest::gtest_main)
 add_test(NAME TransportCaptureGuardTest COMMAND TransportCaptureGuardTest)
 
+# Ownership guard: the card operations belong to the agent core, not to this
+# backend. Shape rules read off the shipped source (TransportCaptureGuardTest
+# pattern) — no agent library, no bus, no middleware.
+add_executable(HostOperationOwnershipTest HostOperationOwnershipTest.cpp)
+target_compile_definitions(HostOperationOwnershipTest PRIVATE
+    LIBRESCRS_HOST_SRC_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../src")
+target_link_libraries(HostOperationOwnershipTest PRIVATE
+    GTest::gtest
+    GTest::gtest_main)
+add_test(NAME HostOperationOwnershipTest COMMAND HostOperationOwnershipTest)
+
 # Ordered-teardown regression for AgentService::quiesce(): the inbound presence
 # source stops before the core observers are severed, and crypto workers wedged in
 # a blocking prompt drain on the quiesce cancel so teardown stays bounded (no bus —
@@ -112,18 +123,6 @@ target_link_libraries(SignSeamWedgeDrainTest PRIVATE
     GTest::gtest
     GTest::gtest_main)
 add_test(NAME SignSeamWedgeDrainTest COMMAND SignSeamWedgeDrainTest)
-
-# Wire-ordering contract of the credential-management operation adaptors
-# (Operation.Credentials1.xml): a typed Result for EVERY completed attempt —
-# including cancelled/failed lists — always before Finished, and a failed
-# Result delivery fails the op closed. Bus-less: fake channel + fake seams,
-# ops run synchronously via runOnWorker().
-add_executable(CredentialOperationContractTest CredentialOperationContractTest.cpp)
-target_link_libraries(CredentialOperationContractTest PRIVATE
-    LibreLinuxAgentCore
-    GTest::gtest
-    GTest::gtest_main)
-add_test(NAME CredentialOperationContractTest COMMAND CredentialOperationContractTest)
 
 # Teeth test for the typed zombie op's OWN sdbus channel/adaptor resource class:
 # an abandoned typed op must co-own the agent bus connection so its REAL adaptor
@@ -212,16 +211,6 @@ target_link_libraries(AgentObjectPathTest PRIVATE
     GTest::gtest_main)
 add_test(NAME AgentObjectPathTest COMMAND AgentObjectPathTest)
 
-# Card1.CardType arbitration over the held-session candidate list
-# (CardTypeArbitration.h): lowest probe priority wins, a tie at that value stays
-# empty. Pure header-only (no session bus, no card).
-add_executable(CardTypeArbitrationTest CardTypeArbitrationTest.cpp)
-target_link_libraries(CardTypeArbitrationTest PRIVATE
-    LibreLinuxAgentCore
-    GTest::gtest
-    GTest::gtest_main)
-add_test(NAME CardTypeArbitrationTest COMMAND CardTypeArbitrationTest)
-
 add_executable(Card1MethodsXmlCodegenTest Card1MethodsXmlCodegenTest.cpp)
 target_link_libraries(Card1MethodsXmlCodegenTest PRIVATE
     LibreLinuxAgentCore
@@ -276,27 +265,6 @@ target_link_libraries(Photo1XmlCodegenTest PRIVATE
     GTest::gtest
     GTest::gtest_main)
 add_test(NAME Photo1XmlCodegenTest COMMAND Photo1XmlCodegenTest)
-
-add_executable(ReadIdentityOperationTest ReadIdentityOperationTest.cpp)
-target_link_libraries(ReadIdentityOperationTest PRIVATE
-    LibreLinuxAgentCore
-    GTest::gtest
-    GTest::gtest_main)
-add_test(NAME ReadIdentityOperationTest COMMAND ReadIdentityOperationTest)
-
-add_executable(GetPhotoOperationTest GetPhotoOperationTest.cpp)
-target_link_libraries(GetPhotoOperationTest PRIVATE
-    LibreLinuxAgentCore
-    GTest::gtest
-    GTest::gtest_main)
-add_test(NAME GetPhotoOperationTest COMMAND GetPhotoOperationTest)
-
-add_executable(ReadCertificatesOperationTest ReadCertificatesOperationTest.cpp)
-target_link_libraries(ReadCertificatesOperationTest PRIVATE
-    LibreLinuxAgentCore
-    GTest::gtest
-    GTest::gtest_main)
-add_test(NAME ReadCertificatesOperationTest COMMAND ReadCertificatesOperationTest)
 
 add_executable(OperationManagerNameOwnerChangedTest OperationManagerNameOwnerChangedTest.cpp)
 target_link_libraries(OperationManagerNameOwnerChangedTest PRIVATE
@@ -429,17 +397,20 @@ add_test(NAME CardOperationsIntegrationTest
     COMMAND ${DBUS_RUN_SESSION} -- $<TARGET_FILE:CardOperationsIntegrationTest>)
 set_tests_properties(CardOperationsIntegrationTest PROPERTIES TIMEOUT 120)
 
-# --- A4 signing (card-free) ------------------------------------------------
-add_executable(SignFlowTest SignFlowTest.cpp)
-target_link_libraries(SignFlowTest PRIVATE
+# Late-subscriber recovery store for the inline typed results, and — since the
+# sign flow moved into the agent core — the sealing suite that could not go with
+# it: it drives this store and a sealed descriptor, neither of which exists
+# outside this backend.
+add_executable(TypedResultStoreTest TypedResultStoreTest.cpp)
+
+# The sealed-descriptor round trip, the other passenger of that same move.
+add_executable(SealedMemfdTest SealedMemfdTest.cpp)
+target_link_libraries(SealedMemfdTest PRIVATE
     LibreLinuxAgentCore
     GTest::gtest
     GTest::gtest_main)
-add_test(NAME SignFlowTest COMMAND SignFlowTest)
+add_test(NAME SealedMemfdTest COMMAND SealedMemfdTest)
 
-# Late-subscriber recovery store for the inline typed results (the Sign1
-# store's seal-specific suite stays in SignFlowTest).
-add_executable(TypedResultStoreTest TypedResultStoreTest.cpp)
 target_link_libraries(TypedResultStoreTest PRIVATE
     LibreLinuxAgentCore
     GTest::gtest
@@ -462,16 +433,6 @@ target_link_libraries(SignBatch1XmlCodegenTest PRIVATE
     GTest::gtest
     GTest::gtest_main)
 add_test(NAME SignBatch1XmlCodegenTest COMMAND SignBatch1XmlCodegenTest)
-
-# Hermetic exercise of SignBatchOperation (Card1.SignBatch's worker-side
-# Operation): every seam is a Fake, the flow runs synchronously on the test
-# thread. Mirrors SignFlowTest.cpp's bus-less convention for Sign.
-add_executable(SignBatchOperationTest SignBatchOperationTest.cpp)
-target_link_libraries(SignBatchOperationTest PRIVATE
-    LibreLinuxAgentCore
-    GTest::gtest
-    GTest::gtest_main)
-add_test(NAME SignBatchOperationTest COMMAND SignBatchOperationTest)
 
 add_executable(Pkcs11XmlCodegenTest Pkcs11XmlCodegenTest.cpp)
 target_include_directories(Pkcs11XmlCodegenTest PRIVATE ${LL_DBUS_GEN_DIR})

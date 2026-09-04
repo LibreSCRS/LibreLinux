@@ -67,7 +67,6 @@ set(LL_DBUS_GEN_DIR ${_gen_dir})
 add_library(LibreLinuxAgentCore STATIC
     src/AgentService.h
     src/AgentService.cpp
-    src/CardRemovalCaches.h
     src/BusExporter.h
     src/BusExporter.cpp
     src/AgentFrontend.h
@@ -92,24 +91,6 @@ add_library(LibreLinuxAgentCore STATIC
     src/AuthMethodName.h
     src/operations/Operation1Adaptor.h
     src/operations/Operation1Adaptor.cpp
-    src/operations/ReadIdentityOperation.h
-    src/operations/ReadIdentityOperation.cpp
-    src/operations/GetPhotoOperation.h
-    src/operations/GetPhotoOperation.cpp
-    src/operations/ReadCertificatesOperation.h
-    src/operations/ReadCertificatesOperation.cpp
-    src/operations/ReadTokenInfoOperation.h
-    src/operations/ReadTokenInfoOperation.cpp
-    src/operations/SignOperation.h
-    src/operations/SignOperation.cpp
-    src/operations/SignBatchOperation.h
-    src/operations/SignBatchOperation.cpp
-    src/operations/ListCredentialsOperation.h
-    src/operations/ListCredentialsOperation.cpp
-    src/operations/ManagePinOperation.h
-    src/operations/ManagePinOperation.cpp
-    src/operations/ActivateSigningKeyOperation.h
-    src/operations/ActivateSigningKeyOperation.cpp
     src/dbus/ManagerObject.h
     src/dbus/ManagerObject.cpp
     src/dbus/Pkcs11OutcomeNames.h

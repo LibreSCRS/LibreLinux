@@ -2,9 +2,9 @@
   "config": {
     "cmake_args": "-DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_FLAGS=-O0 -g --coverage -fprofile-update=atomic",
     "compiler": "GNU-16",
-    "discovered_tests": 77,
+    "discovered_tests": 72,
     "gcovr": "8.6",
-    "test_manifest_sha256": "4eb248a112de3e6d4d4d28ad2ccd2323fd5a29d61e380cac8182cc9bbf7166a9"
+    "test_manifest_sha256": "ce4a86f51edc3e84a599fa87ddb5e224d94517edfceb2816d2ae2cc4f0d12bed"
   },
   "files": {
     "agent/src/AgentCoreSeams.h": 63.3,
@@ -14,8 +14,6 @@
     "agent/src/AuthMethodName.h": 66.7,
     "agent/src/BusExporter.cpp": 90.8,
     "agent/src/CallerIdentity.cpp": 100.0,
-    "agent/src/CardRemovalCaches.h": 100.0,
-    "agent/src/CardTypeArbitration.h": 100.0,
     "agent/src/ConfigPaths.cpp": 100.0,
     "agent/src/EventLoopPoster.cpp": 73.9,
     "agent/src/PluginDirectory.cpp": 84.9,
@@ -37,17 +35,8 @@
     "agent/src/dbus/TypedResultStore.cpp": 78.9,
     "agent/src/dbus/TypedResultStore.h": 59.3,
     "agent/src/main.cpp": 0.0,
-    "agent/src/operations/ActivateSigningKeyOperation.cpp": 88.9,
-    "agent/src/operations/GetPhotoOperation.cpp": 82.5,
-    "agent/src/operations/ListCredentialsOperation.cpp": 88.7,
-    "agent/src/operations/ManagePinOperation.cpp": 86.8,
     "agent/src/operations/Operation1Adaptor.cpp": 39.6,
     "agent/src/operations/Operation1Adaptor.h": 61.5,
-    "agent/src/operations/ReadCertificatesOperation.cpp": 78.3,
-    "agent/src/operations/ReadIdentityOperation.cpp": 87.2,
-    "agent/src/operations/ReadTokenInfoOperation.cpp": 75.7,
-    "agent/src/operations/SignBatchOperation.cpp": 82.5,
-    "agent/src/operations/SignOperation.cpp": 61.4,
     "common/ProcPidPin.h": 89.7,
     "common/SealedMemfdCreator.h": 46.2,
     "pkcs11-module/src/AgentClient.cpp": 89.1,
@@ -74,9 +63,9 @@
     "total_percent_drop_pp": 0.3
   },
   "total": {
-    "branch_percent": 61.7,
-    "covered_lines": 4245,
-    "line_percent": 72.9,
-    "total_lines": 5823
+    "branch_percent": 62.5,
+    "covered_lines": 3875,
+    "line_percent": 72.1,
+    "total_lines": 5374
   }
 }

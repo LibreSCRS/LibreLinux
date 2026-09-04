@@ -4,7 +4,7 @@
 #include "AgentInterfaceNames.h" // LibreLinux::AgentWire::kRootPath
 #include "AgentObjectPath.h"     // agentObjectPath / objectIdFromPath (ObjectId <-> wire path)
 #include "AuthMethodName.h"      // authMethodName (PreReadAuthMethod -> wire string)
-#include "CardTypeArbitration.h" // arbitrateCardType (candidate list -> Card1.CardType)
+#include <LibreSCRS/Agent/operations/CardTypeArbitration.h> // arbitrateCardType (candidate list -> Card1.CardType)
 #include <LibreSCRS/Agent/CryptoWorkerContext.h>
 #include <LibreSCRS/Agent/cache/CardReadCache.h>
 #include <LibreSCRS/Agent/cache/CredentialCache.h>

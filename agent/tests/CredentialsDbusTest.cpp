@@ -21,7 +21,7 @@
 #include "AgentErrorNames.h"
 #include "AgentInterfaceNames.h"
 #include <LibreSCRS/Agent/backend/Authorizer.h>
-#include "CardRemovalCaches.h" // invalidateCardRemovalCaches (the production removal-invalidation code)
+#include <LibreSCRS/Agent/cache/CardRemovalCaches.h> // invalidateCardRemovalCaches (the production removal-invalidation code)
 #include "dbus/CardObject.h"
 #include <LibreSCRS/Agent/cache/CardReadCache.h>
 #include <LibreSCRS/Agent/cache/CredentialCache.h>

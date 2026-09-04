@@ -3,7 +3,10 @@
 //
 // Late-subscriber recovery store for the inline typed results
 // (Identity1/Certificates1/Photo1.GetResult) — the generalisation of the
-// reviewed Sign1 store, whose seal-specific suite lives in SignFlowTest.cpp.
+// reviewed Sign1 store, whose seal-specific suite now lives here too — the
+// sign flow itself moved into the agent core, and these cases could not go
+// with it: they drive this store and a sealed descriptor, neither of which
+// exists outside this backend.
 // Semantics mirrored 1:1 from that suite: an unpublished store yields NoResult,
 // a published one serves the payload repeatedly (fetch does NOT evict), a
 // publish failure leaves the store unready (fail closed), and the Photo re-seal
@@ -19,6 +22,7 @@
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
+#include <mutex>
 #include <new> // std::bad_alloc
 #include <optional>
 #include <span>
@@ -365,5 +369,152 @@ TEST(TypedResultStoreSignBatch, SealFailureFailsClosedAndLeaksNoFd)
     ASSERT_EQ(sealed->size(), 2u);
     for (const auto& s : *sealed) {
         ::close(s.fd);
+    }
+}
+
+// --- Sign recovery store (arrived with the sign flow's move to the core) ---
+
+TEST(SignResultStore, NotReadyYieldsNoResult)
+{
+    SignResultState state;
+    auto sealed = sealStoredResult(state);
+    EXPECT_LT(sealed.fd, 0) << "an unfinished/failed op has no recoverable artifact";
+}
+
+TEST(SignResultStore, ReadyReDupsByteIdenticalArtifact)
+{
+    SignResultState state;
+    const std::vector<std::uint8_t> bytes{'P', 'D', 'F', 0x00, 0x01, 0x02};
+    {
+        std::lock_guard lock(state.mutex);
+        state.payload.bytes = bytes;
+        state.payload.meta = SignMeta{.format = "pades", .level = "b-b", .tsaUsed = false, .chainComplete = false};
+        state.ready = true;
+    }
+    auto sealed = sealStoredResult(state);
+    ASSERT_GE(sealed.fd, 0);
+    EXPECT_EQ(sealed.meta.format, "pades");
+    EXPECT_EQ(sealed.meta.level, "b-b");
+
+    const auto size = ::lseek(sealed.fd, 0, SEEK_END);
+    ASSERT_EQ(size, static_cast<off_t>(bytes.size()));
+    void* p = ::mmap(nullptr, bytes.size(), PROT_READ, MAP_PRIVATE, sealed.fd, 0);
+    ASSERT_NE(p, MAP_FAILED);
+    EXPECT_EQ(0, std::memcmp(p, bytes.data(), bytes.size()));
+    ::munmap(p, bytes.size());
+    ::close(sealed.fd);
+
+    // A second recovery re-dups an independent, equally byte-identical artifact.
+    auto again = sealStoredResult(state);
+    ASSERT_GE(again.fd, 0);
+    ::close(again.fd);
+}
+
+// The writer side (publishSealedResult) is what SignChannel::emitResult calls:
+// on a SUCCESSFUL seal it publishes the recovery store so a late Sign1.GetResult
+// re-dups a byte-identical artifact.
+TEST(SignResultStore, PublishOnSealSuccessMakesResultRecoverable)
+{
+    SignResultState state;
+    const std::vector<std::uint8_t> bytes{'P', 'D', 'F', 0x10, 0x20, 0x30};
+    const SignMeta meta{.format = "pades", .level = "b-b", .tsaUsed = false, .chainComplete = false};
+    const int fd = publishSealedResult(state, bytes, meta, &SealedMemfd::create);
+    ASSERT_GE(fd, 0) << "a successful seal returns the sealed fd";
+    ::close(fd);
+
+    auto sealed = sealStoredResult(state);
+    ASSERT_GE(sealed.fd, 0) << "GetResult after a successful publish recovers the artifact";
+    const auto size = ::lseek(sealed.fd, 0, SEEK_END);
+    ASSERT_EQ(size, static_cast<off_t>(bytes.size()));
+    void* p = ::mmap(nullptr, bytes.size(), PROT_READ, MAP_PRIVATE, sealed.fd, 0);
+    ASSERT_NE(p, MAP_FAILED);
+    EXPECT_EQ(0, std::memcmp(p, bytes.data(), bytes.size()));
+    ::munmap(p, bytes.size());
+    ::close(sealed.fd);
+}
+
+// Regression (M2 fail-closed): a memfd SEAL FAILURE must NOT publish the recovery
+// store. Before the fix, SignChannel::emitResult set `ready = true` BEFORE the
+// seal and did not roll it back on failure, so a late Sign1.GetResult during the
+// cleanup grace would re-seal and hand back an artifact whose op was already
+// finished Error(op.memfd_failed) — a fail-open hole. publishSealedResult now
+// seals FIRST and publishes only on success, so a seal failure leaves the store
+// UNREADY and GetResult maps to Error.NoResult.
+TEST(SignResultStore, SealFailureLeavesStoreUnreadyForGetResult)
+{
+    SignResultState state;
+    const std::vector<std::uint8_t> bytes{'P', 'D', 'F', 0x01, 0x02, 0x03};
+    const SignMeta meta{.format = "pades", .level = "b-b", .tsaUsed = false, .chainComplete = false};
+
+    // Inject a forced seal failure (models memfd exhaustion / seal rejection).
+    const int fd = publishSealedResult(state, bytes, meta, [](std::span<const std::uint8_t>) noexcept { return -1; });
+    EXPECT_LT(fd, 0) << "a seal failure returns no fd";
+
+    // The store stays unpublished: a racing GetResult during the cleanup grace
+    // fails closed (NoResult) instead of re-sealing an already-failed artifact.
+    auto sealed = sealStoredResult(state);
+    EXPECT_LT(sealed.fd, 0) << "GetResult after a seal failure yields NoResult (fail closed)";
+    if (sealed.fd >= 0) {
+        ::close(sealed.fd);
+    }
+}
+
+// Regression (fail-OPEN after a successful seal): once the seal SUCCEEDS the recovery
+// store is published (ready), so a subsequent Sign1.Result signal-emit throw must NOT
+// fail the op closed. Before the fix, SignChannel::emitResult wrapped the publish AND
+// the emit in one try/catch and returned false on any throw — so an emit throw AFTER a
+// successful publish finished the op Error(op.memfd_failed) while the ready store still
+// served the genuine artifact to a late Sign1.GetResult: the client was told Error but
+// GetResult would hand it Ok. sealPublishAndEmitSignResult now publishes first, then
+// swallows+logs an emit throw and returns TRUE (fail OPEN): the op finishes Ok and the
+// client recovers via GetResult (store ready <=> Ok).
+TEST(SignResultStore, EmitThrowAfterSuccessfulSealFailsOpenAndStaysRecoverable)
+{
+    log::init([](log::Level, std::string_view) {}); // silence the expected post-seal warn line
+    SignResultState state;
+    const std::vector<std::uint8_t> bytes{'P', 'D', 'F', 0x0A, 0x0B, 0x0C};
+    const SignMeta meta{.format = "pades", .level = "b-b", .tsaUsed = false, .chainComplete = false};
+
+    // The emit throws AFTER a real (successful) seal. It still adopts+closes the fd
+    // (mirrors sdbus::UnixFd{fd, adopt_fd} in production) so nothing leaks.
+    int emitCalls = 0;
+    const bool ok = sealPublishAndEmitSignResult(state, bytes, meta, &SealedMemfd::create, [&emitCalls](int fd) {
+        ++emitCalls;
+        ::close(fd);
+        throw std::runtime_error("signal marshaling failed after seal");
+    });
+
+    EXPECT_TRUE(ok) << "a post-seal emit throw fails OPEN: op finishes Ok, client recovers via GetResult";
+    EXPECT_EQ(emitCalls, 1) << "emit runs exactly once on a successful seal";
+
+    // The store is READY: a late Sign1.GetResult recovers the artifact, so the
+    // client that was told Ok can actually retrieve it (consistent).
+    auto sealed = sealStoredResult(state);
+    ASSERT_GE(sealed.fd, 0) << "the published store still serves the artifact after the emit throw";
+    const auto size = ::lseek(sealed.fd, 0, SEEK_END);
+    EXPECT_EQ(size, static_cast<off_t>(bytes.size()));
+    ::close(sealed.fd);
+    log::resetForTest();
+}
+
+// A seal FAILURE still fails CLOSED through the same writer path: emit is never
+// invoked, the store stays unready, and the return is false (op finishes Error).
+TEST(SignResultStore, SealFailureThroughWriterPathFailsClosedAndSkipsEmit)
+{
+    SignResultState state;
+    const std::vector<std::uint8_t> bytes{'P', 'D', 'F', 0x01};
+    const SignMeta meta{.format = "pades", .level = "b-b", .tsaUsed = false, .chainComplete = false};
+
+    int emitCalls = 0;
+    const bool ok = sealPublishAndEmitSignResult(
+        state, bytes, meta, [](std::span<const std::uint8_t>) noexcept { return -1; },
+        [&emitCalls](int) { ++emitCalls; });
+
+    EXPECT_FALSE(ok) << "a seal failure fails closed: the op finishes Error";
+    EXPECT_EQ(emitCalls, 0) << "emit is never reached when the seal fails";
+    auto sealed = sealStoredResult(state);
+    EXPECT_LT(sealed.fd, 0) << "the store stays unready after a seal failure (fail closed)";
+    if (sealed.fd >= 0) {
+        ::close(sealed.fd);
     }
 }
