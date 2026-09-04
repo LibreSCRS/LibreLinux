@@ -227,4 +227,12 @@ if(NOT LIBRELINUX_USER_INSTALL)
         DESTINATION ${CMAKE_INSTALL_FULL_DATADIR}/polkit-1/actions)
 endif()
 
-add_subdirectory(tests)
+# BUILD_TESTING, not unconditional. include(CTest) in the root file defines it
+# and defaults it ON, so a developer build is unchanged. A distribution package
+# is built with it OFF, and building a suite the package will never run costs
+# time and, on Ubuntu 26.04 with gcc 15, costs the package: a test executable
+# there fails to link against libstdc++ symbols, in code the package does not
+# ship.
+if(BUILD_TESTING)
+    add_subdirectory(tests)
+endif()
