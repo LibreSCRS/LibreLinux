@@ -9,7 +9,7 @@
 
 The split keeps the agent Qt-free: installing only `librescrs-agent` pulls
 **no** Qt/KF6 into the closure. `librescrs-pinentry-kde` depends on the agent,
-`librescrs-middleware>=4.2` (it links `LibreMiddleware::Secure` =
+`librescrs-middleware>=4.2` (it links `LibreSCRS::Secure` =
 `libLibreSCRS_Auth.so` for secure input handling), plus
 `qt6-base kcoreaddons ki18n`.
 

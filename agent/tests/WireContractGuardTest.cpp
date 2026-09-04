@@ -12,7 +12,7 @@
 //
 // This fixture is the ONE place that ties the canonical wire literals to the
 // upstream LibreMiddleware symbol. The agent test target already links
-// LibreMiddleware::Plugin (via LibreLinuxAgentCore), so a static_assert here
+// LibreSCRS::Plugin (via LibreLinuxAgentCore), so a static_assert here
 // breaks the build the instant LM CardCapabilities renumbers — the half
 // of the mirror no client-side test can catch (a client stack cannot link LM).
 //

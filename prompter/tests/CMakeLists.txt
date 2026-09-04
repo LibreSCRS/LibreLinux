@@ -86,7 +86,7 @@ target_link_libraries(PrompterCancelTest PRIVATE
     Qt6::Test
     KF6::I18n
     SDBusCpp::sdbus-c++
-    LibreMiddleware::Secure
+    LibreSCRS::Secure
     GTest::gtest
     GTest::gtest_main)
 
@@ -207,7 +207,7 @@ target_link_libraries(PrompterAuthIntegrationTest PRIVATE
     Qt6::Test
     KF6::I18n
     SDBusCpp::sdbus-c++
-    LibreMiddleware::Secure
+    LibreSCRS::Secure
     GTest::gtest
     GTest::gtest_main)
 
@@ -252,7 +252,7 @@ target_link_libraries(PromptDialogRejectTest PRIVATE
     Qt6::Widgets
     Qt6::Test
     KF6::I18n
-    LibreMiddleware::Secure
+    LibreSCRS::Secure
     GTest::gtest
     GTest::gtest_main)
 
@@ -288,7 +288,7 @@ target_link_libraries(PromptDialogClientChromeTest PRIVATE
     Qt6::Widgets
     Qt6::Test
     KF6::I18n
-    LibreMiddleware::Secure
+    LibreSCRS::Secure
     GTest::gtest
     GTest::gtest_main)
 
@@ -325,7 +325,7 @@ target_link_libraries(PromptDialogRetryContextTest PRIVATE
     Qt6::Widgets
     Qt6::Test
     KF6::I18n
-    LibreMiddleware::Secure
+    LibreSCRS::Secure
     GTest::gtest
     GTest::gtest_main)
 
@@ -362,7 +362,7 @@ target_link_libraries(PromptDialogAltKindsTest PRIVATE
     Qt6::Widgets
     Qt6::Test
     KF6::I18n
-    LibreMiddleware::Secure
+    LibreSCRS::Secure
     GTest::gtest
     GTest::gtest_main)
 
@@ -419,7 +419,7 @@ target_link_libraries(PrompterMultiFieldTest PRIVATE
     Qt6::Test
     KF6::I18n
     SDBusCpp::sdbus-c++
-    LibreMiddleware::Secure
+    LibreSCRS::Secure
     GTest::gtest)
 
 # Private session bus (dbus-run-session) + offscreen Qt (no display server).
@@ -602,7 +602,7 @@ target_link_libraries(PrompterConcurrentWindowsTest PRIVATE
     Qt6::Test
     KF6::I18n
     SDBusCpp::sdbus-c++
-    LibreMiddleware::Secure
+    LibreSCRS::Secure
     GTest::gtest)
 
 add_test(NAME PrompterConcurrentWindowsTest

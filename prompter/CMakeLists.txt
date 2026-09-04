@@ -80,7 +80,7 @@ target_link_libraries(librescrs-pinentry-kde PRIVATE
     KF6::I18n
     KF6::CoreAddons
     SDBusCpp::sdbus-c++
-    LibreMiddleware::Secure
+    LibreSCRS::Secure
     librelinux-common) # shared sealed-memfd creator + pinned /proc readers
 
 target_compile_definitions(librescrs-pinentry-kde PRIVATE
