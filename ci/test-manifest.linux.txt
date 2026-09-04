@@ -16,6 +16,7 @@ Config1Test
 ConfigPathsTest
 CredentialsDbusTest
 CscaImportDbusTest
+DBusAgentClientContractTest
 DBusAgentClientTest
 DBusServiceTest
 EnvPrompterServiceTest

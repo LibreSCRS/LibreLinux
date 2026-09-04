@@ -20,6 +20,7 @@
 
 namespace {
 
+using LibreSCRS::Agent::Wire::decodeSyncError;
 using LibreSCRS::Agent::Wire::SyncError;
 using LibreSCRS::Agent::Wire::syncErrorName;
 
@@ -28,6 +29,29 @@ constexpr std::string_view kPrefix = "org.librescrs.Agent.Error.";
 std::string qualified(SyncError e)
 {
     return std::string(kPrefix) + std::string(syncErrorName(e));
+}
+
+// How many enumerators the wire vocabulary has, measured rather than named.
+//
+// The walk below used to stop at a hard-coded last enumerator, and that made
+// this file blind to precisely what it exists to catch: a name appended AFTER
+// that one fell outside the walk, so the case that was supposed to notice an
+// append stayed green through one. The edge is derived instead --
+// syncErrorName() answers a value past the end with its unreachable fallback,
+// which does not round-trip back to the value asked about, and that is the
+// boundary. The enum's storage is uint8_t, so every probe below is a
+// representable value.
+int syncErrorCount()
+{
+    int n = 0;
+    while (n < 256) {
+        const auto e = static_cast<SyncError>(n);
+        if (decodeSyncError(syncErrorName(e)) != e) {
+            break;
+        }
+        ++n;
+    }
+    return n;
 }
 
 } // namespace
@@ -48,25 +72,27 @@ TEST(AgentErrorNameParityTest, EveryNameMatchesItsWireEnumerator)
     EXPECT_EQ(LibreLinux::AgentWire::kErrUnsupportedOnThisCard, qualified(SyncError::UnsupportedOnThisCard));
     EXPECT_EQ(LibreLinux::AgentWire::kErrInvalidRequest, qualified(SyncError::InvalidRequest));
     EXPECT_EQ(LibreLinux::AgentWire::kErrUnknownCredential, qualified(SyncError::UnknownCredential));
+    EXPECT_EQ(LibreLinux::AgentWire::kErrCancelled, qualified(SyncError::Cancelled));
 }
 
-// The one name in the table with no counterpart, pinned as such.
+// The table used to carry exactly one name the wire vocabulary had no
+// enumerator for, and a case here pinned that asymmetry so nobody would tidy it
+// away by adding the enumerator and assuming the name already matched. The
+// enumerator has now been added deliberately, so the claim is inverted: the
+// name is carried by BOTH vocabularies, and the two transports can be held to
+// one answer about a dismissed prompt.
 //
-// The bus vocabulary carries a Cancelled refusal; the wire vocabulary does
-// not, and a caller on the wire learns of a cancellation another way. That
-// asymmetry is a fact about the two contracts, not an oversight in this table
-// — but it is exactly the kind of fact that gets "tidied" by someone adding
-// the enumerator and assuming the name already matched. If SyncError ever
-// gains Cancelled, this test fails and the pair above gains a line.
-TEST(AgentErrorNameParityTest, CancelledHasNoWireEnumeratorAndThatIsDeliberate)
+// The round trip is asserted as well as the spelling. A token the decoder does
+// not recognise degrades silently to CommunicationError rather than failing, so
+// a name that matched by spelling alone would still reach a caller as the
+// generic failure this pairing exists to stop it being.
+TEST(AgentErrorNameParityTest, CancelledIsCarriedByBothVocabularies)
 {
     const std::string cancelled = std::string(kPrefix) + "Cancelled";
     EXPECT_EQ(LibreLinux::AgentWire::kErrCancelled, cancelled);
-
-    for (int raw = 0; raw <= static_cast<int>(SyncError::MasterListReplayed); ++raw) {
-        EXPECT_NE(qualified(static_cast<SyncError>(raw)), cancelled)
-            << "SyncError gained a Cancelled enumerator; pair it above and delete this loop";
-    }
+    EXPECT_EQ(qualified(SyncError::Cancelled), cancelled);
+    EXPECT_EQ(decodeSyncError("Cancelled"), SyncError::Cancelled)
+        << "the wire decoder degrades this token instead of recognising it";
 }
 
 // The table is a SUBSET of the wire vocabulary, never a superset of what the
@@ -75,7 +101,7 @@ TEST(AgentErrorNameParityTest, CancelledHasNoWireEnumeratorAndThatIsDeliberate)
 TEST(AgentErrorNameParityTest, TheTableIsASubsetOfTheWireVocabulary)
 {
     int matched = 0;
-    for (int raw = 0; raw <= static_cast<int>(SyncError::MasterListReplayed); ++raw) {
+    for (int raw = 0; raw < syncErrorCount(); ++raw) {
         const std::string name = qualified(static_cast<SyncError>(raw));
         for (const char* constant :
              {LibreLinux::AgentWire::kErrUnknownCard, LibreLinux::AgentWire::kErrKeyNotFound,
@@ -83,11 +109,11 @@ TEST(AgentErrorNameParityTest, TheTableIsASubsetOfTheWireVocabulary)
               LibreLinux::AgentWire::kErrUserNotLoggedIn, LibreLinux::AgentWire::kErrAuthFailed,
               LibreLinux::AgentWire::kErrNotSupported, LibreLinux::AgentWire::kErrCommunication,
               LibreLinux::AgentWire::kErrUnsupportedOnThisCard, LibreLinux::AgentWire::kErrInvalidRequest,
-              LibreLinux::AgentWire::kErrUnknownCredential}) {
+              LibreLinux::AgentWire::kErrUnknownCredential, LibreLinux::AgentWire::kErrCancelled}) {
             if (name == constant) {
                 ++matched;
             }
         }
     }
-    EXPECT_EQ(matched, 11) << "a name in the table stopped matching a wire enumerator";
+    EXPECT_EQ(matched, 12) << "a name in the table stopped matching a wire enumerator";
 }

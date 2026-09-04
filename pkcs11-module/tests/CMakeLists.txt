@@ -34,6 +34,31 @@ add_test(NAME DBusAgentClientTest COMMAND ${DBUS_RUN_SESSION} -- $<TARGET_FILE:D
 # timeout.
 set_tests_properties(DBusAgentClientTest PROPERTIES TIMEOUT 120)
 
+# The same contract suite the agent's own tree instantiates over the socket
+# transport, instantiated here over the bus one. The claims are NOT copied: the
+# header arrives through LibreAgent::Pkcs11Facade's interface include property,
+# the same way AgentClient.h does, on both the FetchContent and the
+# find_package path.
+add_executable(DBusAgentClientContractTest DBusAgentClientContractTest.cpp ../src/DBusAgentClient.cpp)
+target_include_directories(DBusAgentClientContractTest PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src)
+target_compile_features(DBusAgentClientContractTest PRIVATE cxx_std_23)
+target_link_libraries(DBusAgentClientContractTest PRIVATE SDBusCpp::sdbus-c++ GTest::gtest GTest::gtest_main)
+add_test(NAME DBusAgentClientContractTest
+    COMMAND ${DBUS_RUN_SESSION} -- $<TARGET_FILE:DBusAgentClientContractTest>)
+# One claim in that suite is what the client answers when the agent is ABSENT,
+# and on this transport "nobody owns the name" is not the same thing: the bus
+# will try to START the agent from a service file, and a developer machine that
+# has one installed gets a spawn failure -- a different error name, a different
+# Status -- where a clean container gets ServiceUnknown. That is a real
+# difference between two machines, not between two transports, so the search
+# path is emptied rather than inherited and absent means absent everywhere.
+file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/no-bus-services)
+set_tests_properties(DBusAgentClientContractTest PROPERTIES
+    TIMEOUT 120
+    ENVIRONMENT "XDG_DATA_HOME=${CMAKE_CURRENT_BINARY_DIR}/no-bus-services;XDG_DATA_DIRS=${CMAKE_CURRENT_BINARY_DIR}/no-bus-services")
+
 # Pure-text assertions on the configured .module + deployment-(b) server unit
 # (no p11-kit, no D-Bus). The configured files are produced by the parent
 # CMakeLists into ${CMAKE_CURRENT_BINARY_DIR}/.. (the pkcs11-module build dir).
