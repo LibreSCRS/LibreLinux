@@ -12,16 +12,20 @@
 // once the agent-side PrompterClient lands.
 
 #include "CanInputWidget.h"
+#include "ChangePinInputWidget.h"
 #include "MrzInputWidget.h"
 #include "PinInputWidget.h"
 #include "SecretMemfd.h"
 
 #include <gtest/gtest.h>
 
+#include <QAbstractSpinBox>
+#include <QAccessible>
 #include <QApplication>
 #include <QDate>
 #include <QDateEdit>
 #include <QLineEdit>
+#include <QSet>
 #include <QSignalSpy>
 
 #include <fcntl.h>
@@ -332,6 +336,87 @@ TEST(MrzInputWidget, PadsShortDocumentNumberWithFiller)
     EXPECT_EQ(docField.substr(0, 9), "AB123<<<<");
     EXPECT_TRUE(LibreLinux::Prompter::MrzInputWidget::checkDigitOk(QString::fromStdString(docField.substr(0, 9)),
                                                                    QChar::fromLatin1(docField.back())));
+}
+
+// ----- accessible names on every credential field ---------------------------
+
+namespace {
+
+std::vector<QWidget*> allFocusableFields(QWidget* parent)
+{
+    std::vector<QWidget*> out;
+    // QDateEdit (a QAbstractSpinBox) owns its OWN internal QLineEdit editor as
+    // a genuine child widget, and findChildren<QLineEdit*>() recurses the
+    // whole tree -- so a plain scan double-counts every date field as both
+    // the QDateEdit itself AND its private editor. Only that inner editor has
+    // an absent QAbstractSpinBox parent as false; skip it explicitly, since it
+    // carries no buddy of its own and was never meant to be an addressed
+    // field.
+    for (QLineEdit* e : parent->findChildren<QLineEdit*>()) {
+        if (qobject_cast<QAbstractSpinBox*>(e->parentWidget()) != nullptr)
+            continue;
+        out.push_back(e);
+    }
+    for (QDateEdit* d : parent->findChildren<QDateEdit*>())
+        out.push_back(d);
+    return out;
+}
+
+} // namespace
+
+// Every field a person types a credential into must announce itself. The
+// QFormLayout addRow(QWidget*, QWidget*) overload does not set a buddy, so
+// this reads "" unless the widget sets one explicitly (measured: show()
+// changes nothing -- the accessible name comes from the buddy relation, not
+// from visibility).
+TEST(AccessibleNameIsSetOnEveryInputField, PinField)
+{
+    LibreLinux::Prompter::PinInputWidget w(4, 8);
+    for (QWidget* field : allFocusableFields(&w)) {
+        QAccessibleInterface* iface = QAccessible::queryAccessibleInterface(field);
+        ASSERT_NE(iface, nullptr);
+        EXPECT_FALSE(iface->text(QAccessible::Name).isEmpty());
+    }
+}
+
+TEST(AccessibleNameIsSetOnEveryInputField, CanField)
+{
+    LibreLinux::Prompter::CanInputWidget w;
+    for (QWidget* field : allFocusableFields(&w)) {
+        QAccessibleInterface* iface = QAccessible::queryAccessibleInterface(field);
+        ASSERT_NE(iface, nullptr);
+        EXPECT_FALSE(iface->text(QAccessible::Name).isEmpty());
+    }
+}
+
+TEST(AccessibleNameIsSetOnEveryInputField, MrzFields)
+{
+    LibreLinux::Prompter::MrzInputWidget w;
+    for (QWidget* field : allFocusableFields(&w)) {
+        QAccessibleInterface* iface = QAccessible::queryAccessibleInterface(field);
+        ASSERT_NE(iface, nullptr);
+        EXPECT_FALSE(iface->text(QAccessible::Name).isEmpty());
+    }
+}
+
+// Three fields, and the MIDDLE one is the one that matters: three identical
+// unlabelled password boxes in tab order is the actual blocker, not just
+// "field 1 has no name".
+TEST(AccessibleNameIsSetOnEveryInputField, ChangePinFieldsHavePairwiseDistinctNames)
+{
+    LibreLinux::Prompter::ChangePinInputWidget w(4, 8, 4, 8, QStringLiteral("PIN"));
+    const auto fields = allFocusableFields(&w);
+    ASSERT_EQ(fields.size(), 3u);
+    QStringList names;
+    for (QWidget* field : fields) {
+        QAccessibleInterface* iface = QAccessible::queryAccessibleInterface(field);
+        ASSERT_NE(iface, nullptr);
+        const QString name = iface->text(QAccessible::Name);
+        EXPECT_FALSE(name.isEmpty());
+        names << name;
+    }
+    EXPECT_EQ(names.size(), QSet<QString>(names.begin(), names.end()).size())
+        << "all three names must be pairwise distinct: " << qPrintable(names.join(u", "));
 }
 
 // ----- main -----------------------------------------------------------------

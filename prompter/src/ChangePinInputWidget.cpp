@@ -53,12 +53,21 @@ ChangePinInputWidget::ChangePinInputWidget(int currentMin, int currentMax, int n
     const bool machineLabel = kSyntheticSelector.match(pinLabel).hasMatch();
     const QString role = (pinLabel.isEmpty() || machineLabel) ? i18nc("@item generic PIN role name", "PIN") : pinLabel;
 
+    // Named locals (not inline addRow() temporaries) so each can carry a
+    // setBuddy() -- addRow(QWidget*, QWidget*) does not set one on its own,
+    // and three identical unlabelled password boxes in tab order is the
+    // actual defect a missing name on just the first field would miss.
+    auto* currentLabel = new QLabel(i18nc("@label:textbox current PIN entry field", "Current %1:", role), this);
+    currentLabel->setBuddy(m_currentEdit);
+    auto* newLabel = new QLabel(i18nc("@label:textbox new PIN entry field", "New %1:", role), this);
+    newLabel->setBuddy(m_newEdit);
+    auto* confirmLabel = new QLabel(i18nc("@label:textbox new PIN confirmation field", "Confirm new %1:", role), this);
+    confirmLabel->setBuddy(m_confirmEdit);
+
     auto* layout = new QFormLayout(this);
-    layout->addRow(new QLabel(i18nc("@label:textbox current PIN entry field", "Current %1:", role), this),
-                   m_currentEdit);
-    layout->addRow(new QLabel(i18nc("@label:textbox new PIN entry field", "New %1:", role), this), m_newEdit);
-    layout->addRow(new QLabel(i18nc("@label:textbox new PIN confirmation field", "Confirm new %1:", role), this),
-                   m_confirmEdit);
+    layout->addRow(currentLabel, m_currentEdit);
+    layout->addRow(newLabel, m_newEdit);
+    layout->addRow(confirmLabel, m_confirmEdit);
 
     // Inline mismatch error — hidden until an accept attempt with a confirm
     // entry that differs from the new PIN. Plain text, prompter chrome.

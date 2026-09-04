@@ -18,6 +18,8 @@ qt_add_executable(InputWidgetValidationTest
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/PinInputWidget.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/CanInputWidget.h
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/CanInputWidget.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/ChangePinInputWidget.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/ChangePinInputWidget.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/MrzInputWidget.h
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/MrzInputWidget.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/SecretMemfd.h

@@ -28,6 +28,10 @@ PinInputWidget::PinInputWidget(int minLen, int maxLen, QWidget* parent)
     m_edit->setValidator(new QRegularExpressionValidator(QRegularExpression(pattern), this));
 
     auto* label = new QLabel(i18nc("@label:textbox PIN entry field", "PIN:"), this);
+    // The addRow(QWidget*, QWidget*) overload does NOT set a buddy, and
+    // without one QAccessible reports this field's name as the empty string
+    // -- a screen-reader user meets an unlabelled password box.
+    label->setBuddy(m_edit);
     auto* layout = new QFormLayout(this);
     layout->addRow(label, m_edit);
     connect(m_edit, &QLineEdit::textChanged, this, &InputWidgetBase::validityChanged);

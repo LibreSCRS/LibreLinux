@@ -111,14 +111,20 @@ MrzInputWidget::MrzInputWidget(QWidget* parent)
     m_dateOfExpiry->setSpecialValueText(pickDate);
     connect(m_dateOfExpiry, &QDateEdit::dateChanged, this, &InputWidgetBase::validityChanged);
 
+    // Named locals so each can carry a setBuddy() -- same reasoning as
+    // ChangePinInputWidget.
+    auto* documentLabel =
+        new QLabel(i18nc("@label:textbox MRZ document number, without its check digit", "Document number:"), this);
+    documentLabel->setBuddy(m_documentNumber);
+    auto* dobLabel = new QLabel(i18nc("@label MRZ date of birth, calendar entry", "Date of birth:"), this);
+    dobLabel->setBuddy(m_dateOfBirth);
+    auto* doeLabel = new QLabel(i18nc("@label MRZ date of expiry, calendar entry", "Date of expiry:"), this);
+    doeLabel->setBuddy(m_dateOfExpiry);
+
     auto* layout = new QFormLayout(this);
-    layout->addRow(
-        new QLabel(i18nc("@label:textbox MRZ document number, without its check digit", "Document number:"), this),
-        m_documentNumber);
-    layout->addRow(new QLabel(i18nc("@label MRZ date of birth, calendar entry", "Date of birth:"), this),
-                   m_dateOfBirth);
-    layout->addRow(new QLabel(i18nc("@label MRZ date of expiry, calendar entry", "Date of expiry:"), this),
-                   m_dateOfExpiry);
+    layout->addRow(documentLabel, m_documentNumber);
+    layout->addRow(dobLabel, m_dateOfBirth);
+    layout->addRow(doeLabel, m_dateOfExpiry);
 
     setFocusProxy(m_documentNumber);
 }

@@ -29,6 +29,8 @@ CanInputWidget::CanInputWidget(QWidget* parent) : InputWidgetBase(parent), m_edi
     m_edit->setValidator(new QRegularExpressionValidator(QRegularExpression(QStringLiteral("^[0-9]{6}$")), this));
 
     auto* label = new QLabel(i18nc("@label:textbox CAN — Card Access Number", "CAN:"), this);
+    // See PinInputWidget: addRow(QWidget*, QWidget*) sets no buddy on its own.
+    label->setBuddy(m_edit);
     auto* layout = new QFormLayout(this);
     layout->addRow(label, m_edit);
     connect(m_edit, &QLineEdit::textChanged, this, &InputWidgetBase::validityChanged);
