@@ -27,6 +27,7 @@ jobs:
     # job below runs in an Arch container instead, because Arch's rolling
     # `clang` package is ahead of 21 and would reformat against a different
     # major — the project standard is clang-format 21, not the distro default.
+    timeout-minutes: 15
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -68,12 +69,20 @@ jobs:
         # the tag's version.
         run: ci/scripts/check-release-lockstep.sh "$(head -n1 VERSION | tr -d '[:space:]')"
 
+      - name: Every job carries a time bound
+        # An unbounded job that hangs holds a runner for six hours and will
+        # not serve its log until the run is cancelled, so the failing test
+        # cannot even be named. This fails when a new job arrives without a
+        # bound, which is the only moment the omission is cheap to fix.
+        run: ci/scripts/check-job-timeouts.sh
+
   build-linux:
     # Arch container: LibreLinux's runtime deps (sdbus-c++ >= 2.0, libsystemd)
     # are not reliably packaged on ubuntu apt, and the owner's dev/target env
     # is Arch/Manjaro. pacman provides sdbus-cpp 2.x, libsystemd, pcsclite,
     # OpenSC (for LibreMiddleware), gtest, qt6/kf6 (for the prompter), and
     # dbus-run-session for the agent/prompter integration tests.
+    timeout-minutes: 90
     runs-on: ubuntu-latest
     container: archlinux:latest
     env:

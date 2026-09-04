@@ -44,6 +44,7 @@ concurrency:
 
 jobs:
   verify-signature:
+    timeout-minutes: 10
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -98,6 +99,7 @@ jobs:
             || { echo "::error::Tag $TAG is not signed by the LibreSCRS release key"; exit 1; }
 
   release:
+    timeout-minutes: 15
     needs: verify-signature
     runs-on: ubuntu-latest
     permissions:

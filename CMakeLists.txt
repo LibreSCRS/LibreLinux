@@ -89,7 +89,25 @@ find_package(LibreMiddleware 5.0 REQUIRED CONFIG)
 # daemon on top of LibreAgent::Core.
 include(cmake/FindOrUseLibreAgent.cmake)
 
-enable_testing()
+# Bound every test. ctest's built-in default is 1500 seconds and nothing in this
+# tree overrode it, so a single wedged test could hold a hosted runner for
+# twenty-five minutes without ever being named; a handful of them consume the
+# whole job. That is not hypothetical — one CI job in this project sat for two
+# hours and forty-nine minutes on one deadlocked test, and only cancelling it
+# released a log that said which.
+#
+# include(CTest) rather than a bare enable_testing(): DART_TESTING_TIMEOUT is
+# read by the CTest MODULE, which is what writes DartConfiguration.tcl, and a
+# bare enable_testing() never writes that file. Measured on a twelve-second
+# test with a three-second declared timeout, the bare call reports the suite
+# passing after twelve seconds and the module form times the test out after
+# three — so declaring the value next to a bare call would have had no effect
+# at all, silently. include(CTest) calls enable_testing() itself, so the
+# placement of the call below is unchanged. Set BEFORE the include, which would
+# otherwise cache 1500.
+set(DART_TESTING_TIMEOUT 300 CACHE STRING
+    "Default per-test ctest timeout, in seconds")
+include(CTest)
 
 # Header-only utilities shared across the daemon, prompter, and module (pure
 # POSIX, no Qt/sdbus/LM): the sealed-memfd creator, the pidfd-pinned /proc
