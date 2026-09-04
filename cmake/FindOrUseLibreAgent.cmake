@@ -65,10 +65,14 @@ if(LIBRELINUX_USE_INSTALLED_AGENT_CORE)
     # does not. Naming them also makes an agent package built without one of
     # them fail configuration BY NAME here, instead of the module discovering a
     # missing component at link time -- or the fixture test quietly
-    # disappearing. Three are needed: the neutral core this backend has always
-    # linked, the PKCS#11 facade the module is now built from, and the
-    # master-list fixture the anchor-import test links.
-    find_package(LibreAgent 4.2 REQUIRED CONFIG COMPONENTS Core Pkcs11Facade TestSupport)
+    # disappearing. Four are needed: the neutral core this backend has always
+    # linked, the PKCS#11 facade the module is now built from, the master-list
+    # fixture the anchor-import test links, and the wire vocabulary the
+    # error-name parity test links. The last one is why this list is checked
+    # by configuring against a real install and not by reading: the source
+    # path defines every target, so a name missing here is invisible until
+    # someone takes the installed path.
+    find_package(LibreAgent 5.0 REQUIRED CONFIG COMPONENTS Core Wire Pkcs11Facade TestSupport)
     message(STATUS "LibreAgent: using installed package (CONFIG)")
 else()
     message(STATUS "LibreAgent: building from source (FetchContent, pin ${LIBREAGENT_PIN})")

@@ -26,7 +26,7 @@ makedepends=(
     'pkgconf'
     'sdbus-cpp'                 # >=2.0 (agent + prompter D-Bus)
     'systemd-libs'              # libsystemd (event loop / sd_notify)
-    'librescrs-middleware>=4.2' # LibreSCRS::* CMake config package
+    'librescrs-middleware>=5.0' # LibreSCRS::* CMake config package
     'openssl'                   # agent: find_package(OpenSSL COMPONENTS Crypto)
     'pcsclite'
     'p11-kit'                   # pkcs11-module: p11-kit-1.pc resolves module + .module config dirs
@@ -71,7 +71,7 @@ check() {
 package_librescrs-agent() {
     pkgdesc="Headless Qt-free D-Bus session agent that owns smart-card access for the LibreSCRS stack"
     depends=(
-        'librescrs-middleware>=4.2'
+        'librescrs-middleware>=5.0'
         'sdbus-cpp'
         'systemd-libs'
         'pcsclite'
@@ -134,7 +134,7 @@ package_librescrs-pinentry-kde() {
     pkgdesc="KDE-styled secure PIN/CAN entry prompter for the LibreSCRS agent"
     depends=(
         'librescrs-agent'
-        'librescrs-middleware>=4.2' # links LibreSCRS::Secure (libLibreSCRS_Auth.so)
+        'librescrs-middleware>=5.0' # links LibreSCRS::Secure (libLibreSCRS_Auth.so)
         'sdbus-cpp'                 # prompter links SDBusCpp::sdbus-c++ -> libsdbus-c++.so.2 directly
         'qt6-base'
         'kcoreaddons'

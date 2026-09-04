@@ -81,7 +81,7 @@ endif()
 find_package(sdbus-c++ 2.0 CONFIG REQUIRED) # provides SDBusCpp::sdbus-c++
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(Systemd REQUIRED IMPORTED_TARGET libsystemd)
-find_package(LibreMiddleware 4.2 REQUIRED CONFIG)
+find_package(LibreMiddleware 5.0 REQUIRED CONFIG)
 
 # The platform-neutral agent core (flows, scheduler, presence model, caches,
 # lease/broker policy, LM-backed seams, the 5 backend interfaces). The Linux
