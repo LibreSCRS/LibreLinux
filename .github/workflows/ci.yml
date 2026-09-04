@@ -410,3 +410,101 @@ jobs:
         # runner-side baseline with --update, review it in the same commit, and
         # from then on this step is a ratchet.
         run: ./ci/scripts/coverage-gate.py --check build-cov
+
+  packaging-build:
+    # The path a distribution package takes: the agent core comes from a
+    # package, not from a fetch. build-linux keeps the FetchContent path, which
+    # is what proves the recorded pin still resolves; this job proves the
+    # packaging path declares every source it needs, which is a different claim
+    # and needs its own run.
+    #
+    # The assertion is on the CONSEQUENCE, not on whether the environment
+    # happens to have network: a populated _deps directory after configure
+    # fails this job. A chroot that isolates the network would prove the same
+    # thing by accident and stop proving it the day someone gives it one.
+    timeout-minutes: 90
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    env:
+      LM_PREFIX: /opt/libremiddleware
+      MIDDLEWARE_REF: main
+    steps:
+      - name: Install system dependencies
+        run: |
+          pacman -Syu --noconfirm
+          pacman -S --noconfirm --needed \
+            base-devel cmake ninja git pkgconf \
+            sdbus-cpp systemd-libs \
+            openssl pcsclite opensc \
+            gtest dbus \
+            p11-kit \
+            python-jsonschema \
+            qt6-base kcoreaddons ki18n
+
+      - uses: actions/checkout@v4
+        with:
+          path: LibreLinux
+
+      - name: Checkout LibreMiddleware
+        uses: actions/checkout@v4
+        with:
+          repository: LibreSCRS/LibreMiddleware
+          ref: ${{ env.MIDDLEWARE_REF }}
+          path: LibreMiddleware
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Build & install LibreMiddleware (Release, SHARED)
+        working-directory: LibreMiddleware
+        run: |
+          cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$LM_PREFIX" \
+            -DLIBREMIDDLEWARE_BUILD_SHARED=ON
+          cmake --build build -j4
+          cmake --install build
+
+      - name: Build & install LibreAgent (Core) at the recorded pin
+        # The pin file, not the agent's trunk: a package built from whatever the
+        # agent happened to have on trunk that hour is the failure this job
+        # exists to rule out.
+        run: |
+          git clone https://github.com/LibreSCRS/LibreAgent.git LibreAgent
+          git -C LibreAgent checkout "$(tr -d '[:space:]' < LibreLinux/cmake/libreagent.pin)"
+          cmake -S LibreAgent -B la-build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$LM_PREFIX" \
+            -DCMAKE_PREFIX_PATH="$LM_PREFIX" \
+            -DLIBREAGENT_BUILD_CORE=ON
+          cmake --build la-build -j4
+          cmake --install la-build
+
+      - name: Configure the packaging way
+        # A separate build directory on purpose: build/ belongs to build-linux
+        # and its FetchContent path, and the two claims must not share a cache.
+        working-directory: LibreLinux
+        run: |
+          cmake -B build-packaging -G Ninja \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_PREFIX_PATH="$LM_PREFIX" \
+            -DLIBRELINUX_USE_INSTALLED_AGENT_CORE=ON
+
+      - name: The build declared every source it needs
+        working-directory: LibreLinux
+        run: |
+          test ! -e build-packaging/_deps || {
+            echo "::error::the build fetched a dependency; every source a package build needs must be declared"
+            exit 1
+          }
+
+      - name: Build
+        working-directory: LibreLinux
+        run: cmake --build build-packaging -j4
+
+      - name: Package payload matches the install manifest
+        # Compares packaging/payload/*.files with a real staged install in both
+        # directions. A pattern matching nothing is an error here too.
+        working-directory: LibreLinux
+        run: |
+          DESTDIR="$PWD/_stage" cmake --install build-packaging --prefix /usr
+          packaging/payload/check.sh "$PWD/_stage/usr"

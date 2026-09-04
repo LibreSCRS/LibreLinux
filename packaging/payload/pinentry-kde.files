@@ -1,0 +1,16 @@
+# librescrs-pinentry-kde — KDE-styled secure PIN/CAN entry prompter.
+#
+# See agent.files for the format and for why this is a file rather than a list
+# inside the recipe.
+
+libexec/librescrs-pinentry-kde
+
+lib/systemd/user/librescrs-pinentry-kde.service
+
+share/dbus-1/services/org.librescrs.Prompter1.service
+share/dbus-1/session.d/org.librescrs.Prompter1.conf
+
+# The prompter's message catalogues. These had never been claimed by the recipe
+# at all, in any spelling, which is why the check treats a pattern matching
+# nothing as an error rather than as a satisfied line.
+share/locale/*/LC_MESSAGES/librescrs-pinentry-kde.mo

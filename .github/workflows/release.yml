@@ -111,7 +111,34 @@ jobs:
             CHANGELOG.md
             VERSION
             ci/scripts/check-release-lockstep.sh
+            cmake/libreagent.pin
           sparse-checkout-cone-mode: false
+
+      - name: The agent pin is the agent's tag
+        # The consumers pin the agent by commit so a build cannot drift onto
+        # whatever the agent's branch holds that hour. At release time that pin
+        # must be the commit the agent's own tag of the SAME version points at,
+        # or this component ships built against something the agent never
+        # published.
+        #
+        # The lookup dereferences. For an annotated tag the ref endpoint returns
+        # the SHA of the TAG OBJECT, not of the commit, so comparing the two
+        # directly would fail on every correctly signed tag — the same class of
+        # mistake as reading VALIDSIG's fields in the wrong order.
+        env:
+          VER: ${{ github.ref_name }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          pin=$(tr -d '[:space:]' < cmake/libreagent.pin)
+          tagsha=$(gh api repos/LibreSCRS/LibreAgent/git/ref/tags/"$VER" --jq '.object.sha')
+          type=$(gh api repos/LibreSCRS/LibreAgent/git/ref/tags/"$VER" --jq '.object.type')
+          if [ "$type" = "tag" ]; then
+            tagsha=$(gh api repos/LibreSCRS/LibreAgent/git/tags/"$tagsha" --jq '.object.sha')
+          fi
+          [ "$pin" = "$tagsha" ] || {
+            echo "::error::agent pin is not the agent's $VER tag (pin $pin, tag $tagsha)"
+            exit 1
+          }
 
       - name: Prepare release notes from CHANGELOG
         # One extractor, in ci/scripts/check-release-lockstep.sh, shared with

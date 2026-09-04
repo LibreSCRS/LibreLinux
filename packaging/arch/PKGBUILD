@@ -9,12 +9,15 @@
 #
 # Dependency chain: librescrs-middleware <= librelinux <= librekde
 #
-# Versioning: LibreLinux uses INDEPENDENT SemVer (0.x until the D-Bus wire
-# surface freezes), distinct from LibreMiddleware's version.
+# Versioning: this component no longer carries its own 0.x SemVer. It is
+# released in lockstep with the rest of the stack, and pkgver is the first
+# line of the repository's VERSION file — the same value the build stamps
+# into the installed CMake version file, so a package labelled X.Y.Z cannot
+# install a version file saying something else.
 
 pkgbase=librelinux
 pkgname=('librescrs-agent' 'librescrs-pinentry-kde')
-pkgver=0.1.0
+pkgver=5.0.0
 pkgrel=1
 arch=('x86_64' 'aarch64')
 url="https://github.com/LibreSCRS/LibreLinux"
@@ -27,6 +30,7 @@ makedepends=(
     'sdbus-cpp'                 # >=2.0 (agent + prompter D-Bus)
     'systemd-libs'              # libsystemd (event loop / sd_notify)
     'librescrs-middleware>=5.0' # LibreSCRS::* CMake config package
+    'librescrs-agent-core'      # the agent core comes from a package, not a fetch
     'openssl'                   # agent: find_package(OpenSSL COMPONENTS Crypto)
     'pcsclite'
     'p11-kit'                   # pkcs11-module: p11-kit-1.pc resolves module + .module config dirs
@@ -34,13 +38,17 @@ makedepends=(
     'qt6-base'                  # Core/Gui/Widgets/DBus/Test
     'kcoreaddons'               # KF6::CoreAddons
     'ki18n'                     # KF6::I18n
-    # Test-time only:
+    # Test-time only — but CONFIGURE-time, not check-time: agent/tests is added
+    # unconditionally and does find_package(GTest REQUIRED), so without these the
+    # build fails at configure. A clean chroot is the only place that shows: a
+    # developer machine and the CI image both have them already.
+    'gtest'                     # agent/tests/CMakeLists.txt: find_package(GTest REQUIRED)
     'dbus'                      # dbus-run-session (prompter + agent integration tests)
 )
 source=(
     "$pkgbase-$pkgver.tar.gz::https://github.com/LibreSCRS/LibreLinux/archive/refs/tags/v$pkgver.tar.gz"
 )
-# Placeholder — real sum filled at tag time with `updpkgsums`. The v0.1.0 tag
+# Placeholder — real sum filled at tag time with `updpkgsums`. The 5.0.0 tag
 # does not exist yet (repo unpublished); see README.md for the local-dogfood
 # build that needs no remote.
 sha256sums=('SKIP')
@@ -53,9 +61,19 @@ build() {
     # NOT pass LIBRELINUX_USER_INSTALL (that is the dogfood-into-$HOME mode).
     # The prompter is ON by default (LIBRELINUX_BUILD_PROMPTER_KDE) so a single
     # build produces both split-package payloads.
+    #
+    # LIBRELINUX_USE_INSTALLED_AGENT_CORE is not optional here. Its default is
+    # OFF, which fetches the agent core and then its CBOR codec over the
+    # network. In a network-less chroot that aborts; where it succeeds it is
+    # worse, because the package is then built from a development commit rather
+    # than from the agent's published tag — the one thing the publication order
+    # exists to guarantee. Declaring librescrs-agent-core as a build dependency
+    # makes the package manager enforce that order instead of a human
+    # remembering it.
     cmake -S . -B build -G Ninja \
         -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-        -DCMAKE_INSTALL_PREFIX=/usr
+        -DCMAKE_INSTALL_PREFIX=/usr \
+        -DLIBRELINUX_USE_INSTALLED_AGENT_CORE=ON
     cmake --build build -j4
 }
 
@@ -65,6 +83,58 @@ check() {
     # tests spin a private bus via dbus-run-session (dbus is a makedepend).
     # Live-card/PIN suites self-skip without a reader + LIBRESCRS_TEST_* env.
     QT_QPA_PLATFORM=offscreen ctest --test-dir build --output-on-failure -j4
+}
+
+# --- shared staging -----------------------------------------------------------
+# One install tree, carved into the two packages by the lists under
+# packaging/payload/. The lists are the same ones packaging/payload/check.sh
+# compares against a real staged install in both directions, so the recipe and
+# the install rules cannot drift apart without the check saying so. They used
+# to be spelled out here by hand, and they had drifted: two paths named files
+# nothing installs (the package aborted partway through under `set -e`) and two
+# message catalogues were never claimed at all.
+_stage_once() {
+    local stage="$srcdir/stage"
+    if [ ! -d "$stage" ]; then
+        rm -rf "$stage"
+        DESTDIR="$stage" cmake --install build
+    fi
+}
+
+# _install_payload <payload-name>
+#
+# Copies everything the named list claims out of the staged tree into $pkgdir,
+# preserving the mode rule this recipe has always used: what lives under
+# libexec/ or lib/pkcs11/ is executable, the rest is data.
+#
+# A pattern that expands to nothing is an ERROR, not a satisfied line: a rename
+# that stops matching has to fail loudly rather than ship a package quietly
+# missing a file. That is exactly how the message catalogues went missing.
+_install_payload() {
+    local list="$srcdir/LibreLinux-$pkgver/packaging/payload/$1.files"
+    local stage="$srcdir/stage"
+    local pattern hit rel mode n
+
+    [ -f "$list" ] || { echo "packaging: payload list $list is missing" >&2; return 1; }
+
+    while IFS= read -r pattern || [ -n "$pattern" ]; do
+        case "$pattern" in ''|'#'*) continue;; esac
+        n=0
+        while IFS= read -r hit; do
+            [ -f "$hit" ] || continue
+            rel=${hit#"$stage"/usr/}
+            case "$rel" in
+                libexec/*|lib/pkcs11/*) mode=755 ;;
+                *)                      mode=644 ;;
+            esac
+            install -Dm"$mode" "$hit" "$pkgdir/usr/$rel" || return 1
+            n=$((n + 1))
+        done < <(compgen -G "$stage/usr/$pattern" || true)
+        if [ "$n" -eq 0 ]; then
+            echo "packaging: '$pattern' in $1.files matches nothing in the staged tree" >&2
+            return 1
+        fi
+    done < "$list"
 }
 
 # --- librescrs-agent: headless, Qt-free D-Bus session service -----------------
@@ -85,46 +155,8 @@ package_librescrs-agent() {
     )
     cd "$srcdir/LibreLinux-$pkgver"
 
-    # Install the full tree to a private staging dir, then move the agent's
-    # files into this subpackage. The prompter's files go to the other one.
-    local stage="$srcdir/stage"
-    rm -rf "$stage"
-    DESTDIR="$stage" cmake --install build
-
-    # Agent payload:
-    #   libexec/librescrs-agent
-    #   systemd user unit + D-Bus activation service (agent)
-    #   the shared interface XMLs (all of them — they describe the agent's API)
-    #   the session-bus policy (agent) + the polkit action (system dir)
-    install -Dm755 "$stage/usr/libexec/librescrs-agent" \
-        "$pkgdir/usr/libexec/librescrs-agent"
-
-    install -Dm644 "$stage/usr/lib/systemd/user/librescrs-agent.service" \
-        "$pkgdir/usr/lib/systemd/user/librescrs-agent.service"
-    install -Dm644 "$stage/usr/share/dbus-1/services/org.librescrs.Agent.service" \
-        "$pkgdir/usr/share/dbus-1/services/org.librescrs.Agent.service"
-
-    # All interface XMLs ship with the agent (it implements them).
-    install -d "$pkgdir/usr/share/dbus-1/interfaces"
-    cp -a "$stage/usr/share/dbus-1/interfaces/." \
-        "$pkgdir/usr/share/dbus-1/interfaces/"
-
-    install -Dm644 "$stage/usr/share/dbus-1/session.d/org.librescrs.Agent1.conf" \
-        "$pkgdir/usr/share/dbus-1/session.d/org.librescrs.Agent1.conf"
-    install -Dm644 "$stage/usr/share/polkit-1/actions/org.librescrs.agent.configure.policy" \
-        "$pkgdir/usr/share/polkit-1/actions/org.librescrs.agent.configure.policy"
-
-    # PKCS#11 agent-proxy module (Qt-free, libcrypto-free): the .so brokers the
-    # C_* ABI to this agent over D-Bus, the .module registers it with p11-kit so
-    # ssh/NSS/Firefox auto-discover it, and the user unit runs `p11-kit server`
-    # for out-of-process isolation. p11-kit-1.pc resolves the dirs (build()),
-    # falling back to /usr/lib/pkcs11 and /usr/share/p11-kit/modules.
-    install -Dm755 "$stage/usr/lib/pkcs11/librescrs-pkcs11-agent.so" \
-        "$pkgdir/usr/lib/pkcs11/librescrs-pkcs11-agent.so"
-    install -Dm644 "$stage/usr/share/p11-kit/modules/librescrs-agent.module" \
-        "$pkgdir/usr/share/p11-kit/modules/librescrs-agent.module"
-    install -Dm644 "$stage/usr/lib/systemd/user/librescrs-p11-server.service" \
-        "$pkgdir/usr/lib/systemd/user/librescrs-p11-server.service"
+    _stage_once
+    _install_payload agent
 
     install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }
@@ -142,25 +174,8 @@ package_librescrs-pinentry-kde() {
     )
     cd "$srcdir/LibreLinux-$pkgver"
 
-    local stage="$srcdir/stage"
-    if [ ! -d "$stage" ]; then
-        rm -rf "$stage"
-        DESTDIR="$stage" cmake --install build
-    fi
-
-    # Prompter payload:
-    #   libexec/librescrs-pinentry-kde
-    #   systemd user unit + D-Bus activation service (prompter)
-    #   the prompter session-bus policy
-    install -Dm755 "$stage/usr/libexec/librescrs-pinentry-kde" \
-        "$pkgdir/usr/libexec/librescrs-pinentry-kde"
-
-    install -Dm644 "$stage/usr/lib/systemd/user/librescrs-pinentry-kde.service" \
-        "$pkgdir/usr/lib/systemd/user/librescrs-pinentry-kde.service"
-    install -Dm644 "$stage/usr/share/dbus-1/services/org.librescrs.Prompter.service" \
-        "$pkgdir/usr/share/dbus-1/services/org.librescrs.Prompter.service"
-    install -Dm644 "$stage/usr/share/dbus-1/session.d/org.librescrs.Prompter1.conf" \
-        "$pkgdir/usr/share/dbus-1/session.d/org.librescrs.Prompter1.conf"
+    _stage_once
+    _install_payload pinentry-kde
 
     install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }

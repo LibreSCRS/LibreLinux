@@ -1,0 +1,28 @@
+# librescrs-agent — headless, Qt-free D-Bus session service.
+#
+# Prefix-relative paths, one per line, `#` comments and shell globs allowed.
+# The recipe loops over this file and the payload check compares it with a real
+# `cmake --install` tree in BOTH directions, so a path listed here that nothing
+# installs and a file installed that nothing claims are equally errors. So is a
+# glob that expands to nothing: that is how two message catalogues went
+# unclaimed for a whole release without anyone noticing.
+#
+# usr/share/licenses/<pkg>/LICENSE is installed by the recipe from the source
+# tree rather than from the staged install, so it is not listed here.
+
+libexec/librescrs-agent
+
+lib/systemd/user/librescrs-agent.service
+lib/systemd/user/librescrs-p11-server.service
+
+# The PKCS#11 agent-proxy module and its p11-kit registration.
+lib/pkcs11/librescrs-pkcs11-agent.so
+share/p11-kit/modules/librescrs-agent.module
+
+share/dbus-1/services/org.librescrs.Agent.service
+share/dbus-1/session.d/org.librescrs.Agent.conf
+
+# All interface XMLs ship with the agent: it implements them.
+share/dbus-1/interfaces/*.xml
+
+share/polkit-1/actions/org.librescrs.agent.configure.policy
