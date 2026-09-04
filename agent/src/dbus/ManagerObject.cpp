@@ -539,8 +539,17 @@ void ManagerObject::SetValue(const std::string& key, const sdbus::Variant& value
     if (*m == Config::Mutability::FileOnly || *m == Config::Mutability::ReadOnly) {
         throw sdbus::Error{sdbus::Error::Name{kErrReadOnly}, "Config key not settable over D-Bus: " + key};
     }
-    if (!m_authorizer.authorize(actionFor(*m), CallerToken{callerBusName()})) {
+    switch (m_authorizer.authorize(actionFor(*m), CallerToken{callerBusName()})) {
+    case AuthorizationOutcome::Granted:
+        break;
+    case AuthorizationOutcome::Denied:
         throw sdbus::Error{sdbus::Error::Name{kErrNotAuthorized}, "Not authorized to set " + key};
+    case AuthorizationOutcome::Undecided:
+        // Nothing was decided and nothing was changed. Saying "not authorized"
+        // here tells a person who authenticated correctly that they were
+        // refused -- a claim about a security decision nobody made.
+        throw sdbus::Error{sdbus::Error::Name{LibreLinux::AgentWire::kErrCommunication},
+                           "The authorization service did not answer; nothing was changed"};
     }
     Config::ConfigStore::SetResult r{false, kErrUnknownKey, "No setter for config key: " + key};
     try {
@@ -587,8 +596,14 @@ void ManagerObject::Reset(const std::string& key)
     if (*m == Config::Mutability::FileOnly || *m == Config::Mutability::ReadOnly) {
         throw sdbus::Error{sdbus::Error::Name{kErrReadOnly}, "Config key not settable over D-Bus: " + key};
     }
-    if (!m_authorizer.authorize(actionFor(*m), CallerToken{callerBusName()})) {
+    switch (m_authorizer.authorize(actionFor(*m), CallerToken{callerBusName()})) {
+    case AuthorizationOutcome::Granted:
+        break;
+    case AuthorizationOutcome::Denied:
         throw sdbus::Error{sdbus::Error::Name{kErrNotAuthorized}, "Not authorized to reset " + key};
+    case AuthorizationOutcome::Undecided:
+        throw sdbus::Error{sdbus::Error::Name{LibreLinux::AgentWire::kErrCommunication},
+                           "The authorization service did not answer; nothing was changed"};
     }
     const auto r = m_config.resetKey(key, /*fromDbus=*/true);
     if (!r.ok) {
@@ -609,8 +624,17 @@ std::map<std::string, sdbus::Variant> ManagerObject::ImportCscaMasterList(const 
     // The polkit action is the trust one, shared with CscaSources: an import is
     // a larger trust change than naming a source, not a smaller one.
     const std::string sender = callerBusName();
-    if (!m_authorizer.authorize(kActionConfigureTrust, CallerToken{sender})) {
+    switch (m_authorizer.authorize(kActionConfigureTrust, CallerToken{sender})) {
+    case AuthorizationOutcome::Granted:
+        break;
+    case AuthorizationOutcome::Denied:
         throw sdbus::Error{sdbus::Error::Name{kErrNotAuthorized}, "Not authorized to import country signing anchors"};
+    case AuthorizationOutcome::Undecided:
+        // Nothing was decided and nothing was changed. Saying "not authorized"
+        // here tells a person who authenticated correctly that they were
+        // refused -- a claim about a security decision nobody made.
+        throw sdbus::Error{sdbus::Error::Name{LibreLinux::AgentWire::kErrCommunication},
+                           "The authorization service did not answer; nothing was changed"};
     }
     if (!m_rateLimiter.allow(CallerToken{sender})) {
         throw sdbus::Error{sdbus::Error::Name{kErrRateLimited}, "Too many anchor imports; try again shortly"};
@@ -684,8 +708,14 @@ std::tuple<uint64_t, bool> ManagerObject::ForgetCscaAnchors()
     // an unrelated reason. Shape is handleSetConfig's trust tier: authorise,
     // then act. Agreed with the socket host so both answer alike.
     const std::string sender = callerBusName();
-    if (!m_authorizer.authorize(kActionConfigureTrust, CallerToken{sender})) {
+    switch (m_authorizer.authorize(kActionConfigureTrust, CallerToken{sender})) {
+    case AuthorizationOutcome::Granted:
+        break;
+    case AuthorizationOutcome::Denied:
         throw sdbus::Error{sdbus::Error::Name{kErrNotAuthorized}, "Not authorized to forget country signing anchors"};
+    case AuthorizationOutcome::Undecided:
+        throw sdbus::Error{sdbus::Error::Name{LibreLinux::AgentWire::kErrCommunication},
+                           "The authorization service did not answer; nothing was changed"};
     }
 
     // The library decides WHAT a forget is and in which order the two halves

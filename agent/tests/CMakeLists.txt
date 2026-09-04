@@ -348,6 +348,17 @@ add_test(NAME Config1Test
     COMMAND ${DBUS_RUN_SESSION} -- $<TARGET_FILE:Config1Test>)
 set_tests_properties(Config1Test PROPERTIES TIMEOUT 120)
 
+# Real PolkitAuthorizer against a fake polkit authority: asserts the D-Bus
+# error name a client receives distinguishes a refusal from a silence.
+add_executable(PolkitAuthorizerOutcomeTest PolkitAuthorizerOutcomeTest.cpp)
+target_link_libraries(PolkitAuthorizerOutcomeTest PRIVATE
+    LibreLinuxAgentCore
+    GTest::gtest
+    GTest::gtest_main)
+add_test(NAME PolkitAuthorizerOutcomeTest
+    COMMAND ${DBUS_RUN_SESSION} -- $<TARGET_FILE:PolkitAuthorizerOutcomeTest>)
+set_tests_properties(PolkitAuthorizerOutcomeTest PROPERTIES TIMEOUT 120)
+
 # Card1.ReadIdentity / GetPhoto end-to-end — capability gate + enqueue path.
 add_executable(CardObjectOperationsTest CardObjectOperationsTest.cpp)
 target_link_libraries(CardObjectOperationsTest PRIVATE

@@ -8,6 +8,7 @@
 #include <sdbus-c++/IConnection.h>
 #include <sdbus-c++/IProxy.h>
 #include <sdbus-c++/Types.h>
+#include <chrono>
 #include <sstream>
 #include <string>
 #include <tuple>
@@ -32,6 +33,19 @@ constexpr const char* kDBusIface = "org.freedesktop.DBus";
 // polkit CheckAuthorization flag: allow the authority to interact with the
 // user (so auth_self/auth_admin actions can prompt). 0x1 == AllowUserInteraction.
 constexpr std::uint32_t kAllowUserInteraction = 0x1u;
+
+// CheckAuthorization is answered by a PERSON, not by a machine: with
+// AllowUserInteraction set, an auth_self action puts a password dialog on
+// screen and this call does not return until it is answered. The inherited
+// D-Bus default of 25s is a machine's budget and it expires mid-ceremony.
+//
+// Sized deliberately BELOW the client's own authorized-call budget
+// (AgentClient::kAuthorizedCallTimeoutMs, 120000ms) with room left for the
+// rest of the method. If this leg outlasted the client's, the client would
+// abandon the call while the agent went on to APPLY the change, and the user
+// would be told nothing happened after something did -- the same lie this
+// fix removes, pointed the other way.
+constexpr std::chrono::seconds kAuthorizationBudget{90};
 
 } // namespace
 
@@ -104,7 +118,7 @@ public:
         m_dbusProxy = sdbus::createProxy(m_sessionBus, sdbus::ServiceName{kDBusService}, sdbus::ObjectPath{kDBusPath});
     }
 
-    bool authorize(std::string_view actionId, const CallerToken& caller)
+    AuthorizationOutcome authorize(std::string_view actionId, const CallerToken& caller)
     {
         // The transport-resolved caller token carries the Linux unique bus name;
         // derive it once and reuse for pid/uid resolution and the warn logs.
@@ -112,25 +126,23 @@ public:
 
         // Empty bus name -> an internal/agent-originated mutation (no external
         // D-Bus caller). We do NOT consult polkit (there is no subject to
-        // build) and fail-CLOSED: the only external entry points pass a real
-        // unique name, so an empty name here would be an internal misuse, not a
-        // legitimate request. Returning false keeps the trust tier locked
-        // rather than silently auto-allowing.
+        // build) — nothing was decided, so this is Undecided like every other
+        // "could not even ask" case below, not a policy Denial.
         if (busName.empty()) {
-            log::warn("PolkitAuthorizer: empty caller bus name; denying (no polkit subject)");
-            return false;
+            log::warn("PolkitAuthorizer: empty caller bus name; undecided (no polkit subject)");
+            return AuthorizationOutcome::Undecided;
         }
 
         const auto pid = resolveCallerPid(busName);
         if (!pid.has_value()) {
-            log::warnf("PolkitAuthorizer: could not resolve pid for {}; denying", busName);
-            return false;
+            log::warnf("PolkitAuthorizer: could not resolve pid for {}; undecided", busName);
+            return AuthorizationOutcome::Undecided;
         }
 
         const auto startTime = readStartTime(*pid);
         if (!startTime.has_value()) {
-            log::warnf("PolkitAuthorizer: could not read start-time for pid {}; denying", *pid);
-            return false;
+            log::warnf("PolkitAuthorizer: could not read start-time for pid {}; undecided", *pid);
+            return AuthorizationOutcome::Undecided;
         }
 
         auto details = PolkitDetail::buildUnixProcessDetails(*pid, *startTime, readUid(busName));
@@ -138,7 +150,8 @@ public:
         try {
             // CheckAuthorization signature: (sa{sv}) s a{ss} u s -> (b b a{ss}).
             // subject = ("unix-process", details); empty action-details; flags
-            // with AllowUserInteraction; empty cancellation id.
+            // with AllowUserInteraction; empty cancellation id. Timeout widened
+            // to kAuthorizationBudget -- see its comment above.
             sdbus::Struct<std::string, std::map<std::string, sdbus::Variant>> subject{std::string{"unix-process"},
                                                                                       std::move(details)};
             const std::map<std::string, std::string> emptyDetails;
@@ -146,18 +159,20 @@ public:
             sdbus::Struct<bool, bool, std::map<std::string, std::string>> reply;
             m_polkitProxy->callMethod("CheckAuthorization")
                 .onInterface(sdbus::InterfaceName{kPolkitIface})
+                .withTimeout(kAuthorizationBudget)
                 .withArguments(subject, std::string{actionId}, emptyDetails, kAllowUserInteraction, std::string{})
                 .storeResultsTo(reply);
 
             const bool isAuthorized = reply.get<0>();
             const bool isChallenge = reply.get<1>();
-            return PolkitDetail::interpretReply(isAuthorized, isChallenge);
+            return PolkitDetail::interpretReply(isAuthorized, isChallenge) ? AuthorizationOutcome::Granted
+                                                                           : AuthorizationOutcome::Denied;
         } catch (const sdbus::Error& e) {
-            log::warnf("PolkitAuthorizer: CheckAuthorization failed: {}; denying", e.getMessage());
-            return false;
+            log::warnf("PolkitAuthorizer: CheckAuthorization failed: {}; undecided", e.getMessage());
+            return AuthorizationOutcome::Undecided;
         } catch (const std::exception& e) {
-            log::warnf("PolkitAuthorizer: CheckAuthorization threw: {}; denying", e.what());
-            return false;
+            log::warnf("PolkitAuthorizer: CheckAuthorization threw: {}; undecided", e.what());
+            return AuthorizationOutcome::Undecided;
         }
     }
 
@@ -218,7 +233,7 @@ PolkitAuthorizer::PolkitAuthorizer(sdbus::IConnection& sessionBus) : m_impl(std:
 
 PolkitAuthorizer::~PolkitAuthorizer() = default;
 
-bool PolkitAuthorizer::authorize(std::string_view actionId, const CallerToken& caller)
+AuthorizationOutcome PolkitAuthorizer::authorize(std::string_view actionId, const CallerToken& caller)
 {
     return m_impl->authorize(actionId, caller);
 }

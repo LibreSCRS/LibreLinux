@@ -32,9 +32,9 @@ constexpr const char* kProps = "org.freedesktop.DBus.Properties";
 class DenyAuthorizer final : public Authorizer
 {
 public:
-    bool authorize(std::string_view, const CallerToken&) override
+    AuthorizationOutcome authorize(std::string_view, const CallerToken&) override
     {
-        return false;
+        return AuthorizationOutcome::Denied;
     }
 };
 

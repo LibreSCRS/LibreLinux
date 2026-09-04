@@ -597,9 +597,15 @@ void CardObject::authorizeCredentialMutation(const std::string& sender) const
     // per-caller rate-limit, both keyed on the caller's unique bus name and BEFORE
     // any prompt — the same authorize-then-allow ordering Card1.Sign uses, so a
     // rejected caller never reaches the consent dialog.
-    if (!m_deps.authorizer->authorize(kActionCredentialsManage, CallerToken{sender})) {
+    switch (m_deps.authorizer->authorize(kActionCredentialsManage, CallerToken{sender})) {
+    case AuthorizationOutcome::Granted:
+        break;
+    case AuthorizationOutcome::Denied:
         throw sdbus::Error{sdbus::Error::Name{LibreLinux::AgentWire::kErrNotAuthorized},
                            "Not authorized to manage credentials"};
+    case AuthorizationOutcome::Undecided:
+        throw sdbus::Error{sdbus::Error::Name{LibreLinux::AgentWire::kErrCommunication},
+                           "The authorization service did not answer; nothing was changed"};
     }
     if (!m_deps.rateLimiter->allow(CallerToken{sender})) {
         throw sdbus::Error{sdbus::Error::Name{LibreLinux::AgentWire::kErrRateLimited},
@@ -826,8 +832,14 @@ sdbus::ObjectPath CardObject::Sign(const std::string& certId, const sdbus::UnixF
     // BEFORE ingesting the document, so a rejected caller never makes the agent
     // read (up to 256 MiB off) the input fd.
     const std::string sender = callerSender();
-    if (!m_deps.authorizer->authorize(kActionSign, CallerToken{sender})) {
+    switch (m_deps.authorizer->authorize(kActionSign, CallerToken{sender})) {
+    case AuthorizationOutcome::Granted:
+        break;
+    case AuthorizationOutcome::Denied:
         throw sdbus::Error{sdbus::Error::Name{LibreLinux::AgentWire::kErrNotAuthorized}, "Not authorized to sign"};
+    case AuthorizationOutcome::Undecided:
+        throw sdbus::Error{sdbus::Error::Name{LibreLinux::AgentWire::kErrCommunication},
+                           "The authorization service did not answer; nothing was changed"};
     }
     if (!m_deps.rateLimiter->allow(CallerToken{sender})) {
         throw sdbus::Error{sdbus::Error::Name{LibreLinux::AgentWire::kErrRateLimited},
@@ -940,8 +952,14 @@ sdbus::ObjectPath CardObject::SignBatch(const std::vector<sdbus::Struct<std::str
     // one SignBatch call (of any size 1-12) always costs exactly one charge,
     // exactly like one Sign call costs one charge regardless of document size.
     const std::string sender = callerSender();
-    if (!m_deps.authorizer->authorize(kActionSign, CallerToken{sender})) {
+    switch (m_deps.authorizer->authorize(kActionSign, CallerToken{sender})) {
+    case AuthorizationOutcome::Granted:
+        break;
+    case AuthorizationOutcome::Denied:
         throw sdbus::Error{sdbus::Error::Name{LibreLinux::AgentWire::kErrNotAuthorized}, "Not authorized to sign"};
+    case AuthorizationOutcome::Undecided:
+        throw sdbus::Error{sdbus::Error::Name{LibreLinux::AgentWire::kErrCommunication},
+                           "The authorization service did not answer; nothing was changed"};
     }
     if (!m_deps.rateLimiter->allow(CallerToken{sender})) {
         throw sdbus::Error{sdbus::Error::Name{LibreLinux::AgentWire::kErrRateLimited},

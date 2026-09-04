@@ -61,18 +61,18 @@ constexpr const char* kMethod = "ImportCscaMasterList";
 class DenyAuthorizer final : public Authorizer
 {
 public:
-    bool authorize(std::string_view, const CallerToken&) override
+    AuthorizationOutcome authorize(std::string_view, const CallerToken&) override
     {
-        return false;
+        return AuthorizationOutcome::Denied;
     }
 };
 
 class AllowAuthorizer final : public Authorizer
 {
 public:
-    bool authorize(std::string_view, const CallerToken&) override
+    AuthorizationOutcome authorize(std::string_view, const CallerToken&) override
     {
-        return true;
+        return AuthorizationOutcome::Granted;
     }
 };
 

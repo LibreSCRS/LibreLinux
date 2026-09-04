@@ -156,11 +156,11 @@ TEST(PolkitReply, NotAuthorizedIsDenied)
 TEST(DefaultAuthorizer, AllowsConfigureAndSignOnly)
 {
     DefaultAuthorizer auth;
-    EXPECT_TRUE(auth.authorize(kActionConfigure, CallerToken{":1.7"}));
-    EXPECT_TRUE(auth.authorize(kActionSign, CallerToken{":1.7"}));
-    EXPECT_FALSE(auth.authorize(kActionConfigureTrust, CallerToken{":1.7"}));
-    EXPECT_FALSE(auth.authorize("org.librescrs.agent.future.unknown", CallerToken{":1.7"}));
-    EXPECT_FALSE(auth.authorize("", CallerToken{":1.7"}));
+    EXPECT_EQ(auth.authorize(kActionConfigure, CallerToken{":1.7"}), AuthorizationOutcome::Granted);
+    EXPECT_EQ(auth.authorize(kActionSign, CallerToken{":1.7"}), AuthorizationOutcome::Granted);
+    EXPECT_EQ(auth.authorize(kActionConfigureTrust, CallerToken{":1.7"}), AuthorizationOutcome::Denied);
+    EXPECT_EQ(auth.authorize("org.librescrs.agent.future.unknown", CallerToken{":1.7"}), AuthorizationOutcome::Denied);
+    EXPECT_EQ(auth.authorize("", CallerToken{":1.7"}), AuthorizationOutcome::Denied);
 }
 
 // PKCS#11 lease establishment shares the sign posture: default-allow,
@@ -169,5 +169,5 @@ TEST(DefaultAuthorizer, AllowsConfigureAndSignOnly)
 TEST(DefaultAuthorizer, AllowsPkcs11Login)
 {
     DefaultAuthorizer auth;
-    EXPECT_TRUE(auth.authorize(kActionPkcs11Login, CallerToken{":1.7"}));
+    EXPECT_EQ(auth.authorize(kActionPkcs11Login, CallerToken{":1.7"}), AuthorizationOutcome::Granted);
 }

@@ -56,8 +56,9 @@ namespace PolkitDetail {
 // session-bus handle is injected by ctor-DI (AgentService already owns it) and
 // is used only to resolve callerBusName -> pid via the bus daemon.
 //
-// Fail-closed: any failure to reach polkit, resolve the pid, or parse the
-// reply yields a deny (authorize() returns false) and a single warn log.
+// Undecided (not a deny): any failure to reach polkit, resolve the pid, or
+// parse the reply -- nothing was decided, so nothing is told to the caller as
+// a refusal.
 class PolkitAuthorizer final : public Authorizer
 {
 public:
@@ -70,7 +71,7 @@ public:
     PolkitAuthorizer(PolkitAuthorizer&&) = delete;
     PolkitAuthorizer& operator=(PolkitAuthorizer&&) = delete;
 
-    [[nodiscard]] bool authorize(std::string_view actionId, const CallerToken& caller) override;
+    [[nodiscard]] AuthorizationOutcome authorize(std::string_view actionId, const CallerToken& caller) override;
 
 private:
     class Impl;

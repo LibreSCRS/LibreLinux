@@ -205,9 +205,9 @@ public:
 class DenyAllAuthorizer final : public Authorizer
 {
 public:
-    [[nodiscard]] bool authorize(std::string_view, const CallerToken&) override
+    [[nodiscard]] AuthorizationOutcome authorize(std::string_view, const CallerToken&) override
     {
-        return false;
+        return AuthorizationOutcome::Denied;
     }
 };
 
