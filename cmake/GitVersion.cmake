@@ -13,17 +13,21 @@ if(NOT DEFINED GIT_EXECUTABLE)
     find_package(Git QUIET REQUIRED)
 endif()
 
-if(GIT_EXECUTABLE)
-  # CMAKE_CURRENT_LIST_DIR is the cmake/ subdir hosting this module, so
-  # `${CMAKE_CURRENT_LIST_DIR}/..` is LM root regardless of how LM is
-  # consumed. PROJECT_SOURCE_DIR is not yet set at the time this module
-  # is include()d (project() hasn't been called yet — it needs the
-  # version this file derives), and CMAKE_SOURCE_DIR would point at the
-  # consumer (LibreCelik) when LM is fetched via FetchContent.
-  set(SRC_DIR "${CMAKE_CURRENT_LIST_DIR}/..")
+# CMAKE_CURRENT_LIST_DIR is the cmake/ subdir hosting this module, so
+# `${CMAKE_CURRENT_LIST_DIR}/..` is the repository root regardless of how this
+# repository is consumed. PROJECT_SOURCE_DIR is not yet set at the time this
+# module is include()d (project() has not been called yet -- it needs the
+# version this file derives). It is set OUTSIDE the GIT_EXECUTABLE branch
+# because the VERSION fallback below needs it in exactly the case where git is
+# not what answers.
+set(SRC_DIR "${CMAKE_CURRENT_LIST_DIR}/..")
 
+if(GIT_EXECUTABLE)
+  # Only consider release-style semver tags (e.g. 5.0.0, v5.0.0-rc1); never
+  # local rollback tags (backup/*, pre-*, ...), which are not version strings
+  # and would otherwise yield an empty ".." version on reconfigure.
   execute_process(
-    COMMAND ${GIT_EXECUTABLE} describe --tags --abbrev=0
+    COMMAND ${GIT_EXECUTABLE} describe --tags --abbrev=0 --match "[0-9]*" --match "v[0-9]*"
     WORKING_DIRECTORY ${SRC_DIR}
     OUTPUT_VARIABLE GIT_DESCRIBE_VERSION
     RESULT_VARIABLE GIT_DESCRIBE_ERROR_CODE
@@ -38,8 +42,26 @@ if(GIT_EXECUTABLE)
 endif()
 
 if(NOT DEFINED PROJECT_VERSION)
+  # Release tarballs (makepkg, GitHub source archives) ship WITHOUT a .git tree,
+  # so `git describe` above cannot run. The committed top-level VERSION file is
+  # the authoritative fallback BEFORE the 0.0.1 last-resort: without it a
+  # tarball build silently stamps PROJECT_VERSION 0.0.1, which every downstream
+  # `find_package(... CONFIG)` against an installed package then rejects.
+  # VERSION carries the version this tree is heading for, not the last one it
+  # shipped. It is bumped at code freeze, which is what lets the
+  # CHANGELOG/VERSION check run on every push instead of first executing on a
+  # permanent tag. A development checkout is unaffected: `git describe` still
+  # wins, and VERSION is only the fallback for a tarball with no `.git`.
+  if(EXISTS "${SRC_DIR}/VERSION")
+    file(STRINGS "${SRC_DIR}/VERSION" PROJECT_VERSION LIMIT_COUNT 1)
+    string(STRIP "${PROJECT_VERSION}" PROJECT_VERSION)
+    string(REGEX REPLACE "^v" "" PROJECT_VERSION "${PROJECT_VERSION}")
+  endif()
+endif()
+
+if(NOT PROJECT_VERSION)
   set(PROJECT_VERSION 0.0.1)
-  message(WARNING "Failed to determine PROJECT_VERSION from Git tags. Using default version \"${PROJECT_VERSION}\".")
+  message(WARNING "Failed to determine PROJECT_VERSION from Git tags or the VERSION file. Using default version \"${PROJECT_VERSION}\".")
 endif()
 
 # Extract semantic version components; strip pre-release for CMake project(VERSION ...)

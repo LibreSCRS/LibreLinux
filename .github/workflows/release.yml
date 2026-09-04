@@ -105,25 +105,26 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          sparse-checkout: CHANGELOG.md
+          sparse-checkout: |
+            CHANGELOG.md
+            VERSION
+            ci/scripts/check-release-lockstep.sh
           sparse-checkout-cone-mode: false
 
       - name: Prepare release notes from CHANGELOG
-        # Extract the section whose `## ` header contains the tag version
-        # (matches `## [X.Y.Z]`, `## [X.Y.Z] — date`, or
-        # `## [Unreleased] — X.Y.Z`). Fall back to auto-generated notes when the
-        # CHANGELOG has no section for this tag so a release never ships empty
-        # notes. --generate-notes and --notes-file are mutually exclusive, hence
-        # the shell branch.
+        # One extractor, in ci/scripts/check-release-lockstep.sh, shared with
+        # the per-push agreement check. It used to be copied inline into every
+        # release workflow, and one of the copies had drifted: without escaping
+        # the version's dots, tag 5.0.0 also matched a [500.0] heading.
+        #
+        # --section exits non-zero when the section is missing OR holds only
+        # whitespace. Both have to fall back: `gh release create --notes-file`
+        # accepts a blank file and publishes a release with no body at all.
+        # --generate-notes and --notes-file are mutually exclusive, hence the
+        # shell branch.
         run: |
           VER="${GITHUB_REF_NAME#v}"
-          awk -v ver="$VER" \
-            '/^## / { if ($0 ~ ("(\\[|[[:space:]])" ver "(\\]|[[:space:]]|$)")) {f=1; next} else if (f) exit } f' \
-            CHANGELOG.md > "$RUNNER_TEMP/relnotes.md"
-          # A plain size test would accept a section that exists but holds only
-          # blank lines, which publishes an empty release body; require at
-          # least one non-whitespace byte before using the file.
-          if grep -q '[^[:space:]]' "$RUNNER_TEMP/relnotes.md"; then
+          if ci/scripts/check-release-lockstep.sh --section "$VER" > "$RUNNER_TEMP/relnotes.md"; then
             echo "NOTES_ARG=--notes-file $RUNNER_TEMP/relnotes.md" >> "$GITHUB_ENV"
           else
             echo "No CHANGELOG section for $VER — falling back to --generate-notes"
