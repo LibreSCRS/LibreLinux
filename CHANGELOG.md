@@ -3,7 +3,7 @@
 Notable user-visible changes per release. Format follows
 [Keep a Changelog](https://keepachangelog.com/) loosely.
 
-## [Unreleased] — 4.3.0
+## [Unreleased] — 5.0.0
 
 First public release of the Linux host for the LibreSCRS smart-card
 ecosystem. It ships two components: the per-user **LibreSCRS Agent**
