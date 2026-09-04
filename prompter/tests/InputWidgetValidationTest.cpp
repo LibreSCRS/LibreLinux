@@ -233,6 +233,36 @@ TEST(MrzCheckDigit, NonDigitCheckCharIsAlwaysInvalid)
     EXPECT_FALSE(LibreLinux::Prompter::MrzInputWidget::checkDigitOk(QStringLiteral("690806"), QChar(u'<')));
 }
 
+// The ICAO 9303 Part 3 4.9 check digit (weights 7,3,1) is computed in three
+// places in this workspace, and no two of them can share an implementation:
+// the middleware's throws on a non-MRZ character, the agent's returns -1
+// without ever materialising the secret bytes as a std::string, and this one
+// walks QChar and returns a null QChar. Unifying them would cost a new
+// published middleware API to save forty lines.
+//
+// So they are pinned to one table of golden vectors, asserted independently
+// from each package. These ten are the same ten in LibreMiddleware
+// (test/emrtd_crypto_test.cpp, BACTestVectors.ICAO9303CheckDigits) and
+// LibreAgent (tests/MrzPayloadTest.cpp, MrzPayload.IcaoGoldenCheckDigits).
+TEST(MrzCheckDigit, IcaoGoldenVectors)
+{
+    using W = LibreLinux::Prompter::MrzInputWidget;
+    struct Vector
+    {
+        const char16_t* field;
+        char16_t digit;
+    };
+    static constexpr Vector kVectors[] = {
+        {u"L898902C<", u'3'}, {u"740727", u'3'},       {u"120714", u'9'},    {u"690806", u'1'}, {u"940623", u'6'},
+        {u"AB1234<<<", u'1'}, {u"D23145890734", u'9'}, {u"ZE184226B", u'1'}, {u"", u'0'},       {u"<<<<<<<<<", u'0'},
+    };
+
+    for (const Vector& v : kVectors) {
+        EXPECT_EQ(W::computeCheckDigit(QString::fromUtf16(v.field)), QChar(v.digit))
+            << "disagrees on \"" << QString::fromUtf16(v.field).toStdString() << "\"";
+    }
+}
+
 TEST(MrzCheckDigit, ComputeMatchesKnownVectors)
 {
     // ICAO 9303 worked-example fields: the computed digit must be the

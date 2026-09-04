@@ -148,6 +148,20 @@ target_link_libraries(WireContractGuardTest PRIVATE
     GTest::gtest_main)
 add_test(NAME WireContractGuardTest COMMAND WireContractGuardTest)
 
+# The bus error-NAME table against the agent wire's own SyncError vocabulary.
+# Two spellings of one set of refusals: moving the backend onto the wire's
+# would put LibreAgent::Wire, and qcbor with it, inside the Qt-free PKCS#11
+# module for the sake of twelve strings. The table stays; this pins it, so a
+# name that stops matching fails here instead of degrading to the generic
+# error at run time.
+add_executable(AgentErrorNameParityTest AgentErrorNameParityTest.cpp)
+target_link_libraries(AgentErrorNameParityTest PRIVATE
+    librelinux-common
+    LibreAgent::Wire
+    GTest::gtest
+    GTest::gtest_main)
+add_test(NAME AgentErrorNameParityTest COMMAND AgentErrorNameParityTest)
+
 # Machine gate for the errorCode taxonomy: pins the agent ErrorCode enum,
 # value-for-value and count, against the enumeration documented in
 # dbus/org.librescrs.Agent.Operation1.xml (the canonical wire contract — new
@@ -559,16 +573,11 @@ set_tests_properties(CredentialsDbusTest PROPERTIES TIMEOUT 120)
 
 # --- country-signing anchor import ------------------------------------------
 #
-# The synthetic master-list fixture mints its certificates with the SYSTEM
-# OpenSSL. That dependency is the test's alone: the agent consumes the published
-# LibreMiddleware trust API and links no crypto library of its own — a property
-# of the anchor import that now lives in the shared agent library.
-find_package(OpenSSL REQUIRED COMPONENTS Crypto)
-add_library(SyntheticMasterList STATIC SyntheticMasterList.cpp)
-target_include_directories(SyntheticMasterList PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(SyntheticMasterList PUBLIC OpenSSL::Crypto)
-target_compile_features(SyntheticMasterList PUBLIC cxx_std_23)
-set_target_properties(SyntheticMasterList PROPERTIES POSITION_INDEPENDENT_CODE ON)
+# The synthetic master-list fixture comes from the agent as a component of its
+# package. It used to be compiled here from a byte-identical copy of the
+# agent's source, with the header differing by one dash inside a comment: two
+# trees that had to agree, with nothing that made them agree. The fixture's own
+# OpenSSL dependency rides with the imported target.
 
 # Config1.ImportCscaMasterList over a private session bus: the authorise ->
 # rate-limit -> read ORDER (proved by the descriptor's own file offset, not by
@@ -582,7 +591,7 @@ target_compile_definitions(CscaImportDbusTest PRIVATE
     LIBRELINUX_AGENTSERVICE_CPP="${CMAKE_CURRENT_SOURCE_DIR}/../src/AgentService.cpp")
 target_link_libraries(CscaImportDbusTest PRIVATE
     LibreLinuxAgentCore
-    SyntheticMasterList
+    LibreAgent::TestSupport
     GTest::gtest
     GTest::gtest_main)
 add_test(NAME CscaImportDbusTest

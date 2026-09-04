@@ -65,6 +65,9 @@ inline std::vector<std::uint8_t> cannedModulus()
     return n;
 }
 
+// MIRROR-OF: LibreAgent/client/qt/tests/fakes/FakeAgent.h - the same agent,
+// faked twice on purpose: that one is a Qt client's peer, this one speaks
+// sdbus-c++ because this module may not link Qt at all.
 class FakeAgent
 {
 public:

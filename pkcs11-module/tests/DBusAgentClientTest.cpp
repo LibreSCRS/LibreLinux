@@ -52,6 +52,9 @@ const std::vector<std::uint8_t> kCannedExponent = {0x01, 0x00, 0x01};
 
 // Configurable fake agent. Each Pkcs11_1 method returns its canned bytes or, if
 // a non-empty error name is set, throws it.
+// MIRROR-OF: LibreAgent/client/qt/tests/fakes/FakeAgent.h - a third fake of
+// the same agent, kept because this one is scripted per test case with canned
+// bytes and thrown error names rather than driven as a shared fixture.
 class FakeAgent
 {
 public:

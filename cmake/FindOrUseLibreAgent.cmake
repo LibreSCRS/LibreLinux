@@ -35,6 +35,18 @@ if(NOT LIBREAGENT_PIN_LENGTH EQUAL 40 OR NOT LIBREAGENT_PIN MATCHES "^[0-9a-f]+$
     message(FATAL_ERROR "cmake/libreagent.pin must hold one 40-hex commit SHA")
 endif()
 
+# This backend always builds its own test tree (enable_testing() in the root
+# CMakeLists.txt is unconditional), and one of those tests drives the CSCA
+# anchor import against a synthetic master list. That fixture is the agent's,
+# and used to be carried here as a byte-identical copy; it is now asked for by
+# name. Set BEFORE the FetchContent branch below, which reads it.
+#
+# Deliberately not gated on BUILD_TESTING: this repository never defines that
+# variable, so the condition would simply be false, the component would never
+# be requested, and the fixture would go missing at link time. A gate that is
+# always closed is worse than no gate.
+set(LIBREAGENT_BUILD_TEST_SUPPORT ON CACHE BOOL "" FORCE)
+
 if(LIBRELINUX_USE_INSTALLED_AGENT_CORE)
     # The floor is a PACKAGING compatibility statement, not an API-accuracy one:
     # it says only "an agent this old cannot possibly satisfy this backend", and
@@ -46,12 +58,17 @@ if(LIBRELINUX_USE_INSTALLED_AGENT_CORE)
     # makes this branch unsatisfiable by every agent package that exists, which
     # is a build break for packagers rather than a guard.
     #
-    # The components are named because this backend needs two of them: the
-    # neutral core it has always linked, and the PKCS#11 facade the module is
-    # now built from. An unnamed request resolves whatever happens to be
-    # installed, which is how a consumer discovers a missing component at link
-    # time instead of at configure time.
-    find_package(LibreAgent 4.2 REQUIRED CONFIG COMPONENTS Core Pkcs11Facade)
+    # Name the components. Without them the lookup probes EVERY known
+    # component, which on a machine that also has the Qt client installed runs
+    # that component's find_dependency(Qt6) and fails hard for a dependency
+    # this backend never asked for: a clean chroot passes, a developer machine
+    # does not. Naming them also makes an agent package built without one of
+    # them fail configuration BY NAME here, instead of the module discovering a
+    # missing component at link time -- or the fixture test quietly
+    # disappearing. Three are needed: the neutral core this backend has always
+    # linked, the PKCS#11 facade the module is now built from, and the
+    # master-list fixture the anchor-import test links.
+    find_package(LibreAgent 4.2 REQUIRED CONFIG COMPONENTS Core Pkcs11Facade TestSupport)
     message(STATUS "LibreAgent: using installed package (CONFIG)")
 else()
     message(STATUS "LibreAgent: building from source (FetchContent, pin ${LIBREAGENT_PIN})")

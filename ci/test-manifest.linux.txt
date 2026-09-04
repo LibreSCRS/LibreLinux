@@ -1,3 +1,4 @@
+AgentErrorNameParityTest
 AgentObjectPathTest
 AgentShutdownUnderLoadTest
 AgentTransportTest

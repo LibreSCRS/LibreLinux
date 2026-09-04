@@ -53,6 +53,12 @@ QString mrzDate(const QDate& date)
 
 } // namespace
 
+// MIRROR-OF: LibreMiddleware/lib/emrtd-crypto/src/crypto_utils.cpp - ICAO 9303
+// 4.9, third writing. The three differ in what they do when the input is not
+// MRZ: that one throws, the agent's returns -1 without ever materialising the
+// secret bytes as a std::string, and this one walks QChar and returns a null
+// QChar. Unifying them costs a new public middleware API to save forty lines;
+// one table of golden vectors pins them instead.
 QChar MrzInputWidget::computeCheckDigit(const QString& fieldValue)
 {
     int sum = 0;
