@@ -1,0 +1,5 @@
+usr/libexec/librescrs-pinentry-kde
+usr/lib/systemd/user/librescrs-pinentry-kde.service
+usr/share/dbus-1/services/org.librescrs.Prompter1.service
+usr/share/dbus-1/session.d/org.librescrs.Prompter1.conf
+usr/share/locale/*/LC_MESSAGES/librescrs-pinentry-kde.mo

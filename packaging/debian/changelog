@@ -1,0 +1,15 @@
+librelinux (5.0.0-1) unstable; urgency=medium
+
+  * The agent proxy is the only registered PKCS#11 provider. The middleware
+  * Per-user smart-card agent (`librescrs-agent`). A headless,
+  * Card reading. Identity, photo and certificate reads for Serbian
+  * AdES signing. Baseline profiles from B-B through B-T
+  * PKCS#11 client module (`librescrs-pkcs11-agent`). Standard
+  * Card PIN and key management. The agent exposes a session-bus
+  * Secure entry prompter (`librescrs-pinentry-kde`). A separate
+  * Security hardening. Client authorization is gated through
+  * Country-signing trust anchors. The agent installs the CSCA
+  * Client-facing error contract. Every operation reports a stable,
+  * Arch Linux packaging. Release-shaped split packages
+
+ -- LibreSCRS <packages@librescrs.org>  Fri, 04 Sep 2026 04:13:19 +0200

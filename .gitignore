@@ -8,3 +8,6 @@ install*/
 *.user.*
 compile_commands.json
 .clangd/
+
+# Working copy of the packaging recipe; dpkg-buildpackage wants it at the root.
+/debian/

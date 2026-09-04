@@ -1,7 +1,23 @@
 #!/usr/bin/make -f
-# Initial stub.
-%:
-	dh $@ --buildsystem=cmake --builddirectory=build
 
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+export DEB_CPPFLAGS_MAINT_APPEND = -DNDEBUG
+
+%:
+	dh $@ --buildsystem=cmake+ninja --builddirectory=build
+
+# The agent core comes from a package, not from a fetch or a sibling checkout.
 override_dh_auto_configure:
-	dh_auto_configure -- -GNinja -DCMAKE_BUILD_TYPE=RelWithDebInfo
+	dh_auto_configure -- -DBUILD_TESTING=OFF -DINSTALL_GTEST=OFF \
+	                     -DLIBRELINUX_USE_INSTALLED_AGENT_CORE=ON
+
+override_dh_auto_test:
+
+# Nothing of ours enables anything. The unit is D-Bus activated, so the first
+# call starts it whether or not it is enabled, and writing an enable symlink
+# here would take that choice away from the user.
+override_dh_installsystemduser:
+	dh_installsystemduser --no-enable
+
+override_dh_missing:
+	dh_missing --fail-missing

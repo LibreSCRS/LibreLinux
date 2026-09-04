@@ -1,0 +1,11 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: LibreLinux
+Upstream-Contact: LibreSCRS <packages@librescrs.org>
+Source: https://github.com/LibreSCRS/LibreLinux
+
+Files: *
+Copyright: 2024-2026 LibreSCRS contributors
+License: LGPL-2.1-or-later
+
+License: LGPL-2.1-or-later
+ On Debian systems the full text is in /usr/share/common-licenses/LGPL-2.1.

@@ -1,18 +1,61 @@
 Source: librelinux
 Section: utils
 Priority: optional
-Maintainer: hirashix0 <noreply@librescrs.example>
-Build-Depends: debhelper-compat (= 13), cmake (>= 3.24), ninja-build,
- libsdbus-c++-dev (>= 2.0), libsystemd-dev, pkg-config,
- librescrs-middleware-dev (>= 4.2)
-Standards-Version: 4.6.0
-Homepage: https://librescrs.github.io
+Maintainer: LibreSCRS <packages@librescrs.org>
+Build-Depends: debhelper-compat (= 13),
+               cmake (>= 3.24),
+               ninja-build,
+               make,
+               pkg-config,
+               git,
+               libsdbus-c++-dev (>= 2.0),
+               libsdbus-c++-bin,
+               libsystemd-dev,
+               libssl-dev,
+               libpcsclite-dev,
+               libp11-kit-dev,
+               qt6-base-dev,
+               libkf6coreaddons-dev,
+               libkf6i18n-dev,
+               libgtest-dev,
+               dbus-daemon,
+               liblibrescrs-dev (>= 5.0),
+               librescrs-agent-core-dev (>= 5.0)
+Standards-Version: 4.7.0
+Homepage: https://github.com/LibreSCRS/LibreLinux
+Rules-Requires-Root: no
 
 Package: librescrs-agent
 Architecture: any
 Depends: ${shlibs:Depends}, ${misc:Depends},
- librescrs-middleware (>= 4.2), libsdbus-c++0 (>= 2.0)
+         liblibrescrs5 (>= 5.0),
+         librescrs-card-plugins (>= 5.0),
+         librescrs-pinentry-kde (= ${binary:Version}),
+         p11-kit
+Recommends: pcscd, policykit-1
+Conflicts: librescrs-pkcs11-direct
 Description: LibreSCRS smart-card session agent (D-Bus)
- Per-user, headless, Qt-free D-Bus session service that is the sole owner of
- smart-card access for the LibreSCRS ecosystem. Desktop-agnostic — works on
- KDE, GNOME, or any other Linux desktop. (Initial stub — flesh out before tagging.)
+ A per-user, headless, Qt-free D-Bus session service that is the sole owner of
+ smart-card access for the LibreSCRS stack. It works on any desktop.
+ .
+ Five of its files have to land in root-owned system directories -- a systemd
+ user unit, two D-Bus drop-ins, a polkit action and a p11-kit registration --
+ which is why no bundle format can deliver it and a distribution package is the
+ only shape it can take.
+ .
+ The dependency on the prompter is hard rather than suggested. An agent with no
+ prompter installs, activates over D-Bus, enumerates a card and then fails on
+ the first PIN, because the interface it calls has no implementation.
+ .
+ The agent registers a PKCS#11 proxy with p11-kit, so it conflicts with
+ librescrs-pkcs11-direct: one card must not have two providers and two security
+ models.
+
+Package: librescrs-pinentry-kde
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: Secure PIN and CAN entry prompter for the LibreSCRS agent
+ The prompter the agent calls to collect a PIN or a card access number. It is
+ styled for KDE and built on KF6, and it is currently the only implementation
+ of the prompter interface, so a GNOME or XFCE machine installs KF6::I18n and
+ KF6::CoreAddons with it.

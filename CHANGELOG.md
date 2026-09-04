@@ -5,6 +5,30 @@ Notable user-visible changes per release. Format follows
 
 ## [Unreleased] — 5.0.0
 
+### Added
+
+- **The agent and the prompter ship as distribution packages.** `deb` for
+  Debian 13 and Ubuntu 26.04 LTS, `rpm` for Fedora 43. Five of the agent's files
+  have to land in root-owned system directories — a systemd user unit, two D-Bus
+  drop-ins, a polkit action and a p11-kit registration — so no bundle format can
+  deliver it, and a distribution package is the only shape it can take.
+
+  **The prompter is a hard dependency, not a suggestion.** An agent with no
+  prompter installs, activates over D-Bus, enumerates a card and then fails on
+  the first PIN, because the interface it calls has no implementation. The only
+  prompter today is built on KF6, so a GNOME or XFCE machine installs KF6::I18n
+  and KF6::CoreAddons along with it. That is why Ubuntu 26.04 LTS is the Ubuntu
+  target: 24.04 LTS has no KF6 at all.
+
+  **Nothing enables anything.** The unit is D-Bus activated, so the first call
+  starts it whether or not it is enabled. Neither packaging system writes a
+  preset or a wants symlink of ours, and no maintainer script is hand-written —
+  which is also why none of them can touch `~/.config/librescrs` on removal.
+  Configuration, cached data, a symlink from your own `systemctl --user enable`
+  and an NSS profile entry you added yourself all survive uninstallation, on
+  purpose.
+
+
 First public release of the Linux host for the LibreSCRS smart-card
 ecosystem. It ships two components: the per-user **LibreSCRS Agent**
 and its secure PIN/CAN entry prompter, plus a client PKCS#11 module.

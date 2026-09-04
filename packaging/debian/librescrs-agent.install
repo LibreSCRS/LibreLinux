@@ -1,0 +1,9 @@
+usr/libexec/librescrs-agent
+usr/lib/systemd/user/librescrs-agent.service
+usr/lib/systemd/user/librescrs-p11-server.service
+usr/lib/*/pkcs11/librescrs-pkcs11-agent.so
+usr/share/p11-kit/modules/librescrs-agent.module
+usr/share/dbus-1/services/org.librescrs.Agent.service
+usr/share/dbus-1/session.d/org.librescrs.Agent.conf
+usr/share/dbus-1/interfaces/*.xml
+usr/share/polkit-1/actions/org.librescrs.agent.configure.policy
