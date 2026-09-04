@@ -2,9 +2,9 @@
   "config": {
     "cmake_args": "-DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_FLAGS=-O0 -g --coverage -fprofile-update=atomic",
     "compiler": "GNU-16",
-    "discovered_tests": 72,
+    "discovered_tests": 66,
     "gcovr": "8.6",
-    "test_manifest_sha256": "ce4a86f51edc3e84a599fa87ddb5e224d94517edfceb2816d2ae2cc4f0d12bed"
+    "test_manifest_sha256": "ebd93b73eebc5b60dfbfd6162b95a9699e42a82967ee64e15cc7600245a80f6f"
   },
   "files": {
     "agent/src/AgentCoreSeams.h": 63.3,
@@ -39,10 +39,8 @@
     "agent/src/operations/Operation1Adaptor.h": 61.5,
     "common/ProcPidPin.h": 89.7,
     "common/SealedMemfdCreator.h": 46.2,
-    "pkcs11-module/src/AgentClient.cpp": 89.1,
-    "pkcs11-module/src/Module.cpp": 63.2,
-    "pkcs11-module/src/ObjectModel.cpp": 100.0,
-    "pkcs11-module/src/SessionState.cpp": 73.5,
+    "pkcs11-module/src/DBusAgentClient.cpp": 88.1,
+    "pkcs11-module/src/DBusAgentClientFactory.cpp": 100.0,
     "prompter/src/CallerAuthorizer.cpp": 91.7,
     "prompter/src/CanInputWidget.cpp": 100.0,
     "prompter/src/ChangePinInputWidget.cpp": 100.0,
@@ -64,8 +62,8 @@
   },
   "total": {
     "branch_percent": 62.5,
-    "covered_lines": 3875,
-    "line_percent": 72.1,
-    "total_lines": 5374
+    "covered_lines": 3252,
+    "line_percent": 73.3,
+    "total_lines": 4437
   }
 }

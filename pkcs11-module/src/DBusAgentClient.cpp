@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 // SPDX-FileCopyrightText: 2026 hirashix0
 
-#include "AgentClient.h"
+#include "DBusAgentClient.h"
 
 #include "AgentInterfaceNames.h" // shared service/path/interface names
 #include "CertResultWire.h"
@@ -80,7 +80,7 @@ Status mapErrorName(const std::string& errorName) noexcept
     return Status::GeneralError;
 }
 
-struct AgentClient::Impl
+struct DBusAgentClient::Impl
 {
     std::unique_ptr<sdbus::IConnection> conn;
     std::unique_ptr<sdbus::IProxy> rootProxy; // GetManagedObjects + ObjectManager signals
@@ -204,15 +204,15 @@ struct AgentClient::Impl
     }
 };
 
-AgentClient::AgentClient() : m_impl(std::make_unique<Impl>()) {}
-AgentClient::~AgentClient() = default;
+DBusAgentClient::DBusAgentClient() : m_impl(std::make_unique<Impl>()) {}
+DBusAgentClient::~DBusAgentClient() = default;
 
-bool AgentClient::connected() const noexcept
+bool DBusAgentClient::connected() const noexcept
 {
     return m_impl && m_impl->ok;
 }
 
-AgentSnapshot AgentClient::snapshot()
+AgentSnapshot DBusAgentClient::snapshot()
 {
     if (!connected())
         return {};
@@ -233,7 +233,7 @@ AgentSnapshot AgentClient::snapshot()
     return snap;
 }
 
-AgentSnapshot AgentClient::enumerate()
+AgentSnapshot DBusAgentClient::enumerate()
 {
     AgentSnapshot snap;
     if (!connected())
@@ -346,7 +346,7 @@ std::unique_ptr<sdbus::IProxy> pkcs11Proxy(sdbus::IConnection& conn)
 
 } // namespace
 
-BytesResult AgentClient::certDer(const std::string& reader, const std::string& certId)
+BytesResult DBusAgentClient::certDer(const std::string& reader, const std::string& certId)
 {
     BytesResult r;
     if (!connected()) {
@@ -369,7 +369,7 @@ BytesResult AgentClient::certDer(const std::string& reader, const std::string& c
     return r;
 }
 
-PublicKeyResult AgentClient::publicKey(const std::string& reader, const std::string& certId)
+PublicKeyResult DBusAgentClient::publicKey(const std::string& reader, const std::string& certId)
 {
     PublicKeyResult r;
     if (!connected()) {
@@ -408,7 +408,7 @@ PublicKeyResult AgentClient::publicKey(const std::string& reader, const std::str
     return r;
 }
 
-LoginResult AgentClient::login(const std::string& reader)
+LoginResult DBusAgentClient::login(const std::string& reader)
 {
     LoginResult r;
     if (!connected()) {
@@ -431,7 +431,7 @@ LoginResult AgentClient::login(const std::string& reader)
     return r;
 }
 
-Status AgentClient::logout(const std::string& reader)
+Status DBusAgentClient::logout(const std::string& reader)
 {
     if (!connected())
         return Status::DeviceRemoved;
@@ -446,8 +446,8 @@ Status AgentClient::logout(const std::string& reader)
     }
 }
 
-BytesResult AgentClient::signRaw(const std::string& reader, const std::string& certId,
-                                 std::span<const std::uint8_t> input)
+BytesResult DBusAgentClient::signRaw(const std::string& reader, const std::string& certId,
+                                     std::span<const std::uint8_t> input)
 {
     BytesResult r;
     if (!connected()) {
@@ -473,8 +473,8 @@ BytesResult AgentClient::signRaw(const std::string& reader, const std::string& c
     return r;
 }
 
-BytesResult AgentClient::decrypt(const std::string& reader, const std::string& certId,
-                                 std::span<const std::uint8_t> ciphertext)
+BytesResult DBusAgentClient::decrypt(const std::string& reader, const std::string& certId,
+                                     std::span<const std::uint8_t> ciphertext)
 {
     BytesResult r;
     if (!connected()) {

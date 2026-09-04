@@ -1,16 +1,16 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 // SPDX-FileCopyrightText: 2026 hirashix0
 //
-// AgentClient against a fake agent on a private session bus (dbus-run-session).
+// DBusAgentClient against a fake agent on a private session bus (dbus-run-session).
 // The fake hosts:
 //   - org.freedesktop.DBus.ObjectManager on /org/librescrs/Agent (reader+card)
 //   - org.librescrs.Agent.Pkcs11_1 on the same path (CertDer/Login/Logout/
 //     SignRaw/Decrypt) returning canned bytes or a chosen Error name
 //   - org.librescrs.Agent.Card1.ReadCertificates -> an Operation1 that emits
 //     Certificates1.Result then Operation1.Finished(Ok)
-// so AgentClient::snapshot() can enumerate a card's signing certs end to end.
+// so DBusAgentClient::snapshot() can enumerate a card's signing certs end to end.
 
-#include "AgentClient.h"
+#include "DBusAgentClient.h"
 #include "AgentInterfaceNames.h" // shared service/path/interface names
 #include "CertResultWire.h"      // shared CertResultEntry — no drift from the consumer
 
@@ -258,7 +258,7 @@ struct BusFixture
 
 } // namespace
 
-TEST(AgentClient, MapErrorNamePure)
+TEST(DBusAgentClient, MapErrorNamePure)
 {
     EXPECT_EQ(mapErrorName("org.librescrs.Agent.Error.UserNotLoggedIn"), Status::UserNotLoggedIn);
     EXPECT_EQ(mapErrorName("org.librescrs.Agent.Error.NotSupported"), Status::NotSupported);
@@ -270,10 +270,10 @@ TEST(AgentClient, MapErrorNamePure)
     EXPECT_EQ(mapErrorName("org.example.Other"), Status::GeneralError);
 }
 
-TEST(AgentClient, SignRawReturnsCannedSignature)
+TEST(DBusAgentClient, SignRawReturnsCannedSignature)
 {
     BusFixture bus;
-    AgentClient client;
+    DBusAgentClient client;
     ASSERT_TRUE(client.connected());
     const std::vector<std::uint8_t> input{0x01, 0x02};
     auto r = client.signRaw(kReader0, "cert-abc", input);
@@ -281,51 +281,51 @@ TEST(AgentClient, SignRawReturnsCannedSignature)
     EXPECT_EQ(r.bytes, kCannedSig);
 }
 
-TEST(AgentClient, DecryptReturnsCannedPlaintext)
+TEST(DBusAgentClient, DecryptReturnsCannedPlaintext)
 {
     BusFixture bus;
-    AgentClient client;
+    DBusAgentClient client;
     const std::vector<std::uint8_t> input{0x09};
     auto r = client.decrypt(kReader0, "cert-abc", input);
     EXPECT_EQ(r.status, Status::Ok);
     EXPECT_EQ(r.bytes, kCannedPlain);
 }
 
-TEST(AgentClient, LoginReturnsIdleTimeout)
+TEST(DBusAgentClient, LoginReturnsIdleTimeout)
 {
     BusFixture bus;
-    AgentClient client;
+    DBusAgentClient client;
     auto r = client.login(kReader0);
     EXPECT_EQ(r.status, Status::Ok);
     EXPECT_EQ(r.idleTimeoutSecs, 600u);
 }
 
-TEST(AgentClient, CertDerReturnsBytes)
+TEST(DBusAgentClient, CertDerReturnsBytes)
 {
     BusFixture bus;
-    AgentClient client;
+    DBusAgentClient client;
     auto r = client.certDer(kReader0, "cert-abc");
     EXPECT_EQ(r.status, Status::Ok);
     EXPECT_EQ(r.bytes, kCannedDer);
 }
 
-TEST(AgentClient, PublicKeyReturnsModulusAndExponent)
+TEST(DBusAgentClient, PublicKeyReturnsModulusAndExponent)
 {
     BusFixture bus;
-    AgentClient client;
+    DBusAgentClient client;
     auto r = client.publicKey(kReader0, "cert-abc");
     EXPECT_EQ(r.status, Status::Ok);
     EXPECT_EQ(r.modulus, kCannedModulus);
     EXPECT_EQ(r.exponent, kCannedExponent);
 }
 
-TEST(AgentClient, PublicKeyServesFromCacheOnSecondCall)
+TEST(DBusAgentClient, PublicKeyServesFromCacheOnSecondCall)
 {
     // The RSA public key is immutable for a cert, so the second fetch is served
     // from the client's pubKeyCache without a second round-trip (the modulus the
     // fake swaps in between is NOT observed).
     BusFixture bus;
-    AgentClient client;
+    DBusAgentClient client;
     auto r1 = client.publicKey(kReader0, "cert-abc");
     ASSERT_EQ(r1.status, Status::Ok);
     EXPECT_EQ(r1.modulus, kCannedModulus);
@@ -337,14 +337,14 @@ TEST(AgentClient, PublicKeyServesFromCacheOnSecondCall)
     EXPECT_EQ(bus.fake->publicKeyCalls(), 1) << "no second round-trip";
 }
 
-TEST(AgentClient, PublicKeyCacheClearedOnCardRemove)
+TEST(DBusAgentClient, PublicKeyCacheClearedOnCardRemove)
 {
     // Hygiene: a card-remove (ObjectManager InterfacesRemoved) must clear the
     // pubKeyCache so a later fetch re-enumerates rather than serving the removed
     // card's stale public key. Observable: after the signal, the fake's swapped
     // modulus IS returned (a fresh round-trip happened).
     BusFixture bus;
-    AgentClient client;
+    DBusAgentClient client;
     auto r1 = client.publicKey(kReader0, "cert-abc");
     ASSERT_EQ(r1.status, Status::Ok);
     EXPECT_EQ(r1.modulus, kCannedModulus);
@@ -363,52 +363,52 @@ TEST(AgentClient, PublicKeyCacheClearedOnCardRemove)
     EXPECT_EQ(bus.fake->publicKeyCalls(), 2) << "a fresh round-trip happened after the cache clear";
 }
 
-TEST(AgentClient, PublicKeyKeyNotFoundMapped)
+TEST(DBusAgentClient, PublicKeyKeyNotFoundMapped)
 {
     BusFixture bus(true, "None", [](FakeAgent& f) { f.setPublicKeyError("org.librescrs.Agent.Error.KeyNotFound"); });
-    AgentClient client;
+    DBusAgentClient client;
     auto r = client.publicKey(kReader0, "cert-abc");
     EXPECT_EQ(r.status, Status::KeyNotFound);
 }
 
-TEST(AgentClient, PublicKeyNotSupportedMapped)
+TEST(DBusAgentClient, PublicKeyNotSupportedMapped)
 {
     BusFixture bus(true, "None", [](FakeAgent& f) { f.setPublicKeyError("org.librescrs.Agent.Error.NotSupported"); });
-    AgentClient client;
+    DBusAgentClient client;
     auto r = client.publicKey(kReader0, "cert-abc");
     EXPECT_EQ(r.status, Status::NotSupported);
 }
 
-TEST(AgentClient, NotLoggedInErrorMapped)
+TEST(DBusAgentClient, NotLoggedInErrorMapped)
 {
     BusFixture bus(true, "None", [](FakeAgent& f) { f.setSignError("org.librescrs.Agent.Error.UserNotLoggedIn"); });
-    AgentClient client;
+    DBusAgentClient client;
     const std::vector<std::uint8_t> input{0x01};
     auto r = client.signRaw(kReader0, "cert-abc", input);
     EXPECT_EQ(r.status, Status::UserNotLoggedIn);
 }
 
-TEST(AgentClient, NotSupportedErrorMapped)
+TEST(DBusAgentClient, NotSupportedErrorMapped)
 {
     BusFixture bus(true, "None", [](FakeAgent& f) { f.setSignError("org.librescrs.Agent.Error.NotSupported"); });
-    AgentClient client;
+    DBusAgentClient client;
     const std::vector<std::uint8_t> input{0x01};
     auto r = client.signRaw(kReader0, "cert-abc", input);
     EXPECT_EQ(r.status, Status::NotSupported);
 }
 
-TEST(AgentClient, CancelErrorMapped)
+TEST(DBusAgentClient, CancelErrorMapped)
 {
     BusFixture bus(true, "None", [](FakeAgent& f) { f.setLoginError("org.librescrs.Agent.Error.Cancelled"); });
-    AgentClient client;
+    DBusAgentClient client;
     auto r = client.login(kReader0);
     EXPECT_EQ(r.status, Status::Cancelled);
 }
 
-TEST(AgentClient, SnapshotEnumeratesReaderCardAndCerts)
+TEST(DBusAgentClient, SnapshotEnumeratesReaderCardAndCerts)
 {
     BusFixture bus; // PreReadAuthMethod="None" -> sign/decrypt capable
-    AgentClient client;
+    DBusAgentClient client;
     auto snap = client.snapshot();
     ASSERT_EQ(snap.readers.size(), 1u);
     EXPECT_EQ(snap.readers[0].readerPath, kReader0);
@@ -421,21 +421,21 @@ TEST(AgentClient, SnapshotEnumeratesReaderCardAndCerts)
     EXPECT_TRUE(c.canDecrypt); // keyUsage has keyEnc|dataEnc
 }
 
-TEST(AgentClient, SnapshotDemarshalsSubjectCnLabel)
+TEST(DBusAgentClient, SnapshotDemarshalsSubjectCnLabel)
 {
     // The default Certificates1.Result carries empty fields, so the CN-label
     // demarshal (the a{sa{s(ssv)}} -> get<2>().get<std::string>() path) was only
     // tested empty. Populate fields["subject"]["cn"] in the agent's OWN marshal
     // shape and assert the snapshot label is the CN, not the certId fallback.
     BusFixture bus(true, "None", [](FakeAgent& f) { f.setSubjectCn("Pera Perić"); });
-    AgentClient client;
+    DBusAgentClient client;
     auto snap = client.snapshot();
     ASSERT_EQ(snap.readers.size(), 1u);
     ASSERT_EQ(snap.readers[0].certs.size(), 1u);
     EXPECT_EQ(snap.readers[0].certs[0].label, "Pera Perić");
 }
 
-TEST(AgentClient, SnapshotCanCardSignsHashOnCardDecryptGated)
+TEST(DBusAgentClient, SnapshotCanCardSignsHashOnCardDecryptGated)
 {
     // A Can (NAM / IAS-ECC SSCD) card: the agent drives the eSign PIN
     // through the pkcs15 plugin and the card hashes on-card, so the snapshot
@@ -443,7 +443,7 @@ TEST(AgentClient, SnapshotCanCardSignsHashOnCardDecryptGated)
     // CKM_SHA256_RSA_PKCS). canDecrypt stays false — the pkcs15 plugin has no
     // decipher primitive, so advertising decrypt would be advertise-and-fail.
     BusFixture bus(true, "Can");
-    AgentClient client;
+    DBusAgentClient client;
     auto snap = client.snapshot();
     ASSERT_EQ(snap.readers.size(), 1u);
     ASSERT_EQ(snap.readers[0].certs.size(), 1u);
@@ -454,10 +454,10 @@ TEST(AgentClient, SnapshotCanCardSignsHashOnCardDecryptGated)
     EXPECT_FALSE(c.canDecrypt);
 }
 
-TEST(AgentClient, SnapshotNoCardNoCerts)
+TEST(DBusAgentClient, SnapshotNoCardNoCerts)
 {
     BusFixture bus(false);
-    AgentClient client;
+    DBusAgentClient client;
     auto snap = client.snapshot();
     ASSERT_EQ(snap.readers.size(), 1u);
     EXPECT_FALSE(snap.readers[0].hasCard);

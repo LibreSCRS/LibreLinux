@@ -1,4 +1,3 @@
-AgentClientTest
 AgentObjectPathTest
 AgentShutdownUnderLoadTest
 AgentTransportTest
@@ -16,16 +15,14 @@ Config1Test
 ConfigPathsTest
 CredentialsDbusTest
 CscaImportDbusTest
+DBusAgentClientTest
 DBusServiceTest
 EnvPrompterServiceTest
 HostOperationOwnershipTest
 Identity1XmlCodegenTest
 InputWidgetValidationTest
-LoadModuleTest
 Manager1XmlCodegenTest
-ModuleAbiTest
 ModuleConfigTest
-ObjectModelTest
 Operation1AdaptorTest
 Operation1ErrorCodeXmlGuardTest
 Operation1XmlCodegenTest
@@ -55,13 +52,10 @@ PrompterMultiFieldTest
 PrompterVocabularyPinTest
 ReaderIdentitySeamTest
 ReaderRemoveDrainTest
-RealCardCryptoVerifyTest
-RealCardSmokeTest
 RequestSecretsXmlCodegenTest
 SandboxWritableDirsGuardTest
 SealedMemfdTest
 SecretMemfdReaderTest
-SecurityTest
 Sign1XmlCodegenTest
 SignBatch1XmlCodegenTest
 SignHwSmokeTest

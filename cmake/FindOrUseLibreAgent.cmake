@@ -45,13 +45,25 @@ if(LIBRELINUX_USE_INSTALLED_AGENT_CORE)
     # floor above the agent's actual released version buys no accuracy: it just
     # makes this branch unsatisfiable by every agent package that exists, which
     # is a build break for packagers rather than a guard.
-    find_package(LibreAgent 4.2 REQUIRED CONFIG)
+    #
+    # The components are named because this backend needs two of them: the
+    # neutral core it has always linked, and the PKCS#11 facade the module is
+    # now built from. An unnamed request resolves whatever happens to be
+    # installed, which is how a consumer discovers a missing component at link
+    # time instead of at configure time.
+    find_package(LibreAgent 4.2 REQUIRED CONFIG COMPONENTS Core Pkcs11Facade)
     message(STATUS "LibreAgent: using installed package (CONFIG)")
 else()
     message(STATUS "LibreAgent: building from source (FetchContent, pin ${LIBREAGENT_PIN})")
     include(FetchContent)
+    # Both component switches default OFF in the agent, and option() does not
+    # overwrite a cache variable that already exists -- so the switch has to be
+    # seeded BEFORE the subproject is configured. Without this the module links
+    # a target that was never defined, on the DEFAULT consumption path. The
+    # other platform backend already seeds Core and Wire the same way.
+    set(LIBREAGENT_BUILD_PKCS11_FACADE ON CACHE BOOL "" FORCE)
     FetchContent_Declare(LibreAgent
         GIT_REPOSITORY https://github.com/LibreSCRS/LibreAgent.git
         GIT_TAG ${LIBREAGENT_PIN})
-    FetchContent_MakeAvailable(LibreAgent) # provides LibreAgent::Core
+    FetchContent_MakeAvailable(LibreAgent) # provides LibreAgent::Core + ::Pkcs11Facade
 endif()

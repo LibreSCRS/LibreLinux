@@ -1,22 +1,23 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 
 # librescrs-pkcs11-agent.so — a standalone, Qt-free, libcrypto-free PKCS#11
-# module that brokers the C_* ABI to the per-user agent over D-Bus. The ONLY
-# real dependency is sdbus-c++ (the same transport the agent uses); it links
-# NEITHER Qt NOR OpenSSL — it performs no crypto itself.
+# module that brokers the C_* ABI to the per-user agent over D-Bus.
+#
+# What is built HERE is only what is actually this platform's: the bus client,
+# its error-name vocabulary, the tuple that client marshals, and the factory
+# that names it. The Cryptoki surface itself comes from LibreAgent::Pkcs11Facade,
+# shared with the other platform backend, so the two cannot answer a loader
+# differently by drifting.
 
 add_library(librescrs-pkcs11-agent MODULE
-    src/Module.cpp
-    src/ObjectModel.cpp
-    src/AgentClient.cpp
-    src/SessionState.cpp)
+    src/DBusAgentClient.cpp
+    src/DBusAgentClientFactory.cpp)
 
 set_target_properties(librescrs-pkcs11-agent PROPERTIES
     PREFIX ""
     OUTPUT_NAME "librescrs-pkcs11-agent")
 
 target_include_directories(librescrs-pkcs11-agent PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
 target_compile_features(librescrs-pkcs11-agent PRIVATE cxx_std_23)
@@ -24,10 +25,10 @@ target_compile_features(librescrs-pkcs11-agent PRIVATE cxx_std_23)
 # Qt-free: only sdbus-c++ + threads. NO Qt, NO libcrypto link.
 target_link_libraries(librescrs-pkcs11-agent PRIVATE SDBusCpp::sdbus-c++ librelinux-common)
 
-# Export ONLY the PKCS#11 entry point (C_GetFunctionList); every internal
-# symbol stays hidden — mirrors LM's pkcs11 module export discipline.
-target_link_options(librescrs-pkcs11-agent PRIVATE
-    "-Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/src/exports.map")
+# The facade, pulled WHOLE, plus the one exported name -- both come from the
+# shared package's own helper. Linking LibreAgent::Pkcs11Facade by bare name
+# instead would build, install and dlopen a module with no entry point in it.
+librescrs_pkcs11_module_link(librescrs-pkcs11-agent)
 
 if(LIBRELINUX_WERROR)
     target_compile_options(librescrs-pkcs11-agent PRIVATE -Wall -Wextra -Werror)

@@ -1,18 +1,14 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 find_package(GTest REQUIRED)
 
-# AgentClientTest compiles ../src/AgentClient.cpp, which includes the shared
-# wire-name header; give every target here its (header-only) include dir.
+# DBusAgentClientTest compiles ../src/DBusAgentClient.cpp, which includes the
+# shared wire-name header; give every target here its (header-only) include dir.
 link_libraries(librelinux-common)
 
-# dlopen the built module and exercise the C ABI surface standalone.
-add_executable(LoadModuleTest LoadModuleTest.cpp)
-target_include_directories(LoadModuleTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../include)
-target_link_libraries(LoadModuleTest PRIVATE GTest::gtest GTest::gtest_main ${CMAKE_DL_LIBS})
-target_compile_definitions(LoadModuleTest PRIVATE
-    LIBRESCRS_PKCS11_MODULE_PATH="$<TARGET_FILE:librescrs-pkcs11-agent>")
-add_dependencies(LoadModuleTest librescrs-pkcs11-agent)
-add_test(NAME LoadModuleTest COMMAND LoadModuleTest)
+# Every target here reaches the Cryptoki surface, and after the move it reaches
+# it through the shared component's INTERFACE include property rather than
+# through a relative path into a directory that no longer exists.
+link_libraries(LibreAgent::Pkcs11Facade)
 
 # Wire-shape pin: the shared CertResultEntry marshals to the frozen
 # a(sba{sa{s(ssv)}}uasasu) (no .so, no D-Bus, no card).
@@ -22,30 +18,21 @@ target_compile_features(CertResultWireSignatureTest PRIVATE cxx_std_23)
 target_link_libraries(CertResultWireSignatureTest PRIVATE SDBusCpp::sdbus-c++ GTest::gtest GTest::gtest_main)
 add_test(NAME CertResultWireSignatureTest COMMAND CertResultWireSignatureTest)
 
-# Pure slot/token/object/mechanism mapping — compiles ObjectModel.cpp directly
-# (no .so, no D-Bus, no card).
-add_executable(ObjectModelTest ObjectModelTest.cpp ../src/ObjectModel.cpp)
-target_include_directories(ObjectModelTest PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/../include
-    ${CMAKE_CURRENT_SOURCE_DIR}/../src)
-target_compile_features(ObjectModelTest PRIVATE cxx_std_23)
-target_link_libraries(ObjectModelTest PRIVATE GTest::gtest GTest::gtest_main)
-add_test(NAME ObjectModelTest COMMAND ObjectModelTest)
-
-# AgentClient proxy against a fake agent on a private session bus.
+# The D-Bus AgentClient implementation against a fake agent on a private session
+# bus. It stayed here because the implementation stayed here: 501 lines of
+# sdbus-c++ that no other repository builds, and code that keeps its
+# implementation must keep its tests.
 find_program(DBUS_RUN_SESSION dbus-run-session REQUIRED)
-add_executable(AgentClientTest AgentClientTest.cpp ../src/AgentClient.cpp ../src/ObjectModel.cpp)
-target_include_directories(AgentClientTest PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/../include
+add_executable(DBusAgentClientTest DBusAgentClientTest.cpp ../src/DBusAgentClient.cpp)
+target_include_directories(DBusAgentClientTest PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../src)
-target_compile_features(AgentClientTest PRIVATE cxx_std_23)
-target_link_libraries(AgentClientTest PRIVATE SDBusCpp::sdbus-c++ GTest::gtest GTest::gtest_main)
-add_test(NAME AgentClientTest COMMAND ${DBUS_RUN_SESSION} -- $<TARGET_FILE:AgentClientTest>)
+target_compile_features(DBusAgentClientTest PRIVATE cxx_std_23)
+target_link_libraries(DBusAgentClientTest PRIVATE SDBusCpp::sdbus-c++ GTest::gtest GTest::gtest_main)
+add_test(NAME DBusAgentClientTest COMMAND ${DBUS_RUN_SESSION} -- $<TARGET_FILE:DBusAgentClientTest>)
 # A wedged test under dbus-run-session must fail in minutes, not consume the
 # runner's whole wall: every dbus-run-session test here carries an explicit
-# timeout. The env-gated real-card tests below are deliberately uncapped: they
-# talk to the LIVE session bus and a human-paced card, not a private bus.
-set_tests_properties(AgentClientTest PROPERTIES TIMEOUT 120)
+# timeout.
+set_tests_properties(DBusAgentClientTest PROPERTIES TIMEOUT 120)
 
 # Pure-text assertions on the configured .module + deployment-(b) server unit
 # (no p11-kit, no D-Bus). The configured files are produced by the parent
@@ -61,41 +48,6 @@ target_compile_definitions(ModuleConfigTest PRIVATE
     LIBRESCRS_MODULE_DIR_ABS="${LIBRESCRS_P11_MODULE_DIR_ABS}"
     LIBRESCRS_P11_KIT_MODULE_PATH="${_ll_p11_module_path}")
 add_test(NAME ModuleConfigTest COMMAND ModuleConfigTest)
-
-# Full C_* ABI driven against the built .so + a fake agent on a private bus.
-add_executable(ModuleAbiTest ModuleAbiTest.cpp)
-target_include_directories(ModuleAbiTest PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/../include
-    ${CMAKE_CURRENT_SOURCE_DIR}/../src
-    ${CMAKE_CURRENT_SOURCE_DIR})
-target_compile_features(ModuleAbiTest PRIVATE cxx_std_23)
-target_link_libraries(ModuleAbiTest PRIVATE SDBusCpp::sdbus-c++ GTest::gtest GTest::gtest_main ${CMAKE_DL_LIBS})
-target_compile_definitions(ModuleAbiTest PRIVATE
-    LIBRESCRS_PKCS11_MODULE_PATH="$<TARGET_FILE:librescrs-pkcs11-agent>")
-add_dependencies(ModuleAbiTest librescrs-pkcs11-agent)
-add_test(NAME ModuleAbiTest COMMAND ${DBUS_RUN_SESSION} -- $<TARGET_FILE:ModuleAbiTest>)
-# Higher ceiling than the 120 s default used elsewhere in this file: this suite
-# is deliberately slow. One case parks a signature behind a 27 s fake delay to
-# ride past sd-bus's ~25 s default reply window, and two more add 3 s and 2 s,
-# so the floor is already around 33 s. At 120 s that would leave only ~3.6x of
-# headroom, which a slower or loaded runner can eat without anything being
-# actually wrong.
-set_tests_properties(ModuleAbiTest PROPERTIES TIMEOUT 180)
-
-# Module-side security properties (no-PIN-on-wire, mechanism rejection,
-# non-extractable keys, NAM gating) over the real C_* ABI + fake agent.
-add_executable(SecurityTest SecurityTest.cpp)
-target_include_directories(SecurityTest PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/../include
-    ${CMAKE_CURRENT_SOURCE_DIR}/../src
-    ${CMAKE_CURRENT_SOURCE_DIR})
-target_compile_features(SecurityTest PRIVATE cxx_std_23)
-target_link_libraries(SecurityTest PRIVATE SDBusCpp::sdbus-c++ GTest::gtest GTest::gtest_main ${CMAKE_DL_LIBS})
-target_compile_definitions(SecurityTest PRIVATE
-    LIBRESCRS_PKCS11_MODULE_PATH="$<TARGET_FILE:librescrs-pkcs11-agent>")
-add_dependencies(SecurityTest librescrs-pkcs11-agent)
-add_test(NAME SecurityTest COMMAND ${DBUS_RUN_SESSION} -- $<TARGET_FILE:SecurityTest>)
-set_tests_properties(SecurityTest PROPERTIES TIMEOUT 120)
 
 # RPC integration: drive the EXTERNAL consumer pkcs11-tool against the real .so
 # with the FakeAgent as the card backend (in-process deployment-a path). Needs a
@@ -116,32 +68,3 @@ add_test(NAME Pkcs11ToolRpcTest
 set_tests_properties(Pkcs11ToolRpcTest PROPERTIES
     SKIP_RETURN_CODE 77
     TIMEOUT 120)
-
-# Env-gated MANUAL real-card smoke. Talks to the LIVE session bus + agent + card;
-# SKIPs entirely unless LIBRESCRS_HW_SMOKE=1, so it never blocks CI/dev runs and
-# never burns a card retry counter. Built here; run manually (see the file head).
-# This TU is libcrypto-FREE by policy (it mirrors the module's no-crypto stance).
-add_executable(RealCardSmokeTest RealCardSmokeTest.cpp)
-target_include_directories(RealCardSmokeTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../include)
-target_compile_features(RealCardSmokeTest PRIVATE cxx_std_23)
-target_link_libraries(RealCardSmokeTest PRIVATE GTest::gtest GTest::gtest_main ${CMAKE_DL_LIBS})
-target_compile_definitions(RealCardSmokeTest PRIVATE
-    LIBRESCRS_PKCS11_MODULE_PATH="$<TARGET_FILE:librescrs-pkcs11-agent>")
-add_dependencies(RealCardSmokeTest librescrs-pkcs11-agent)
-add_test(NAME RealCardSmokeTest COMMAND RealCardSmokeTest)
-
-# Env-gated MANUAL real-card FAITHFUL crypto verification — the libcrypto-LINKING
-# companion to RealCardSmokeTest. Same HW gate (LIBRESCRS_HW_SMOKE=1), same PIN
-# latch; it links OpenSSL so it can do the real arithmetic (encrypt a probe for
-# the decrypt round-trip, EVP_PKEY_verify the signature). Kept SEPARATE from the
-# libcrypto-free smoke TU on purpose.
-find_package(OpenSSL REQUIRED COMPONENTS Crypto)
-add_executable(RealCardCryptoVerifyTest RealCardCryptoVerifyTest.cpp)
-target_include_directories(RealCardCryptoVerifyTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../include)
-target_compile_features(RealCardCryptoVerifyTest PRIVATE cxx_std_23)
-target_link_libraries(RealCardCryptoVerifyTest PRIVATE
-    OpenSSL::Crypto GTest::gtest GTest::gtest_main ${CMAKE_DL_LIBS})
-target_compile_definitions(RealCardCryptoVerifyTest PRIVATE
-    LIBRESCRS_PKCS11_MODULE_PATH="$<TARGET_FILE:librescrs-pkcs11-agent>")
-add_dependencies(RealCardCryptoVerifyTest librescrs-pkcs11-agent)
-add_test(NAME RealCardCryptoVerifyTest COMMAND RealCardCryptoVerifyTest)
