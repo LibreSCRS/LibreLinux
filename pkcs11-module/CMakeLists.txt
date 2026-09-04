@@ -39,13 +39,43 @@ install(TARGETS librescrs-pkcs11-agent LIBRARY DESTINATION ${LIBRESCRS_P11_MODUL
 # --- p11-kit .module registration + deployment (b) server unit --------------
 # The .module file goes into p11-kit's module-config dir (pkg-config
 # p11-kit-1 --variable p11_module_configs; /usr/share/p11-kit/modules fallback).
-# Under a per-user dogfood install the absolute system dir is unwritable, so fall
-# back to a prefix-relative path the user can point P11_KIT_MODULES at.
+# Under a per-user dogfood install the system dir is unwritable, and the data
+# dir under the prefix is NOT one of the three directories p11-kit reads — a
+# declaration there is installed, correct and completely inert. The per-user
+# destination is therefore the config dir p11-kit does read, computed beside the
+# other per-user destinations in the top-level CMakeLists.
 find_package(PkgConfig REQUIRED)
 pkg_get_variable(LIBRESCRS_P11_MODULE_CONFIGS p11-kit-1 p11_module_configs)
-if(NOT LIBRESCRS_P11_MODULE_CONFIGS OR LIBRELINUX_USER_INSTALL)
+if(LIBRELINUX_USER_INSTALL)
+    set(LIBRESCRS_P11_MODULE_CONFIGS "${LIBRELINUX_USER_P11_MODULE_CONFIG_DIR}")
+elseif(NOT LIBRESCRS_P11_MODULE_CONFIGS)
     set(LIBRESCRS_P11_MODULE_CONFIGS ${CMAKE_INSTALL_DATADIR}/p11-kit/modules)
 endif()
+
+# Where the .so actually lands, as an absolute path, whether
+# LIBRESCRS_P11_MODULE_DIR came back absolute from pkg-config or relative to the
+# prefix under a per-user install.
+if(IS_ABSOLUTE "${LIBRESCRS_P11_MODULE_DIR}")
+    set(LIBRESCRS_P11_MODULE_DIR_ABS "${LIBRESCRS_P11_MODULE_DIR}")
+else()
+    set(LIBRESCRS_P11_MODULE_DIR_ABS "${CMAKE_INSTALL_PREFIX}/${LIBRESCRS_P11_MODULE_DIR}")
+endif()
+
+# How the declaration names the library. p11-kit resolves a BARE name against
+# its own module directory, never against the prefix this was installed into, so
+# a bare name is correct only when the two are the same directory. Anywhere else
+# — a per-user prefix, or a distribution whose libdir differs from p11-kit's —
+# the reference dangles and p11-kit drops the module without a word. Keep the
+# bare form where it is right, because that is what lets a packager do a
+# 32/64-bit parallel install, which is the same reason stock opensc.module is
+# relative.
+pkg_get_variable(_ll_p11_module_path p11-kit-1 p11_module_path)
+if(_ll_p11_module_path AND "${LIBRESCRS_P11_MODULE_DIR_ABS}" STREQUAL "${_ll_p11_module_path}")
+    set(LIBRESCRS_P11_MODULE_REF "librescrs-pkcs11-agent.so")
+else()
+    set(LIBRESCRS_P11_MODULE_REF "${LIBRESCRS_P11_MODULE_DIR_ABS}/librescrs-pkcs11-agent.so")
+endif()
+message(STATUS "p11-kit module reference: ${LIBRESCRS_P11_MODULE_REF}")
 
 configure_file(data/librescrs-agent.module.in librescrs-agent.module @ONLY)
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/librescrs-agent.module

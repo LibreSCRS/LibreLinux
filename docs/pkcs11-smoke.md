@@ -49,11 +49,17 @@ in-process `dlopen` for `p11-kit remote`/`p11-kit server` + the stock
 
 A system (package) install drops the files in the right places automatically:
 
-| File | Destination (system install) |
-| --- | --- |
-| `librescrs-pkcs11-agent.so` | `pkg-config p11-kit-1 --variable p11_module_path` (`/usr/lib/pkcs11`) |
-| `librescrs-agent.module` | `pkg-config p11-kit-1 --variable p11_module_configs` (`/usr/share/p11-kit/modules`) |
-| `librescrs-p11-server.service` | the systemd **user** unit dir (deployment b only) |
+| File | Destination (system install) | Destination (`-DLIBRELINUX_USER_INSTALL=ON`) |
+| --- | --- | --- |
+| `librescrs-pkcs11-agent.so` | `pkg-config p11-kit-1 --variable p11_module_path` (`/usr/lib/pkcs11`) | `${CMAKE_INSTALL_PREFIX}/lib/pkcs11` |
+| `librescrs-agent.module` | `pkg-config p11-kit-1 --variable p11_module_configs` (`/usr/share/p11-kit/modules`) | `${XDG_CONFIG_HOME:-$HOME/.config}/pkcs11/modules` |
+| `librescrs-p11-server.service` | the systemd **user** unit dir (deployment b only) | `${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user` |
+
+p11-kit reads exactly three directories, in ascending precedence:
+`/usr/share/p11-kit/modules`, `/etc/pkcs11/modules` and
+`$XDG_CONFIG_HOME/pkcs11/modules`. Anywhere else the declaration is installed,
+correct and completely inert — the library loads for anyone who names it
+directly, and p11-kit never lists it.
 
 For a throwaway VM/container test from a user-prefix build, copy them in:
 
@@ -62,6 +68,26 @@ sudo install -Dm644 build/pkcs11-module/librescrs-pkcs11-agent.so \
     /usr/lib/pkcs11/librescrs-pkcs11-agent.so
 sudo install -Dm644 build/pkcs11-module/librescrs-agent.module \
     /usr/share/p11-kit/modules/librescrs-agent.module
+```
+
+Without root — the per-user arrangement `cmake --install` produces on its own:
+
+```bash
+install -Dm755 build/pkcs11-module/librescrs-pkcs11-agent.so \
+    "$HOME/.local/lib/pkcs11/librescrs-pkcs11-agent.so"
+install -Dm644 build/pkcs11-module/librescrs-agent.module \
+    "${XDG_CONFIG_HOME:-$HOME/.config}/pkcs11/modules/librescrs-agent.module"
+```
+
+A per-user build writes an **absolute** `module:` line, because a bare name is
+resolved against p11-kit's own module directory rather than the install prefix.
+
+If this host ever registered the middleware's direct PKCS#11 module by hand —
+the published archive's instructions told you to — remove it, or the card
+offers two providers with two different PIN-entry models:
+
+```bash
+rm ~/.config/pkcs11/modules/librescrs.module
 ```
 
 ## 2. Confirm the module loads + advertises the protected auth path

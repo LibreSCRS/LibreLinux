@@ -55,7 +55,11 @@ target_compile_features(ModuleConfigTest PRIVATE cxx_std_23)
 target_link_libraries(ModuleConfigTest PRIVATE GTest::gtest GTest::gtest_main)
 target_compile_definitions(ModuleConfigTest PRIVATE
     LIBRESCRS_MODULE_CONFIG_PATH="${CMAKE_CURRENT_BINARY_DIR}/../librescrs-agent.module"
-    LIBRESCRS_SERVER_UNIT_PATH="${CMAKE_CURRENT_BINARY_DIR}/../librescrs-p11-server.service")
+    LIBRESCRS_SERVER_UNIT_PATH="${CMAKE_CURRENT_BINARY_DIR}/../librescrs-p11-server.service"
+    # Where this build puts the .so, and where p11-kit looks for a bare name.
+    # The declaration may use the bare form only when the two are equal.
+    LIBRESCRS_MODULE_DIR_ABS="${LIBRESCRS_P11_MODULE_DIR_ABS}"
+    LIBRESCRS_P11_KIT_MODULE_PATH="${_ll_p11_module_path}")
 add_test(NAME ModuleConfigTest COMMAND ModuleConfigTest)
 
 # Full C_* ABI driven against the built .so + a fake agent on a private bus.

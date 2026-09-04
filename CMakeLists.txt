@@ -51,9 +51,19 @@ if(LIBRELINUX_USER_INSTALL)
     # $XDG_DATA_HOME/dbus-1/services.
     set(LIBRELINUX_USER_DBUS_SERVICE_DIR "${_ll_xdg_data}/dbus-1/services"
         CACHE PATH "Per-user D-Bus session service dir")
+    # p11-kit reads exactly three directories, in ascending precedence:
+    # /usr/share/p11-kit/modules, /etc/pkcs11/modules and
+    # $XDG_CONFIG_HOME/pkcs11/modules. The data dir under the install prefix is
+    # not one of them, so a declaration installed there registers nothing while
+    # satisfying every install rule. Like the two destinations above, this one
+    # is deliberately OUTSIDE CMAKE_INSTALL_PREFIX: it is where the consumer
+    # looks, not where this project puts its files.
+    set(LIBRELINUX_USER_P11_MODULE_CONFIG_DIR "${_ll_xdg_config}/pkcs11/modules"
+        CACHE PATH "Per-user p11-kit module config dir")
     message(STATUS "LIBRELINUX_USER_INSTALL=ON — per-user XDG install:")
     message(STATUS "  systemd units : ${LIBRELINUX_USER_SYSTEMD_UNIT_DIR}")
     message(STATUS "  dbus services : ${LIBRELINUX_USER_DBUS_SERVICE_DIR}")
+    message(STATUS "  p11-kit modules: ${LIBRELINUX_USER_P11_MODULE_CONFIG_DIR}")
     # The D-Bus session-bus policy is NOT installed under user-install: stock
     # dbus does not scan a $XDG_CONFIG_HOME/dbus-1/session.d/ directory, so a
     # per-user drop-in there is a silent no-op. It is defense-in-depth only and

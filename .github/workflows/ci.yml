@@ -62,6 +62,7 @@ jobs:
             sdbus-cpp systemd-libs \
             openssl pcsclite opensc \
             gtest dbus \
+            p11-kit \
             python-jsonschema \
             qt6-base kcoreaddons ki18n
 
@@ -173,6 +174,24 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: dbus-run-session -- ctest --test-dir build --output-on-failure --no-tests=error
+
+      # --- PKCS#11 ownership -----------------------------------------------
+      # Install rules cannot prove registration: the declaration once landed
+      # exactly where the rule said and p11-kit never read it. The gate
+      # therefore runs AFTER `cmake --install`, enumerates what the host
+      # actually loads, and fails on a runner that installed nothing — which is
+      # the state the previous check reported as success.
+      - name: Install to the system prefix and assert a single PKCS#11 owner
+        working-directory: LibreLinux
+        timeout-minutes: 5
+        run: |
+          cmake --install build
+          ./e2e/check-p11kit-single-owner.sh
+
+      - name: Prove the gate still discriminates
+        working-directory: LibreLinux
+        timeout-minutes: 5
+        run: ./e2e/check-p11kit-single-owner.selftest.sh
 
       # --- Thread-sanitizer gate for the agent concurrency invariants -------
       # The reader-map / ReaderObject-field locking (BusExporter::m_readersMutex

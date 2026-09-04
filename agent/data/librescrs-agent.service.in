@@ -7,16 +7,6 @@ PartOf=graphical-session.target
 Type=notify
 ExecStart=@CMAKE_INSTALL_FULL_LIBEXECDIR@/librescrs-agent
 
-# PKCS#11 module for the native AdES signing path. libresign dlopens the LM
-# module `librescrs-pkcs11.so`; SigningService::resolvePkcs11Module() finds it
-# exe-relative in a system (FHS) install (agent in libexec, module in the
-# sibling lib/pkcs11), so this line is EMPTY for packaged installs. A dogfood
-# user install puts LM under its own prefix (~/.local/librescrs) that is NOT
-# exe-relative to the agent, so the user build fills this in with the resolved
-# absolute path — without it every Card1.Sign fails "cannot open shared object
-# file". Substituted by agent/CMakeLists.txt.
-@LIBRESCRS_PKCS11_MODULE_ENV@
-
 # Hardening. The daemon is Qt-free, headless, has no GUI-toolkit attack
 # surface, and talks PC/SC (Unix domain via /run/pcscd) + D-Bus (session
 # bus, also Unix domain) plus outbound HTTPS to timestamp authorities,

@@ -11,6 +11,17 @@ and its secure PIN/CAN entry prompter, plus a client PKCS#11 module.
 
 ### Added
 
+- **The agent proxy is the only registered PKCS#11 provider.** The middleware
+  no longer registers a PKCS#11 module of its own, so one card offers one
+  provider and one PIN-entry model. If a host still carries a hand-made
+  registration of the direct module — installed from a published archive,
+  following instructions that release shipped — no package manager will remove
+  it. Remove it by hand:
+
+  ```
+  rm ~/.config/pkcs11/modules/librescrs.module
+  ```
+
 - **Per-user smart-card agent (`librescrs-agent`).** A headless,
   Qt-free D-Bus session service that is the single owner of the card
   and its secrets. It claims `org.librescrs.Agent` on the session bus

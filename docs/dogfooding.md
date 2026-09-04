@@ -196,16 +196,20 @@ the session bus ask systemd to start the corresponding unit on demand. The
 explicit `enable --now` above just keeps the agent resident so it can monitor
 readers continuously.
 
-### Signing module (no drop-in needed)
+### Signing module (nothing to set)
 
 The native AdES signing path dlopens the LM PKCS#11 module
-`librescrs-pkcs11.so`. Because LM lives under its **own** prefix
-(`~/.local/librescrs`) that is not exe-relative to the agent, the signing
-resolver cannot find it by relative probing — so the **user-install build bakes
-the resolved absolute path into the installed unit** as
-`Environment=LIBRESCRS_PKCS11_MODULE=…/lib/pkcs11/librescrs-pkcs11.so`
-(see `agent/CMakeLists.txt`). You do **not** need a manual drop-in for it; if you
-added one previously, you can delete it after reinstalling:
+`librescrs-pkcs11.so`. LM lives under its **own** prefix (`~/.local/librescrs`)
+that is not exe-relative to the agent, so relative probing alone cannot find it.
+The middleware resolves it from the absolute path its own build was configured
+with — the same value for a per-user prefix as for a distribution package — so
+neither the unit nor a drop-in carries a module path any more.
+
+The unit used to bake `Environment=LIBRESCRS_PKCS11_MODULE=…` for exactly this
+reason. That override is gone, and its absence is the point: while it was set,
+the resolver's real behaviour never ran on any machine anybody uses daily, so
+the path a packaged install depends on was the one nothing exercised. If you
+added a manual drop-in previously, delete it after reinstalling:
 
 ```sh
 rm -f ~/.config/systemd/user/librescrs-agent.service.d/20-pkcs11-module.conf

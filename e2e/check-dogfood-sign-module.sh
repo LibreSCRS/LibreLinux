@@ -11,8 +11,10 @@
 # run-hw-smoke.sh masks the bug by exporting LIBRESCRS_PKCS11_MODULE itself.
 #
 # This check validates the DEPLOYED agent's OWN module resolution WITHOUT any
-# export: it resolves the module exactly as the running agent would (the unit's
-# LIBRESCRS_PKCS11_MODULE if set, else the exe-relative FHS layout), then
+# export: it resolves the module the way the running agent would — reading the
+# absolute path the middleware was CONFIGURED with out of the library the agent
+# actually loads, which is the resolver's last candidate and the one that
+# matches under every installed layout — then
 # dlopens it and confirms C_GetFunctionList returns CKR_OK. It needs NO card,
 # PIN, or prompter, so it runs in CI and post-install; it deterministically
 # catches the missing/wrong/unloadable signing-module-path regression class.
@@ -46,9 +48,36 @@ if [ -z "$module" ] && [ -z "$exe" ]; then
     exit 0
 fi
 
-# (b) FHS fallback: mirror resolvePkcs11Module() candidate #4
+# (b) the build-configured absolute the middleware baked into the library the
+#     DEPLOYED agent actually loads. Under every installed layout — system
+#     package or per-user prefix — this is the candidate that matches. We do not
+#     re-implement the resolver's candidate order here: we read the value the
+#     middleware itself was configured with, so this check follows the resolver
+#     instead of restating an old copy of it. (It is a PRIVATE compile
+#     definition, so the shell cannot see it any other way.)
+if [ -z "$module" ] && [ -n "$exe" ]; then
+    for t in ldd strings; do
+        command -v "$t" >/dev/null 2>&1 || {
+            echo "FAIL: $t not available; cannot resolve the deployed module." >&2
+            exit 2
+        }
+    done
+    # ${env_line:-}: this script runs under `set -u` and env_line is only
+    # assigned inside the systemctl branch above.
+    ld_path="$(printf '%s\n' "${env_line:-}" \
+               | grep -oE 'LD_LIBRARY_PATH=[^ ]+' | head -1 | cut -d= -f2-)"
+    signing_lib="$(LD_LIBRARY_PATH="${ld_path:-}" ldd "$exe" 2>/dev/null \
+                   | awk '/libLibreSCRS_Signing\.so/ {print $3; exit}')"
+    if [ -n "$signing_lib" ] && [ -e "$signing_lib" ]; then
+        module="$(strings -a "$signing_lib" \
+                  | grep -E '^/.+/pkcs11/librescrs-pkcs11\.(so|dylib)$' | head -1)"
+        [ -n "$module" ] && src="build-configured absolute in $signing_lib"
+    fi
+fi
+
+# (c) FHS fallback: mirror resolvePkcs11Module() candidate #4
 #     (<exe-dir>/../lib/pkcs11/librescrs-pkcs11.so). This is what a SYSTEM
-#     package relies on (and correctly needs no unit Environment).
+#     package relies on when the library carries no configured absolute.
 if [ -z "$module" ] && [ -n "$exe" ]; then
     exedir="$(cd "$(dirname "$exe")" 2>/dev/null && pwd)"
     module="${exedir%/*}/lib/pkcs11/librescrs-pkcs11.so"
@@ -61,8 +90,10 @@ echo "  $module"
 # --- 2. it must exist -----------------------------------------------------
 if [ ! -e "$module" ]; then
     echo "FAIL: module does not exist — Card1.Sign will fail 'cannot open shared object file'." >&2
-    echo "      Fix: user install must bake LIBRESCRS_PKCS11_MODULE (see agent/CMakeLists.txt)," >&2
-    echo "      or the module must sit at <prefix>/lib/pkcs11/ exe-relative to the agent." >&2
+    echo "      Two causes, and only these two: the middleware was built without" >&2
+    echo "      LIBRESCRS_PKCS11_MODULE_FULL_PATH, so the library carries no" >&2
+    echo "      configured absolute; or the module is not installed where that" >&2
+    echo "      build said it would be." >&2
     exit 1
 fi
 

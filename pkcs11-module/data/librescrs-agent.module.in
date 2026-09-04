@@ -9,14 +9,23 @@
 # so they never reach the application — an app that passes a PIN to C_Login has
 # it ignored.
 #
-# A RELATIVE module path is loaded from the p11-kit default module dir
-# (pkg-config p11-kit-1 --variable p11_module_path; @LIBRESCRS_P11_MODULE_DIR@
-# on this build). Packagers building 32/64-bit parallel installs keep it
-# relative for the same reason opensc.module does.
-module: librescrs-pkcs11-agent.so
+# A RELATIVE module name is resolved against p11-kit's own module directory
+# (pkg-config p11-kit-1 --variable p11_module_path), NOT against the prefix this
+# build installed into. This build installs the library into
+# @LIBRESCRS_P11_MODULE_DIR_ABS@, so the reference below is bare only when those
+# two directories are the same — which is what lets a packager keep a 32/64-bit
+# parallel install working, the same reason stock opensc.module is relative.
+# Everywhere else it is absolute, because a dangling reference makes p11-kit
+# drop the module silently: no warning, no entry, nothing to notice.
+module: @LIBRESCRS_P11_MODULE_REF@
 
 # Never abort other modules if this one fails to load (e.g. agent not running).
 critical: no
+
+# Below the vendor middleware's own declaration, which claims 10 as well: this
+# module replaces it rather than outranking it, and a missing priority would
+# have claimed the higher default.
+priority: 10
 
 # ---------------------------------------------------------------------------
 # OPT-IN OUT-OF-PROCESS ISOLATION (deployment b). The SAME .so, config-only:
@@ -27,7 +36,7 @@ critical: no
 #
 #   1) Per-client pipe (no daemon — p11-kit spawns one `p11-kit remote` child
 #      per consumer; nothing to start/stop, simplest isolation):
-# remote: |p11-kit remote @LIBRESCRS_P11_MODULE_DIR@/librescrs-pkcs11-agent.so
+# remote: |p11-kit remote @LIBRESCRS_P11_MODULE_DIR_ABS@/librescrs-pkcs11-agent.so
 #
 #   2) Long-lived shared server (start librescrs-p11-server.service, which runs
 #      `p11-kit server`), then point apps at the stock p11-kit-client.so via a
@@ -42,15 +51,15 @@ critical: no
 #
 #   NSS (Firefox/Thunderbird/Chrome) fallback registration:
 #     modutil -dbdir sql:$HOME/.pki/nssdb -add librescrs \
-#         -libfile @LIBRESCRS_P11_MODULE_DIR@/librescrs-pkcs11-agent.so
+#         -libfile @LIBRESCRS_P11_MODULE_DIR_ABS@/librescrs-pkcs11-agent.so
 #     (or Settings -> Privacy & Security -> Security Devices -> Load.)
 #
 #   OpenSSH:
-#     ssh -I @LIBRESCRS_P11_MODULE_DIR@/librescrs-pkcs11-agent.so user@host
+#     ssh -I @LIBRESCRS_P11_MODULE_DIR_ABS@/librescrs-pkcs11-agent.so user@host
 #     (or PKCS11Provider in ~/.ssh/config.)
 #
 #   Standalone smoke / enumeration:
-#     pkcs11-tool --module @LIBRESCRS_P11_MODULE_DIR@/librescrs-pkcs11-agent.so -T
+#     pkcs11-tool --module @LIBRESCRS_P11_MODULE_DIR_ABS@/librescrs-pkcs11-agent.so -T
 #     p11-kit list-modules | grep -A5 librescrs
 #   The token must list "protected authentication path".
 #

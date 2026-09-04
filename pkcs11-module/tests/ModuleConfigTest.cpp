@@ -43,6 +43,37 @@ bool hasActiveDirective(const std::string& text, const std::string& directive)
     return false;
 }
 
+// The value of the first active occurrence of @p directive, trimmed.
+std::string activeDirectiveValue(const std::string& text, const std::string& directive)
+{
+    std::istringstream in{text};
+    std::string line;
+    while (std::getline(in, line)) {
+        std::size_t i = line.find_first_not_of(" \t");
+        if (i == std::string::npos || line[i] == '#')
+            continue;
+        if (line.compare(i, directive.size(), directive) != 0)
+            continue;
+        std::size_t v = line.find_first_not_of(" \t", i + directive.size());
+        if (v == std::string::npos)
+            return {};
+        std::size_t e = line.find_last_not_of(" \t\r");
+        return line.substr(v, e - v + 1);
+    }
+    return {};
+}
+
+std::string firstLineContaining(const std::string& text, const std::string& needle)
+{
+    std::istringstream in{text};
+    std::string line;
+    while (std::getline(in, line)) {
+        if (line.find(needle) != std::string::npos)
+            return line;
+    }
+    return {};
+}
+
 } // namespace
 
 TEST(ModuleConfig, InProcessModuleDirectiveIsTheActiveDefault)
@@ -97,4 +128,56 @@ TEST(ModuleConfig, ServerUnitForcesOwnerOnlySocket)
     EXPECT_TRUE(contains(unit, "librescrs-pkcs11-agent.so"));
     EXPECT_TRUE(contains(unit, "UMask=0077"));
     EXPECT_TRUE(contains(unit, "Type=simple"));
+}
+
+TEST(ModuleConfig, ModuleReferenceResolvesUnderThisInstallLayout)
+{
+    const std::string cfg = slurp(LIBRESCRS_MODULE_CONFIG_PATH);
+    const std::string ref = activeDirectiveValue(cfg, "module:");
+    ASSERT_FALSE(ref.empty());
+
+    // A bare name is resolved against p11-kit's own module path, never against
+    // the install prefix. It is correct only when the two are the same
+    // directory; anywhere else the reference dangles and p11-kit drops the
+    // module without a word.
+    if (ref.find('/') == std::string::npos) {
+        EXPECT_STREQ(ref.c_str(), "librescrs-pkcs11-agent.so");
+        EXPECT_STREQ(LIBRESCRS_MODULE_DIR_ABS, LIBRESCRS_P11_KIT_MODULE_PATH);
+    } else {
+        EXPECT_EQ(ref, std::string{LIBRESCRS_MODULE_DIR_ABS} + "/librescrs-pkcs11-agent.so");
+    }
+}
+
+TEST(ModuleConfig, DeclaresPriorityBelowVendorMiddleware)
+{
+    const std::string cfg = slurp(LIBRESCRS_MODULE_CONFIG_PATH);
+    EXPECT_TRUE(hasActiveDirective(cfg, "priority:"));
+    EXPECT_TRUE(contains(cfg, "priority: 10"));
+}
+
+TEST(ModuleConfig, DocumentedCommandsCanBePastedIntoAShell)
+{
+    // The examples are the only instructions a user gets (project policy bans a
+    // README here), so a relative path in them is not a cosmetic defect.
+    // Each needle must pick the EXAMPLE line, not the prose that mentions the
+    // tool. "p11-kit remote" alone matches a sentence four lines earlier which
+    // carries no path at all, so the test would fail for the wrong reason and
+    // then pass for the wrong reason once the prose is reworded.
+    const struct
+    {
+        const char* tool;
+        const char* needle;
+    } examples[] = {
+        {"modutil", "-libfile "},
+        {"ssh", "ssh -I "},
+        {"pkcs11-tool", "pkcs11-tool --module "},
+        {"p11-kit remote", "remote: |p11-kit remote "},
+    };
+    const std::string cfg = slurp(LIBRESCRS_MODULE_CONFIG_PATH);
+    for (const auto& e : examples) {
+        const std::string line = firstLineContaining(cfg, e.needle);
+        ASSERT_FALSE(line.empty()) << e.tool;
+        EXPECT_NE(line.find("/librescrs-pkcs11-agent.so"), std::string::npos) << e.tool;
+        EXPECT_NE(line.find(LIBRESCRS_MODULE_DIR_ABS), std::string::npos) << e.tool << ": " << line;
+    }
 }

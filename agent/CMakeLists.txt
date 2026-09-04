@@ -185,33 +185,6 @@ else()
     endif()
 endif()
 
-# Resolve the LM PKCS#11 module path for the native AdES signing path (see the
-# matching comment in data/librescrs-agent.service.in). Only the dogfood/user
-# install needs it baked in: LM installs under its OWN prefix
-# (~/.local/librescrs) that is not exe-relative to the agent, so
-# SigningService::resolvePkcs11Module()'s relative probing misses it and dlopen
-# falls back to a bare name that cannot be found -> every Card1.Sign fails. A
-# system (FHS) install keeps the module exe-relative (agent in libexec, module
-# in the sibling lib/pkcs11), so the resolver finds it and this stays empty.
-if(LIBRELINUX_USER_INSTALL)
-    # LibreMiddleware_DIR = <lm-prefix>/lib/cmake/LibreMiddleware; two dirs up is
-    # LM's libdir (reading LM's own layout honours lib vs lib64), and the module
-    # is the sibling pkcs11/ subdir. The unversioned .so symlink is exactly what
-    # the resolver looks for.
-    get_filename_component(_ll_lm_libdir "${LibreMiddleware_DIR}/../.." ABSOLUTE)
-    set(_ll_pkcs11_module "${_ll_lm_libdir}/pkcs11/librescrs-pkcs11.so")
-    if(NOT EXISTS "${_ll_pkcs11_module}")
-        message(WARNING
-            "LIBRELINUX_USER_INSTALL: LM PKCS#11 module not found at "
-            "'${_ll_pkcs11_module}' — Card1.Sign will fail until "
-            "LIBRESCRS_PKCS11_MODULE is set by hand. Is librescrs-middleware "
-            "installed under the prefix on CMAKE_PREFIX_PATH?")
-    endif()
-    set(LIBRESCRS_PKCS11_MODULE_ENV
-        "Environment=LIBRESCRS_PKCS11_MODULE=${_ll_pkcs11_module}")
-else()
-    set(LIBRESCRS_PKCS11_MODULE_ENV "")
-endif()
 configure_file(data/librescrs-agent.service.in librescrs-agent.service @ONLY)
 configure_file(data/org.librescrs.Agent.service.in org.librescrs.Agent.service @ONLY)
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/librescrs-agent.service
