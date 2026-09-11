@@ -59,7 +59,7 @@ You need:
 
 ## 2. Install LibreMiddleware into the user prefix
 
-The agent links LibreMiddleware ≥ 4.2 and loads its card plugins at runtime.
+The agent links LibreMiddleware 5.x and loads its card plugins at runtime.
 Install LM into `$HOME/.local/librescrs` (its own self-contained prefix):
 
 ```sh

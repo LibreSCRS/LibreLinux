@@ -41,7 +41,7 @@ cmake --build build/debug
 ctest --preset debug
 ```
 
-The preset expects LibreMiddleware ≥ 4.2 installed at
+The preset expects LibreMiddleware 5.x installed at
 `$HOME/.local/librescrs` (override via `CMAKE_PREFIX_PATH`). System
 dependencies: `sdbus-cpp` ≥ 2.0, `libsystemd`, GoogleTest,
 `dbus-run-session` (for the integration test). The Qt/KF6 prompter
