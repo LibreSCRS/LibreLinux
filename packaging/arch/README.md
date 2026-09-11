@@ -13,7 +13,8 @@ The split keeps the agent Qt-free: installing only `librescrs-agent` pulls
 `libLibreSCRS_Auth.so` for secure input handling), plus
 `qt6-base kcoreaddons ki18n`.
 
-The `PKGBUILD` is **release-shaped** (it fetches the tag's source tarball).
+The `PKGBUILD` is **release-shaped**: it fetches the source tarball the release
+workflow uploads for the tag, not GitHub's auto-generated one.
 `pkgver` is the first line of the repository's `VERSION` file: this component
 no longer carries its own 0.x SemVer and is released in lockstep with the
 rest of the stack.
@@ -37,11 +38,12 @@ path: the polkit action must go to the **system** actions dir, because polkit
 reads actions only from there, and without it `PolkitAuthorizer` cannot
 authorize `org.librescrs.agent.sign`.
 
-## Release build (after the `5.0.0` tag is pushed)
+## Release build (after the `5.0.0` release is published)
 
 ```sh
 cd packaging/arch
-updpkgsums      # fills in the real sha256sum
+makepkg -g      # prints the real sha256sum; paste it into the recipe
+                # (updpkgsums does the same but needs pacman-contrib)
 makepkg -si     # builds + installs both split packages
 ```
 

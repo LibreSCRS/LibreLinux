@@ -46,11 +46,14 @@ makedepends=(
     'dbus'                      # dbus-run-session (prompter + agent integration tests)
 )
 source=(
-    "$pkgbase-$pkgver.tar.gz::https://github.com/LibreSCRS/LibreLinux/archive/refs/tags/v$pkgver.tar.gz"
+    "$pkgbase-$pkgver.tar.gz::https://github.com/LibreSCRS/LibreLinux/releases/download/$pkgver/librelinux_$pkgver.orig.tar.gz"
 )
-# Placeholder — real sum filled at tag time with `updpkgsums`. The 5.0.0 tag
-# does not exist yet (repo unpublished); see README.md for the local-dogfood
-# build that needs no remote.
+# Placeholder — the real sum is filled at tag time with `makepkg -g` (pacman's
+# own tool; `updpkgsums` needs pacman-contrib). The 5.0.0 release does not
+# exist yet, and the sum is of the tarball the release workflow uploads, so it
+# cannot be computed before it. packaging/arch/check-recipe.sh turns a
+# remaining SKIP into an error the moment the tag exists; see README.md for the
+# local-dogfood build that needs no remote at all.
 sha256sums=('SKIP')
 
 build() {

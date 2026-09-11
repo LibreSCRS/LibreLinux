@@ -7,6 +7,17 @@ Notable user-visible changes per release. Format follows
 
 ### Added
 
+- **Every release carries a source tarball this project built.** The Arch
+  recipe fetches that asset instead of the archive GitHub generates for a tag:
+  the generated one omits every submodule tree, and its bytes are not ours to
+  assert, so the recipe's `sha256sums` line said nothing about what was
+  actually built. The published tarball is a function of the commit — every
+  member carries the commit's own timestamp, owner `0/0` and a mode no umask
+  can widen — so a packager who rebuilds it gets the same bytes back, up to the
+  gzip implementation. It is named so that one file can serve as the `.orig`
+  for `dpkg-source`; the `deb` and `rpm` builds still build from the checkout
+  and do not consume it yet.
+
 - **The agent and the prompter ship as distribution packages.** `deb` for
   Debian 13 and Ubuntu 26.04 LTS, `rpm` for Fedora 43. Five of the agent's files
   have to land in root-owned system directories — a systemd user unit, two D-Bus
