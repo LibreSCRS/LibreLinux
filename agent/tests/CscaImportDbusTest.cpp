@@ -692,6 +692,10 @@ TEST(CscaImportDbus, TheAnchorStateCannotBeWrittenOverTheBus)
 TEST(CscaImportDbus, AnAcceptedImportAnnouncesTheChangeExactlyOnce)
 {
     AllowAuthorizer allow;
+    // Declared before the harness that owns the proxy: the proxy must be
+    // destroyed before the state its handler captures.
+    std::atomic<int> announced{0};
+    std::string announcedKey;
     Harness h("changed-signal", allow);
 
     // AgentService wires this in production; replicate it, because the RECORD
@@ -705,8 +709,6 @@ TEST(CscaImportDbus, AnAcceptedImportAnnouncesTheChangeExactlyOnce)
         }
     });
 
-    std::atomic<int> announced{0};
-    std::string announcedKey;
     h.proxy->uponSignal("Changed").onInterface(sdbus::InterfaceName{kCfgIface}).call([&](const std::string& key) {
         announcedKey = key;
         announced.fetch_add(1, std::memory_order_acq_rel);

@@ -723,11 +723,11 @@ TEST(DBusService, EmitsInterfacesAddedWhenReaderMaterialises)
 
     auto clientConn = sdbus::createSessionBusConnection();
     clientConn->enterEventLoopAsync();
-    auto rootProxy = sdbus::createProxy(*clientConn, sdbus::ServiceName{"org.librescrs.Agent.Test.IfaceAddReader"},
-                                        sdbus::ObjectPath{kRootPath});
-
     std::mutex m;
     std::set<std::string> added;
+
+    auto rootProxy = sdbus::createProxy(*clientConn, sdbus::ServiceName{"org.librescrs.Agent.Test.IfaceAddReader"},
+                                        sdbus::ObjectPath{kRootPath});
     rootProxy->uponSignal(sdbus::SignalName{"InterfacesAdded"})
         .onInterface(sdbus::InterfaceName{"org.freedesktop.DBus.ObjectManager"})
         .call([&](const sdbus::ObjectPath& path, const std::map<std::string, std::map<std::string, sdbus::Variant>>&) {
@@ -782,12 +782,12 @@ TEST(DBusService, EmitsInterfacesAddedWhenCardMaterialises)
 
     auto clientConn = sdbus::createSessionBusConnection();
     clientConn->enterEventLoopAsync();
-    auto rootProxy = sdbus::createProxy(*clientConn, sdbus::ServiceName{"org.librescrs.Agent.Test.IfaceAddCard"},
-                                        sdbus::ObjectPath{kRootPath});
-
     std::mutex m;
     std::set<std::string> added;
     std::map<std::string, bool> hadCard1;
+
+    auto rootProxy = sdbus::createProxy(*clientConn, sdbus::ServiceName{"org.librescrs.Agent.Test.IfaceAddCard"},
+                                        sdbus::ObjectPath{kRootPath});
     rootProxy->uponSignal(sdbus::SignalName{"InterfacesAdded"})
         .onInterface(sdbus::InterfaceName{"org.freedesktop.DBus.ObjectManager"})
         .call([&](const sdbus::ObjectPath& path,
@@ -847,11 +847,11 @@ TEST(DBusService, EmitsInterfacesRemovedWhenCardWithdrawn)
 
     auto clientConn = sdbus::createSessionBusConnection();
     clientConn->enterEventLoopAsync();
-    auto rootProxy = sdbus::createProxy(*clientConn, sdbus::ServiceName{"org.librescrs.Agent.Test.IfaceRemoveCard"},
-                                        sdbus::ObjectPath{kRootPath});
-
     std::mutex m;
     std::set<std::string> removed;
+
+    auto rootProxy = sdbus::createProxy(*clientConn, sdbus::ServiceName{"org.librescrs.Agent.Test.IfaceRemoveCard"},
+                                        sdbus::ObjectPath{kRootPath});
     rootProxy->uponSignal(sdbus::SignalName{"InterfacesRemoved"})
         .onInterface(sdbus::InterfaceName{"org.freedesktop.DBus.ObjectManager"})
         .call([&](const sdbus::ObjectPath& path, const std::vector<std::string>&) {

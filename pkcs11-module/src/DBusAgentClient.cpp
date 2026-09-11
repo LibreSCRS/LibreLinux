@@ -169,13 +169,20 @@ struct DBusAgentClient::Impl
                 .onInterface(sdbus::InterfaceName{kCardIface})
                 .storeResultsTo(opPath);
 
-            auto opProxy = sdbus::createProxy(*conn, sdbus::ServiceName{kServiceName}, opPath);
-
+            // State BEFORE the proxy that owns the handlers, so the proxy dies
+            // FIRST and no signal can be delivered into a dead frame. sdbus-c++
+            // keeps a handler armed for as long as its proxy lives and runs it
+            // on the event-loop thread; with the proxy declared first it
+            // outlived the mutex and condition variable its handlers lock, and
+            // a Result or Finished arriving in that window locked a destroyed
+            // std::mutex. The correctly ordered exemplar is e2e/sign-proof.cpp.
             std::mutex mtx;
             std::condition_variable cv;
             bool finished = false;
             std::uint32_t status = 2; // default Error
             std::vector<CertResultEntry> entries;
+
+            auto opProxy = sdbus::createProxy(*conn, sdbus::ServiceName{kServiceName}, opPath);
 
             opProxy->uponSignal(sdbus::SignalName{"Result"})
                 .onInterface(sdbus::InterfaceName{kCertificatesIface})

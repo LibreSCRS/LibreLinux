@@ -392,7 +392,9 @@ TEST(CardOperationsIntegration, ReadIdentityHappyPathEmitsResultThenFinishedOk)
     // Subscribe to Identity1.Result + Operation1.Finished on the returned path.
     // sdbus-c++ delivers signals via the proxy's owning connection (the
     // client) — both signals are observed on the client's async event loop.
-    auto opProxy = sdbus::createProxy(*client, sdbus::ServiceName{kAgentServiceHappy}, opPath);
+    // Every piece of state the handlers capture is declared BEFORE the proxy
+    // that owns them: a handler stays armed for as long as its proxy lives, so
+    // the proxy has to be the first of these to be destroyed.
     std::atomic<bool> sawResult{false};
     std::atomic<int> finishedStatus{-1};
     std::atomic<int> finishOrderingObservedResult{0};
@@ -403,6 +405,8 @@ TEST(CardOperationsIntegration, ReadIdentityHappyPathEmitsResultThenFinishedOk)
 
     std::mutex resultMutex;
     IdentityFieldsMap signalledFields;
+
+    auto opProxy = sdbus::createProxy(*client, sdbus::ServiceName{kAgentServiceHappy}, opPath);
     opProxy->uponSignal(sdbus::SignalName{"Result"})
         .onInterface(sdbus::InterfaceName{kIdentity1Iface})
         .call([&sawResult, &resultMutex, &signalledFields](const IdentityFieldsMap& fields) {
@@ -517,15 +521,17 @@ TEST(CardOperationsIntegration, GroupSignalsStreamInOrderBeforeResult)
     // REAL bus (not just "the production code calls them in this order",
     // which the unit-level flow test already covers — this proves the wire
     // delivers them in that order too).
-    auto opProxy = sdbus::createProxy(*client, sdbus::ServiceName{kAgentServiceGroupStream}, opPath);
-
     using IdentityGroupFieldsMap =
         std::map<std::string, sdbus::Struct<std::string, std::string, std::string, sdbus::Variant>>;
     using IdentityFieldsMap = std::map<std::string, IdentityGroupFieldsMap>;
 
+    // State first, proxy second: the proxy must die before what its handlers
+    // capture.
     std::mutex orderMutex;
     std::vector<std::string> arrivalOrder;
     std::atomic<int> finishedStatus{-1};
+
+    auto opProxy = sdbus::createProxy(*client, sdbus::ServiceName{kAgentServiceGroupStream}, opPath);
 
     opProxy->uponSignal(sdbus::SignalName{"Group"})
         .onInterface(sdbus::InterfaceName{kIdentity1Iface})
@@ -1796,8 +1802,6 @@ TEST(CardOperationsIntegration, CardTypeUpdateForWithdrawnCardIsDroppedWithoutCr
         client->enterEventLoopAsync();
         auto rootProxy =
             sdbus::createProxy(*client, sdbus::ServiceName{kAgentServiceWithdrawRace}, sdbus::ObjectPath{kRootPath});
-        auto cardProxy =
-            sdbus::createProxy(*client, sdbus::ServiceName{kAgentServiceWithdrawRace}, sdbus::ObjectPath{kCardPath});
 
         auto cardPresent = [&]() -> bool {
             ManagedObjects managed;
@@ -1807,6 +1811,14 @@ TEST(CardOperationsIntegration, CardTypeUpdateForWithdrawnCardIsDroppedWithoutCr
             auto it = managed.find(sdbus::ObjectPath{kCardPath});
             return it != managed.end() && it->second.contains(kCard1Iface);
         };
+
+        // Watch for a CardType PropertiesChanged carrying the post-read value: the
+        // withdrawn card must NEVER emit one (the update is dropped, not applied).
+        // Declared before the proxy whose handler captures it, so the proxy is
+        // destroyed first and no delivery can land in a dead frame.
+        std::atomic<bool> sawReadTypeEmit{false};
+        auto cardProxy =
+            sdbus::createProxy(*client, sdbus::ServiceName{kAgentServiceWithdrawRace}, sdbus::ObjectPath{kCardPath});
 
         // Step 1: wait for the deferred publish (card exported with the
         // single-candidate insertion cardType).
@@ -1818,9 +1830,6 @@ TEST(CardOperationsIntegration, CardTypeUpdateForWithdrawnCardIsDroppedWithoutCr
         }
         ASSERT_TRUE(cardPresent()) << "card/2 must be published before the race";
 
-        // Watch for a CardType PropertiesChanged carrying the post-read value: the
-        // withdrawn card must NEVER emit one (the update is dropped, not applied).
-        std::atomic<bool> sawReadTypeEmit{false};
         cardProxy->uponSignal(sdbus::SignalName{"PropertiesChanged"})
             .onInterface(sdbus::InterfaceName{"org.freedesktop.DBus.Properties"})
             .call([&sawReadTypeEmit](const std::string& iface, const std::map<std::string, sdbus::Variant>& changed,
@@ -1842,8 +1851,8 @@ TEST(CardOperationsIntegration, CardTypeUpdateForWithdrawnCardIsDroppedWithoutCr
         sdbus::ObjectPath opPath;
         cardProxy->callMethod("ReadIdentity").onInterface(sdbus::InterfaceName{kCard1Iface}).storeResultsTo(opPath);
         ASSERT_FALSE(std::string{opPath}.empty());
-        auto opProxy = sdbus::createProxy(*client, sdbus::ServiceName{kAgentServiceWithdrawRace}, opPath);
         std::atomic<int> finishedStatus{-1};
+        auto opProxy = sdbus::createProxy(*client, sdbus::ServiceName{kAgentServiceWithdrawRace}, opPath);
         opProxy->uponSignal(sdbus::SignalName{"Finished"})
             .onInterface(sdbus::InterfaceName{kOperation1Iface})
             .call([&finishedStatus](std::uint32_t status, std::uint32_t, const std::string&, const std::string&) {

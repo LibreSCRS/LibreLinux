@@ -464,9 +464,9 @@ TEST(CredentialsDbus, ManagePinChangeHappyPathEmitsOkResultBeforeFinished)
     const auto opPath = callManagePin(*card, "user:0x01", "change", {});
     ASSERT_FALSE(std::string{opPath}.empty());
 
-    auto op = h.opProxy(opPath);
     std::atomic<bool> sawResult{false};
     std::atomic<int> orderedResultBeforeFinished{-1};
+    auto op = h.opProxy(opPath);
     op->uponSignal(sdbus::SignalName{"Result"})
         .onInterface(sdbus::InterfaceName{LibreLinux::AgentWire::kOpCredentialsIface})
         .call([&](const ResultDict&, const RecordsWire&) { sawResult.store(true); });

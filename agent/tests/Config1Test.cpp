@@ -197,9 +197,9 @@ TEST(Config1, ChangedSignalFires)
 
     auto clientConn = sdbus::createSessionBusConnection();
     clientConn->enterEventLoopAsync();
-    auto proxy = sdbus::createProxy(*clientConn, sdbus::ServiceName{svc}, sdbus::ObjectPath{kRootPath});
     std::atomic<bool> got{false};
     std::string gotKey;
+    auto proxy = sdbus::createProxy(*clientConn, sdbus::ServiceName{svc}, sdbus::ObjectPath{kRootPath});
     proxy->uponSignal("Changed").onInterface(sdbus::InterfaceName{kCfgIface}).call([&](const std::string& key) {
         gotKey = key;
         got.store(true, std::memory_order_release);
