@@ -4,7 +4,7 @@ name: CI
 # The job that builds LibreLinux first acquires LibreMiddleware exactly as
 # LibreCelik's CI expects it: built from source against the public org repo
 # and installed to a prefix, because LibreLinux consumes it via
-# `find_package(LibreMiddleware 4.2 REQUIRED CONFIG)` (CMakeLists.txt) — there
+# `find_package(LibreMiddleware 5.0 REQUIRED CONFIG)` (CMakeLists.txt) — there
 # is no FetchContent fallback here, so the package must exist on disk first.
 
 on:
@@ -30,7 +30,16 @@ jobs:
     timeout-minutes: 15
     runs-on: ubuntu-latest
     steps:
+      # fetch-tags, deliberately. The recipe check run further down decides
+      # its last arm on whether the LOCAL clone holds refs/tags/<pkgver>: with
+      # a tagless checkout it prints SKIPPED forever, so a sha256sums that is
+      # still a placeholder would outlive the release it waits for and no run
+      # would ever say so. actions/checkout fetches with --no-tags unless this
+      # is set, and a shallow fetch would not carry the tagged commit anyway.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
 
       - name: Install clang-format-21
         run: |
@@ -57,6 +66,19 @@ jobs:
       - name: Check every tracked source is reachable by the formatter
         run: ./ci/scripts/check-format-scope.sh
 
+      - name: Prove the signal-lifetime gate discriminates
+        run: ./ci/scripts/check-signal-state-lifetime.selftest.sh
+
+      - name: No signal handler outlives the state it captures
+        # sdbus-c++ keeps a handler armed for as long as its proxy lives and
+        # delivers it on the event-loop thread. Locals die in reverse
+        # declaration order, so a proxy declared before the state its handler
+        # captures is destroyed after it, and a signal arriving in that window
+        # locks a destroyed mutex. The race is microseconds wide and nothing
+        # can steer a signal into it on demand; the declaration order is
+        # decidable from the source, so that is what this measures.
+        run: ./ci/scripts/check-signal-state-lifetime.sh
+
       - name: Check every skip carries a reason
         # A test that skips without saying why is indistinguishable from a test
         # that passed. Costs a second and builds nothing.
@@ -76,6 +98,92 @@ jobs:
         # bound, which is the only moment the omission is cheap to fix.
         run: ci/scripts/check-job-timeouts.sh
 
+      - name: Every shipped gate is wired into CI
+        # A gate nobody runs is not a gate: dup-scan.py and canonical-types.py
+        # shipped in five repositories for a whole release cycle and no
+        # workflow ever named either.
+        run: ci/scripts/check-gates-wired.sh
+
+      - name: Gate-wiring check self-test
+        run: ci/scripts/check-gates-wired.selftest.sh
+
+      - name: Canonical declaration registry
+        # Single-checkout subset of the workspace scan. The cross-repository
+        # half -- duplicate bodies between two checkouts -- needs every tree
+        # side by side, which no single repository's CI has; this half is the
+        # part one repository can prove on its own.
+        run: python3 tools/canonical-types.py --repo "$(basename "$PWD")"
+
+      - name: Duplicate bodies (this checkout)
+        run: python3 tools/dup-scan.py --repo "$(basename "$PWD")"
+
+      - name: Every first-party version floor names the major in VERSION
+        # The 4.x sweep before 5.0 searched for the token `4.2`; the floor that
+        # mattered read `4.0`, in the only executable consumer the project
+        # ships, and survived. This measures the property instead: every
+        # first-party find_package/find_dependency floor must name the major
+        # the VERSION file names. It reads VERSION and never `git describe`, so
+        # it is decidable before a tag exists -- which is the whole window in
+        # which the mistake is cheap. --min 1 is the vacuum guard: a scan that
+        # matches nothing is unmeasured, not clean.
+        run: ci/scripts/check-version-floors.sh --min 1
+
+      - name: Prove the floor gate still fails when it should
+        # Twenty cases, instant, no build. A gate nobody has seen fail is a
+        # line in a workflow file.
+        run: ./ci/scripts/check-version-floors.selftest.sh
+
+      - name: The version this tree stamps names the major in VERSION
+        # The floor gate reads VERSION and the sources, so it stays green
+        # whatever the version derivation does, and a check that configures
+        # with git switched off is measuring the one input under which a tag
+        # cannot win. Between code freeze and the tag `git describe` still
+        # answers with the PREVIOUS release, and a tree that lets it decide
+        # installs a package whose major contradicts its own VERSION, changelog
+        # and packaging. This configures the real CMakeLists against a stubbed
+        # tag, in both directions, and creates no tag anywhere.
+        run: ci/scripts/check-version-stamp.sh --verbose
+
+      - name: Prove the stamp gate still fails when it should
+        # Seven fixtures, no compiler, no build. Two of them are shapes that
+        # have really been written: the tag deciding unconditionally, and git
+        # being ignored altogether.
+        run: ./ci/scripts/check-version-stamp.selftest.sh
+      - name: The Arch recipe fetches the tarball this project publishes
+        # Two scripts, because a gate nobody proves is a gate nobody trusts:
+        # the selftest perturbs the recipe -- and the tree around it -- and
+        # requires each refusal to name its own arm, then the gate runs over
+        # the committed recipe. It prints how many cases it ran, which is the
+        # only count that cannot go stale.
+        # Neither touches the network — `git ls-remote` against these SSH
+        # remotes hangs on a developer machine, and a gate that can hang is
+        # worse than one that can fail.
+        run: |
+          ./packaging/arch/check-recipe.selftest.sh
+          ./packaging/arch/check-recipe.sh
+
+      - name: Every uploaded artefact has someone to download it
+        # An artefact whose name no download step can match is built, kept for
+        # ninety days and dropped from the release without a word: the release
+        # simply carries one asset fewer. Names only -- whether the consumer is
+        # ordered after the producer is the needs question, which this
+        # repository answers only if it carries check-release-artifacts.sh.
+        run: |
+          ./ci/scripts/check-artifact-names.selftest.sh
+          ./ci/scripts/check-artifact-names.sh
+
+      - name: The source tarball is a function of the commit
+        # The recipe carries the tarball's sha256, so a packager who rebuilds
+        # it has to get the same bytes back. Two runs, forced apart by a second
+        # boundary and a umask boundary, then the property read out of the
+        # archive: every member carries the commit's own timestamp, owner 0/0,
+        # a mode from the set --mode writes, and a place in name order rather
+        # than in the order readdir happened to return; nothing sits under
+        # .github/; and the top directory is the one the recipes cd into.
+        run: |
+          ./ci/scripts/check-tarball-determinism.selftest.sh
+          ./ci/scripts/check-tarball-determinism.sh
+
   build-linux:
     # Arch container: LibreLinux's runtime deps (sdbus-c++ >= 2.0, libsystemd)
     # are not reliably packaged on ubuntu apt, and the owner's dev/target env
@@ -90,7 +198,7 @@ jobs:
       LM_PREFIX: /opt/libremiddleware
       # Git ref of LibreMiddleware to build against. Track its trunk during the
       # development cycle (LibreCelik does the same); pin to a release tag once
-      # LibreMiddleware tags releases. find_package(LibreMiddleware 4.2) in
+      # LibreMiddleware tags releases. find_package(LibreMiddleware 5.0) in
       # CMakeLists.txt enforces the required version independently of this ref.
       MIDDLEWARE_REF: main
     steps:
@@ -179,6 +287,17 @@ jobs:
           # check measures a log that was never produced.
           set -o pipefail
           LC_ALL=C cmake --build build -j4 2>&1 | tee build.log
+
+      - name: The warning floor is still reachable
+        # warning-gate.py judges the LOG, so a tree that has LOST compile units
+        # makes it refuse every full build and blame the build. This judges the
+        # configured graph instead, so the message names the stale number.
+        working-directory: LibreLinux
+        run: ./ci/scripts/check-warning-floor.sh build
+
+      - name: Warning-floor check self-test
+        working-directory: LibreLinux
+        run: ./ci/scripts/check-warning-floor.selftest.sh
 
       - name: Check the warning baseline
         # Counted by the [-Wname] tag, never by the message text: diagnostics
@@ -294,6 +413,43 @@ jobs:
           cmake --build build-tsan --target BusExporterReaderRaceTest ReaderRemoveDrainTest AgentShutdownUnderLoadTest TypedChannelWedgeDrainTest SignSeamWedgeDrainTest TransportCaptureGuardTest -j4
           dbus-run-session -- ctest --test-dir build-tsan -R "BusExporterReaderRace|ReaderRemoveDrain|AgentShutdownUnderLoad|TypedChannelWedgeDrain|SignSeamWedgeDrain|TransportCaptureGuard" --output-on-failure --no-tests=error
 
+      # --- Address-sanitizer gate for the module's D-Bus client lifetimes ----
+      # The TSan step above builds six agent targets and none from
+      # pkcs11-module/. The module's D-Bus client is the one place in this
+      # repository where a signal handler runs on another thread against locals
+      # of a frame that may already have returned, and TSan does not model
+      # stack frames. ASan does, but only with
+      # detect_stack_use_after_return, which is off by default.
+      #
+      # Be honest about the reach of this leg: it does not reproduce the race.
+      # The window is microseconds wide and the client's wait is a fixed
+      # budget with no knob to shorten it, so nothing here can steer a signal
+      # into it. It is a regression net for everything else this translation
+      # unit does; the deterministic verdict on declaration order is the
+      # source-shape gate in format-check.
+      - name: ASan (pkcs11-module lifetimes)
+        working-directory: LibreLinux
+        env:
+          # detect_leaks / detect_container_overflow off for the same reason
+          # they are off wherever this project runs ASan against distribution
+          # packages: GTest and sdbus-c++ come from the container uninstrumented,
+          # and a container that lives inside uninstrumented code but is touched
+          # from instrumented code reports an overflow that is not one, while
+          # their own allocations report as leaks nothing here can free. Every
+          # other check stays on, including the one this leg exists for.
+          ASAN_OPTIONS: detect_stack_use_after_return=1:detect_leaks=0:detect_container_overflow=0:halt_on_error=1
+        run: |
+          cmake -B build-asan-p11 -G Ninja \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_PREFIX_PATH="$LM_PREFIX" \
+            -DLIBRELINUX_BUILD_PROMPTER_KDE=OFF \
+            -DLIBRELINUX_WERROR=OFF \
+            -DCMAKE_CXX_FLAGS="-fsanitize=address -fno-omit-frame-pointer -g" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address"
+          cmake --build build-asan-p11 --target DBusAgentClientTest DBusAgentClientContractTest -j4
+          dbus-run-session -- ctest --test-dir build-asan-p11 \
+            -R "DBusAgentClient" --output-on-failure --no-tests=error
+
   coverage:
     # Arch container: LibreLinux's runtime deps (sdbus-c++ >= 2.0, libsystemd)
     # are not reliably packaged on ubuntu apt, and the owner's dev/target env
@@ -307,7 +463,7 @@ jobs:
       LM_PREFIX: /opt/libremiddleware
       # Git ref of LibreMiddleware to build against. Track its trunk during the
       # development cycle (LibreCelik does the same); pin to a release tag once
-      # LibreMiddleware tags releases. find_package(LibreMiddleware 4.2) in
+      # LibreMiddleware tags releases. find_package(LibreMiddleware 5.0) in
       # CMakeLists.txt enforces the required version independently of this ref.
       MIDDLEWARE_REF: main
     # Not on pull_request: this pass costs an hour and the moment a
@@ -559,8 +715,13 @@ jobs:
           case "${{ matrix.slug }}" in fedora43) fam=rpm ;; *) fam=deb ;; esac
           ver=$(tr -d '[:space:]' < VERSION)
           mkdir -p "$RUNNER_TEMP/librescrs-packages/out/${{ matrix.slug }}/LibreMiddleware/$fam"
+          # The slug is part of the asset name upstream: Debian 13 and
+          # Ubuntu 26.04 build .deb files with identical names, so the
+          # publisher puts the distribution into the name and a consumer that
+          # asked for "*.$fam" would fetch both and install packages built
+          # against another distribution's glibc alongside its own.
           gh release download "$ver" --repo LibreSCRS/LibreMiddleware \
-            --pattern "*.$fam" \
+            --pattern "*.${{ matrix.slug }}.$fam" \
             --dir "$RUNNER_TEMP/librescrs-packages/out/${{ matrix.slug }}/LibreMiddleware/$fam"
           mkdir -p "$RUNNER_TEMP/librescrs-packages/out/${{ matrix.slug }}/LibreAgent/$fam"
           gh release download "$ver" --repo LibreSCRS/LibreAgent \
