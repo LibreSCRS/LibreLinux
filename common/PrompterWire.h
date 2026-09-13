@@ -31,12 +31,10 @@ namespace LibreLinux::PrompterWire {
 // read-only ProtocolVersion property and read once by the agent.
 //
 // Why a version at all: the prompter is a long-lived user unit and SURVIVES an
-// agent restart (measured -- one had been running since the previous night and
-// outlived the agent), so a new agent routinely meets an older helper. A helper
-// that does not understand a dismissal by name would leave every window hanging
-// with no way to close it, which is the exact defect this work removes. The
-// agent refuses to raise a prompt it could not dismiss rather than emulating the
-// old behaviour: no compatibility shim.
+// agent restart, so a new agent routinely meets an older helper. A helper that
+// does not understand a dismissal by name would leave every window hanging with
+// no way to close it. The agent refuses to raise a prompt it could not dismiss
+// rather than emulating the old behaviour: no compatibility shim.
 //
 // Bump this whenever a method the agent DEPENDS ON changes shape.
 //   1 -- RequestSecret/RequestSecrets + CancelCurrent()

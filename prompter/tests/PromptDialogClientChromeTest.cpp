@@ -223,7 +223,7 @@ TEST(PromptDialogClientChrome, DescriptionLabelWithMarkupRendersLiterally)
 //
 // Two credential windows can stand at once, so a dialog that does not name its
 // reader leaves the holder guessing which secret authorises which card. On the
-// dual-interface reader on the owner's desk, whose two PC/SC names SHARE a
+// dual-interface reader on the development bench, whose two PC/SC names SHARE a
 // serial, the qualifier is the only thing separating two otherwise identical
 // dialogs.
 

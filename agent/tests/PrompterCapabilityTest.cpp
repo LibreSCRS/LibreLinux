@@ -1,12 +1,10 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 // SPDX-FileCopyrightText: 2026 hirashix0
 //
-// The prompter is a long-lived user unit and survives an agent restart
-// (measured: one had been running since the previous night and outlived the
-// agent), so a new agent routinely meets an older helper. A helper that does not
-// understand a dismissal by name loses every cancellation silently and leaves
-// windows hanging -- the exact defect this work removes, returning through a
-// mismatched pair. These pin the refusal.
+// The prompter is a long-lived user unit and survives an agent restart, so a
+// new agent routinely meets an older helper. A helper that does not understand
+// a dismissal by name loses every cancellation silently and leaves windows
+// hanging with nobody able to close them. These pin the refusal.
 
 #include "PrompterCapability.h"
 

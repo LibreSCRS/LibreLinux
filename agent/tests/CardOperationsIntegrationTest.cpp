@@ -1673,7 +1673,7 @@ TEST(CardOperationsIntegration, CardTypeAndAtrResolvedAtInsertionThenAuthoritati
 // only happens once the read completed and fired onCardType). The pure
 // use-after-free window (the update dereferencing the object mid-destroy) needs
 // a latch BETWEEN applyCardTypeUpdate's lookup and its updateCardType() call,
-// which has no non-seam injection point; see task-7-report.md.
+// which has no non-seam injection point.
 // ---------------------------------------------------------------------------
 namespace {
 

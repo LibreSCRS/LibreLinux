@@ -20,7 +20,7 @@ using LibreSCRS::Agent::ReaderInterface;
 
 namespace {
 
-// The three names as pcsc-lite reports them on the owner's desk. The two
+// The three names as pcsc-lite reports them on the development bench. The two
 // OMNIKEY slots SHARE a serial: only the bracketed product string and the slot
 // number separate them, which is what a naive shortening collapses into two
 // identical dialogs.
