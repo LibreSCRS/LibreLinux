@@ -11,12 +11,12 @@ namespace LibreSCRS::Agent {
 
 /// Whether a prompter is one this agent can actually drive.
 ///
-/// Measured on 2026-08-19: the prompter had been running since the previous
-/// night and SURVIVED the agent restart. It is a long-lived user unit —
-/// replacing the agent does not replace it — so a new agent routinely meets an
-/// older helper. If that helper does not understand a dismissal by name, every
-/// cancellation is silently lost and windows hang with nobody able to close
-/// them: the very defect this work removes, returning through a mismatched pair.
+/// The prompter is a long-lived user unit — replacing the agent does not
+/// replace it — so an agent routinely meets a helper that was started before
+/// it and survived its restart. If that helper does not understand a dismissal
+/// by name, every cancellation is silently lost and windows hang with nobody
+/// able to close them: the very defect the addressed dismissal removes,
+/// returning through a mismatched pair.
 ///
 /// The answer is refusal, not emulation. No compatibility shim, per the
 /// project's zero-legacy rule — the agent raises no prompt it could not dismiss,
