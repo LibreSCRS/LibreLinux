@@ -92,9 +92,9 @@ include(cmake/FindOrUseLibreAgent.cmake)
 # Bound every test. ctest's built-in default is 1500 seconds and nothing in this
 # tree overrode it, so a single wedged test could hold a hosted runner for
 # twenty-five minutes without ever being named; a handful of them consume the
-# whole job. That is not hypothetical — one CI job in this project sat for two
-# hours and forty-nine minutes on one deadlocked test, and only cancelling it
-# released a log that said which.
+# whole job. A hung job is also the one job that cannot say what hung: the
+# runner serves no log until the run is cancelled, so the deadlocked test stays
+# unnameable for exactly as long as it holds the runner.
 #
 # include(CTest) rather than a bare enable_testing(): DART_TESTING_TIMEOUT is
 # read by the CTest MODULE, which is what writes DartConfiguration.tcl, and a

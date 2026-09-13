@@ -8,10 +8,10 @@
 # Anything else must be listed in ci/gate-wiring-exceptions.txt WITH a reason;
 # a listed path that is no longer tracked fails too, so amnesty cannot go stale.
 #
-# Why this exists: five repositories shipped
-# tools/dup-scan.py and tools/canonical-types.py, both self-tested, both green,
-# and no workflow in any repository ever named either. They measured nothing on
-# every push for the whole 5.0 cycle.
+# Why this exists: a gate can be shipped, self-tested and green and still be
+# run by nothing, and no other check in CI notices. tools/dup-scan.py and
+# tools/canonical-types.py are the shape that hides it: each carries its own
+# selftest, so reading either says nothing about whether a workflow runs it.
 #
 # Three shapes this gate had to be taught, each found by its own selftest:
 #  * Comment lines are stripped before the search, so naming a script inside a

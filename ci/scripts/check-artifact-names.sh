@@ -2,12 +2,12 @@
 # check-artifact-names.sh [workflow-dir]
 #
 # An artefact that is uploaded and never downloaded is built, kept for ninety
-# days and silently dropped from the release. Measured on a sibling repository
-# while this was being written: a job uploaded `source-tarball` into a workflow
-# whose release job collects its inputs with `pattern: '*-artifacts'`. Nothing
-# failed. download-artifact is happy with an empty match, every gate stayed
-# green, and the release would simply have carried no source tarball -- while
-# the packaging recipe pointed at the asset that was never published.
+# days and silently dropped from the release. The shape that does it sits one
+# token away from the working one: a job uploads `source-tarball` into a
+# workflow whose release job collects its inputs with `pattern: '*-artifacts'`.
+# Nothing fails. download-artifact is happy with an empty match, every gate
+# stays green, and the release simply carries no source tarball -- while the
+# packaging recipe points at an asset that was never published.
 #
 # So: in a workflow that downloads artefacts at all, every uploaded artefact
 # name must be matched by some consumer's `name:` or `pattern:` in that same

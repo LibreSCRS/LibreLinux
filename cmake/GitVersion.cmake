@@ -52,9 +52,9 @@ endif()
 # answers with the PREVIOUS release for the whole cycle, so between code freeze
 # (VERSION bumped) and the tag the build stamps the OLD major while VERSION,
 # the CHANGELOG and the packaging all state the new one. This repository
-# carries no release tag today, so that half is dormant here rather than
-# absent -- the first tag brings it back at the next code freeze, and it is the
-# defect a sibling repository was measured shipping.
+# carries no release tag today -- `git describe` has nothing to answer with --
+# so that half is dormant here rather than absent: the first tag arms it, and
+# the code freeze after it is when it would bite.
 #
 # So VERSION is not a fallback, it is a floor: it carries the version this tree
 # is heading for and is bumped at code freeze. The tag still wins on the release

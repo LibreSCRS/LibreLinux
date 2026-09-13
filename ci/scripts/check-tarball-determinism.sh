@@ -58,12 +58,13 @@
 #
 # Not every component that ships make-source-tarball.sh ships this check, and
 # the components that do not do not carry the file at all. Here the clone the
-# script makes is local and takes under a second; where the tree carries
-# submodules or a dependency pinned for FetchContent, the same run pulls them
-# from a third-party host, twice per check (measured: 28 s and 8 s per run),
-# and a format-check that goes red because github.com is unreachable teaches
-# people to ignore red. The property is measured wherever the clone is purely
-# local, and stated as unmeasured in the release workflow of the rest.
+# script makes is purely local and takes under a second: this tree carries no
+# submodule and no cmake/FetchQCBOR.cmake, the two things that script would
+# otherwise pull from a third-party host. Where a tree carries either, the same
+# run fetches from that host twice per check, and a gate that goes red because
+# a third-party host is unreachable teaches people to ignore red. The property
+# is measured wherever the clone is purely local, and stated as unmeasured in
+# the release workflow of the rest.
 #
 # Exit: 0 the tarball is a function of the commit - 1 it is not
 #       2 nothing could be measured, which is NOT a pass.

@@ -9,11 +9,11 @@
 # healthy full build, with a message that blames the build ("this is an
 # incremental build, not a measurement") instead of the stale number.
 #
-# Measured on LibreKDE: the recorded floor is 122, written before the in-repo
-# fake agent was deleted; a clean CI-configured tree has 111 compile edges. The
-# first push would fail build-linux at the warning step, and the steps after it
-# -- the test-manifest gate, qmllint and the whole LibreKDE ctest run -- would
-# never execute.
+# A floor is recorded once and the tree keeps moving: delete a component and
+# the recorded number can end up above what a clean CI-configured tree builds.
+# From then on every full build fails at the warning step, and every step the
+# workflow runs after it -- the remaining gates and the whole ctest run --
+# never executes, for a reason the message does not name.
 #
 # Asserts min_compile_units <= the compile edges the CONFIGURED graph holds,
 # and prints both numbers so a stale floor is visible rather than inferred.

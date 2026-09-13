@@ -7,8 +7,8 @@
 # its log while it does, so the failing test cannot even be named until someone
 # cancels the run. That happened here and cost most of a working day.
 #
-# Deliberately not a YAML-library parse: two sibling repositories build inside
-# Arch containers that would need an extra package for that, and the
+# Deliberately not a YAML-library parse: this repository's build job runs in an
+# Arch container that would need an extra package for that, and the
 # indentation is exact enough for the one distinction that matters — a
 # job-level timeout-minutes (four spaces) is not a step-level one (eight), and
 # this project's own CI file carries both.

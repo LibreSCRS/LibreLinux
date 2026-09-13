@@ -99,9 +99,9 @@ jobs:
         run: ci/scripts/check-job-timeouts.sh
 
       - name: Every shipped gate is wired into CI
-        # A gate nobody runs is not a gate: dup-scan.py and canonical-types.py
-        # shipped in five repositories for a whole release cycle and no
-        # workflow ever named either.
+        # A gate nobody runs is not a gate. dup-scan.py and canonical-types.py
+        # are the shape that hides it: each carries its own selftest, so
+        # reading either says nothing about whether a workflow runs it.
         run: ci/scripts/check-gates-wired.sh
 
       - name: Gate-wiring check self-test
@@ -129,8 +129,9 @@ jobs:
         run: ci/scripts/check-version-floors.sh --min 1
 
       - name: Prove the floor gate still fails when it should
-        # Twenty cases, instant, no build. A gate nobody has seen fail is a
-        # line in a workflow file.
+        # Thirty numbered cases, fifty assertions, instant, no build -- the run
+        # prints each one. A gate nobody has seen fail is a line in a workflow
+        # file.
         run: ./ci/scripts/check-version-floors.selftest.sh
 
       - name: The version this tree stamps names the major in VERSION
