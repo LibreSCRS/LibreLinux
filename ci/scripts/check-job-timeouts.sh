@@ -5,7 +5,7 @@
 #
 # An unbounded job that hangs holds a runner for six hours and refuses to serve
 # its log while it does, so the failing test cannot even be named until someone
-# cancels the run. That happened here and cost most of a working day.
+# cancels the run. That has happened here.
 #
 # Deliberately not a YAML-library parse: this repository's build job runs in an
 # Arch container that would need an extra package for that, and the
