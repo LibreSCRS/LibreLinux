@@ -228,8 +228,11 @@ endif()
 # read by polkit) and instead requires a one-time `sudo install` of this file
 # into the system dir — see docs/dogfooding.md.
 if(NOT LIBRELINUX_USER_INSTALL)
+    # Relative to the install prefix: a staged package install with
+    # --prefix /usr must land this beside the manifest line that claims it,
+    # and an absolute destination fixed at configure time cannot be moved.
     install(FILES data/org.librescrs.agent.configure.policy
-        DESTINATION ${CMAKE_INSTALL_FULL_DATADIR}/polkit-1/actions)
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/polkit-1/actions)
 endif()
 
 # BUILD_TESTING, not unconditional. include(CTest) in the root file defines it
