@@ -449,15 +449,17 @@ jobs:
             -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address"
           cmake --build build-asan-p11 --target DBusAgentClientTest DBusAgentClientContractTest -j4
           # This step runs after the host-install step above put the agent's
-          # D-Bus service file under /usr/local, so a session bus started
-          # here would ACTIVATE that agent on the first call -- and the
+          # D-Bus service file into the system service directory, which a
+          # stock session bus scans regardless of the environment. A bus
+          # started here would ACTIVATE that agent on the first call, and the
           # contract's "no agent" case would meet an agent that starts and
           # fails to load its libraries (GeneralError) rather than no agent
-          # at all (DeviceRemoved). The bus is given no service directories,
-          # which is the environment the same suites saw before the install.
-          mkdir -p "$PWD/no-dbus-services"
-          XDG_DATA_DIRS="$PWD/no-dbus-services" XDG_DATA_HOME="$PWD/no-dbus-services" \
-            dbus-run-session -- ctest --test-dir build-asan-p11 \
+          # at all (DeviceRemoved). The bus therefore runs on a configuration
+          # with no service directory at all -- ci/dbus-session-isolated.conf
+          # -- which is the environment the same suites saw before the
+          # install: an unowned name answers ServiceUnknown, nothing spawns.
+          dbus-run-session --config-file=ci/dbus-session-isolated.conf -- \
+            ctest --test-dir build-asan-p11 \
             -R "DBusAgentClient" --output-on-failure --no-tests=error
 
   coverage:
