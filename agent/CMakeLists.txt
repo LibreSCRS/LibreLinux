@@ -204,7 +204,12 @@ install(FILES
 if(NOT LIBRELINUX_USER_INSTALL)
     pkg_get_variable(DBUS_SESSION_POLICY_DIR dbus-1 session_bus_policydir)
     if(NOT DBUS_SESSION_POLICY_DIR)
-        set(DBUS_SESSION_POLICY_DIR ${CMAKE_INSTALL_FULL_DATADIR}/dbus-1/session.d)
+        # Relative to the install prefix on purpose: dbus-1.pc defines no
+        # session_bus_policydir, so this is the path that applies, and an
+        # absolute one is fixed at configure time -- a staged install with
+        # --prefix /usr would still write it under the configure-time prefix,
+        # beside nothing the package manifest names.
+        set(DBUS_SESSION_POLICY_DIR ${CMAKE_INSTALL_DATADIR}/dbus-1/session.d)
     endif()
     install(FILES data/org.librescrs.Agent.conf
         DESTINATION ${DBUS_SESSION_POLICY_DIR})
