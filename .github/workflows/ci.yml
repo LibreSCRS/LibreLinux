@@ -448,7 +448,16 @@ jobs:
             -DCMAKE_CXX_FLAGS="-fsanitize=address -fno-omit-frame-pointer -g" \
             -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address"
           cmake --build build-asan-p11 --target DBusAgentClientTest DBusAgentClientContractTest -j4
-          dbus-run-session -- ctest --test-dir build-asan-p11 \
+          # This step runs after the host-install step above put the agent's
+          # D-Bus service file under /usr/local, so a session bus started
+          # here would ACTIVATE that agent on the first call -- and the
+          # contract's "no agent" case would meet an agent that starts and
+          # fails to load its libraries (GeneralError) rather than no agent
+          # at all (DeviceRemoved). The bus is given no service directories,
+          # which is the environment the same suites saw before the install.
+          mkdir -p "$PWD/no-dbus-services"
+          XDG_DATA_DIRS="$PWD/no-dbus-services" XDG_DATA_HOME="$PWD/no-dbus-services" \
+            dbus-run-session -- ctest --test-dir build-asan-p11 \
             -R "DBusAgentClient" --output-on-failure --no-tests=error
 
   coverage:
@@ -624,7 +633,11 @@ jobs:
       - name: Build & install LibreAgent (Core) at the recorded pin
         # The pin file, not the agent's trunk: a package built from whatever the
         # agent happened to have on trunk that hour is the failure this job
-        # exists to rule out.
+        # exists to rule out. The components are the ones the agent's own
+        # packages build and this repository's installed-package path asks
+        # for (Core, Wire, Pkcs11Facade; TestSupport is on for a top-level
+        # build), so the configure below meets the package a distribution
+        # would have installed, not a smaller one.
         run: |
           git clone https://github.com/LibreSCRS/LibreAgent.git LibreAgent
           git -C LibreAgent checkout "$(tr -d '[:space:]' < LibreLinux/cmake/libreagent.pin)"
@@ -632,7 +645,9 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX="$LM_PREFIX" \
             -DCMAKE_PREFIX_PATH="$LM_PREFIX" \
-            -DLIBREAGENT_BUILD_CORE=ON
+            -DLIBREAGENT_BUILD_CORE=ON \
+            -DLIBREAGENT_BUILD_WIRE=ON \
+            -DLIBREAGENT_BUILD_PKCS11_FACADE=ON
           cmake --build la-build -j4
           cmake --install la-build
 
