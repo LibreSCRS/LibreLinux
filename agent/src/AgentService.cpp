@@ -361,7 +361,15 @@ bool AgentService::registerOnBus()
             if (m_frontend) {
                 m_frontend->onCardRemovedForLease(cardKey);
             }
-            m_core->operationManager().invalidateReaderSession(m_core->presenceModel().readerIdFor(readerName));
+            const ObjectId readerId = m_core->presenceModel().readerIdFor(readerName);
+            // Release the power hold first (a no-op for a reader that was never
+            // held), then invalidate the session: with the card gone there is
+            // nothing left to keep powered, and the next op must re-open against
+            // whatever comes next. The worker drops the hold handle on the
+            // invalidate as well; clearing the flag here keeps a later sweep
+            // from re-acquiring one on an empty reader.
+            m_core->operationManager().setReaderHold(readerId, false);
+            m_core->operationManager().invalidateReaderSession(readerId);
         });
 
         // A successful config mutation (over D-Bus or agent-internal, e.g. a

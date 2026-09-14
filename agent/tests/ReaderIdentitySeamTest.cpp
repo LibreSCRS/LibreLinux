@@ -15,6 +15,7 @@
 
 using LibreSCRS::Agent::BusExporter;
 using LibreSCRS::Agent::identityForCardIn;
+using LibreSCRS::Agent::isContactSlotOfDualInterfaceUnit;
 using LibreSCRS::Agent::ReaderIdentity;
 using LibreSCRS::Agent::ReaderInterface;
 
@@ -72,4 +73,19 @@ TEST(ReaderIdentitySeam, AnEmptyCardKeyNeverMatchesAReaderHoldingNoCard)
     // key must not match it, or every unresolvable prompt would be labelled with
     // whichever empty reader happened to come first.
     EXPECT_EQ(identityForCardIn(deskRoster(), ""), ReaderIdentity{});
+}
+
+// The hold gate: only the CONTACT slot of a dual-interface unit is held. The
+// single-interface Gemalto is Unknown, the OMNIKEY CL slot is Contactless, an
+// unknown or empty key resolves to nothing.
+TEST(ReaderIdentitySeam, OnlyTheContactSlotOfADualInterfaceUnitIsHeld)
+{
+    auto roster = deskRoster();
+    roster.cardPaths[1] = "/org/librescrs/Card/2"; // a card now sits in the OMNIKEY contact slot
+
+    EXPECT_TRUE(isContactSlotOfDualInterfaceUnit(roster, "/org/librescrs/Card/2")) << "OMNIKEY contact slot";
+    EXPECT_FALSE(isContactSlotOfDualInterfaceUnit(roster, "/org/librescrs/Card/3")) << "OMNIKEY CL slot";
+    EXPECT_FALSE(isContactSlotOfDualInterfaceUnit(roster, "/org/librescrs/Card/1")) << "single-interface Gemalto";
+    EXPECT_FALSE(isContactSlotOfDualInterfaceUnit(roster, "/org/librescrs/Card/9")) << "unknown card key";
+    EXPECT_FALSE(isContactSlotOfDualInterfaceUnit(roster, "")) << "empty key never matches";
 }

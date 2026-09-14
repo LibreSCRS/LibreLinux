@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 // SPDX-FileCopyrightText: 2026 hirashix0
 #include "AgentFrontend.h"
+#include "AgentCoreSeams.h"      // isContactSlotOfDualInterfaceUnit (the hold gate)
 #include "AgentInterfaceNames.h" // LibreLinux::AgentWire::kRootPath
 #include "AgentObjectPath.h"     // agentObjectPath / objectIdFromPath (ObjectId <-> wire path)
 #include "AuthMethodName.h"      // authMethodName (PreReadAuthMethod -> wire string)
@@ -293,6 +294,17 @@ void AgentFrontend::applyCardResolution(const std::string& cardPath, const std::
         return;
     }
     log::infof("exported card {}", cardPath);
+
+    // Power hold: a card on the CONTACT slot of a dual-interface unit keeps its
+    // reader powered (a bare second session in the reader's worker, no secret,
+    // no traffic) so the same single-chip card's contactless twin stops flapping
+    // in and out of the CL slot. Classified from the exporter's presence roster,
+    // the same lookup the prompt dialog uses; a single-interface reader is never
+    // held. Released by AgentService's card-removed hook.
+    if (isContactSlotOfDualInterfaceUnit(m_transport.presenceRoster(), cardPath)) {
+        m_opManager.setReaderHold(objectIdFromPath(readerPath), true);
+        log::infof("reader {}: holding the contact interface to quiet its contactless twin", readerName);
+    }
 }
 
 void AgentFrontend::materializeReader(const ReaderState& reader)

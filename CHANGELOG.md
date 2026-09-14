@@ -129,3 +129,23 @@ and its secure PIN/CAN entry prompter, plus a client PKCS#11 module.
   `librescrs-agent` and `librescrs-pinentry-kde`, wiring the systemd
   user service, D-Bus service files, polkit actions and the PKCS#11
   module.
+
+### Changed
+
+- **Dual-interface readers: the contact slot is kept powered while a card
+  sits in it.** A dual-interface card in the contact slot of a reader such as
+  the OMNIKEY 5422 couples weakly to the reader's contactless coupler, so the
+  contactless slot reported it as an endless insert/remove flap (reader LED
+  never at rest, a full card probe per flap). The agent now keeps a bare
+  power hold on that contact slot: a second PC/SC connection that carries no
+  secret and sends no traffic. The logical session still closes after 45 s
+  idle exactly as before, so nothing lives longer in memory than it did.
+  Consequence: a PC/SC client that asks for EXCLUSIVE access to that contact
+  slot (GnuPG's scdaemon does by default) is refused while the card is
+  present; SHARED clients, including OpenSC tools, are unaffected. On such a
+  slot, and for cards whose PIN state is not bound to a secure channel, the
+  card's own verified state now survives the 45 s idle close, so within a
+  PKCS#11 login a signature after a longer pause no longer re-prompts before
+  the login's own idle limit; as inside the old 45 s window, that on-card
+  state is visible to any other local shared PC/SC client while the card
+  stays powered.
