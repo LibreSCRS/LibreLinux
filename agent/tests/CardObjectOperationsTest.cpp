@@ -1380,3 +1380,74 @@ TEST(CardObjectOperations, SignBatchRateLimitFiresBeforeTheDocumentCountGate)
     clientConn->leaveEventLoop();
     serverConn->leaveEventLoop();
 }
+
+// ---- the deferral sentinel for format and packaging ---------------------
+
+// A deferred format is sniffed from the document, not validated as a format:
+// a PDF resolves, and bytes no sniffer recognises are refused with the
+// inference message rather than "unsupported format".
+TEST(CardObjectOperations, SignDeferringTheFormatSniffsItFromTheDocument)
+{
+    auto serverConn = sdbus::createSessionBusConnection();
+    ASSERT_NE(serverConn, nullptr);
+    serverConn->requestName(sdbus::ServiceName{"org.librescrs.Agent.Test.SignFormatAuto"});
+
+    OperationManager mgr(nullptr);
+    SignFixture fix{"formatauto"};
+    CardObject card(*serverConn, sdbus::ObjectPath{kCardPath}, kPkiBit, sdbus::ObjectPath{kReaderPath}, mgr,
+                    fix.deps());
+    serverConn->enterEventLoopAsync();
+
+    auto clientConn = sdbus::createSessionBusConnection();
+    clientConn->enterEventLoopAsync();
+    auto proxy = sdbus::createProxy(*clientConn, sdbus::ServiceName{"org.librescrs.Agent.Test.SignFormatAuto"},
+                                    sdbus::ObjectPath{kCardPath});
+
+    const int pdf = makeInputMemfd(std::string_view{"%PDF-1.7\n", 9});
+    ASSERT_GE(pdf, 0);
+    const auto opPath = callSign(*proxy, pdf, {{"format", sdbus::Variant{std::string{"auto"}}}});
+    EXPECT_TRUE(std::string{opPath}.starts_with("/org/librescrs/Agent/op/")) << "got " << std::string{opPath};
+
+    const int opaque = makeInputMemfd(std::string_view{"zzzz", 4});
+    ASSERT_GE(opaque, 0);
+    try {
+        callSign(*proxy, opaque, {{"format", sdbus::Variant{std::string{"auto"}}}});
+        ADD_FAILURE() << "expected a deferred format over unrecognisable bytes to be refused";
+    } catch (const sdbus::Error& e) {
+        EXPECT_EQ(e.getName(), "org.librescrs.Agent.Error.UnsupportedSignatureParameter");
+        EXPECT_NE(std::string{e.getMessage()}.find("infer"), std::string::npos) << "got: " << e.getMessage();
+    }
+    std::this_thread::sleep_for(50ms);
+
+    clientConn->leaveEventLoop();
+    serverConn->leaveEventLoop();
+}
+
+// A deferred packaging takes the format's default instead of being judged as
+// a packaging mode -- the sentinel is not a member of that vocabulary.
+TEST(CardObjectOperations, SignDeferringThePackagingTakesTheFormatsDefault)
+{
+    auto serverConn = sdbus::createSessionBusConnection();
+    ASSERT_NE(serverConn, nullptr);
+    serverConn->requestName(sdbus::ServiceName{"org.librescrs.Agent.Test.SignPackagingAuto"});
+
+    OperationManager mgr(nullptr);
+    SignFixture fix{"packagingauto"};
+    CardObject card(*serverConn, sdbus::ObjectPath{kCardPath}, kPkiBit, sdbus::ObjectPath{kReaderPath}, mgr,
+                    fix.deps());
+    serverConn->enterEventLoopAsync();
+
+    auto clientConn = sdbus::createSessionBusConnection();
+    clientConn->enterEventLoopAsync();
+    auto proxy = sdbus::createProxy(*clientConn, sdbus::ServiceName{"org.librescrs.Agent.Test.SignPackagingAuto"},
+                                    sdbus::ObjectPath{kCardPath});
+
+    const int fd = makeInputMemfd(std::string_view{"\x30\x82\x01\x00", 4});
+    ASSERT_GE(fd, 0);
+    const auto opPath = callSign(*proxy, fd, {{"packaging", sdbus::Variant{std::string{"auto"}}}});
+    EXPECT_TRUE(std::string{opPath}.starts_with("/org/librescrs/Agent/op/")) << "got " << std::string{opPath};
+    std::this_thread::sleep_for(50ms);
+
+    clientConn->leaveEventLoop();
+    serverConn->leaveEventLoop();
+}
