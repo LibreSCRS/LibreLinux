@@ -269,8 +269,12 @@ ResolvedSignOptions resolveSignOptions(const std::map<std::string, sdbus::Varian
 {
     namespace sp = Operations::SignatureParams;
 
-    std::string format = optString(options, "format", "auto");
-    if (format == "auto" || format.empty()) {
+    // The deferral sentinel is spelled once, in the agent's shared helpers, so
+    // this frontend and the socket one cannot drift apart on it.
+    std::string format;
+    if (const auto requested = sp::requestedFormatFrom(optString(options, "format", ""))) {
+        format = *requested;
+    } else {
         const auto sniffed = sp::sniffFormat(sniffSource);
         if (!sniffed) {
             throw sdbus::Error{sdbus::Error::Name{kBadParamErrName}, "Could not infer the signature format"};
@@ -302,8 +306,8 @@ ResolvedSignOptions resolveSignOptions(const std::map<std::string, sdbus::Varian
     }
 
     // Resolve the effective level per request: an explicit option always wins;
-    // a request that DEFERS -- an absent key, or the "auto" sentinel the other
-    // two option vocabularies already accepted -- takes the configured default,
+    // a request that DEFERS -- an absent key, or the sentinel the other two
+    // option vocabularies accept the same way -- takes the configured default,
     // and a defaulted "b-b" upgrades to "b-t" when a timestamp authority is
     // available. The `try` still wraps only the extraction, so a non-string
     // level keeps its own specific rejection.
@@ -338,10 +342,8 @@ ResolvedSignOptions resolveSignOptions(const std::map<std::string, sdbus::Varian
                            "tsaUrl is only meaningful for the timestamped/long-term family (b-t/b-lt/b-lta)"};
     }
 
-    std::string packaging = optString(options, "packaging", "auto");
-    if (packaging == "auto" || packaging.empty()) {
-        packaging = sp::defaultPackagingFor(format);
-    }
+    const std::string packaging =
+        sp::requestedPackagingFrom(optString(options, "packaging", "")).value_or(sp::defaultPackagingFor(format));
     if (!sp::isKnownPackaging(packaging)) {
         throw sdbus::Error{sdbus::Error::Name{kBadParamErrName}, "Unsupported packaging mode"};
     }
