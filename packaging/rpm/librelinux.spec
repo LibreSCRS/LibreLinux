@@ -1,3 +1,10 @@
+# Link-time optimisation off, explicitly. Fedora's default %%optflags carry
+# -flto=auto -ffat-lto-objects, and that conflicts with the vendored static
+# LibreAgent::Core archive (the librescrs-agent-core package) exactly as this
+# project's own Arch recipe has recorded (options=('!lto')). Debian does not
+# enable LTO by default, which is why this line has no counterpart there and
+# why one recipe mechanically translated into the other would have been
+# wrong.
 %global _lto_cflags %{nil}
 
 Name:           librelinux
