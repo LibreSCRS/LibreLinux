@@ -1,0 +1,28 @@
+# coverage-env.txt — the environment a coverage baseline may be recorded in.
+#
+# `require <VAR>` lines are a contract: coverage-gate.py --update refuses, with
+# exit 2, when any of them is unset or empty. It exists because a committed
+# baseline in this project was recorded without the software token provisioned:
+# sixteen files on the signing path read 0.0% not because they are uncovered but
+# because the tests that cover them skipped, and a floor under a file at zero is
+# either meaningless or permanently red. The sibling skip-ledger check already
+# refused to record from such an environment (ci/skip-ledger-env.txt); this one
+# did not — it had no reference to the token at all.
+#
+# The remaining lines are the pin, recorded for the reader and for whoever
+# regenerates next: which environment the number came from. `--check
+# --expect-key` asserts the compiler key against the baseline, so a baseline
+# from another environment is a mismatch (exit 1) rather than an inability to
+# judge (exit 2) — the barrier and CI read exit 2 as "I did not measure".
+#
+# Freshness of this pin is not asserted here. `recorded` is the date it was last
+# looked at; a date that has gone stale is the signal.
+
+require SOFTHSM2_CONF
+require SOFTHSM2_LIB
+
+container archlinux:latest
+compiler GNU-16
+gcovr 8.6
+recorded 2026-09-19
+digest PENDING This job runs in a rolling-release container, so the compiler moves with the image and the tag alone does not pin it. The digest that would pin it cannot be recorded from a checkout; it is taken from the first run that records a baseline here, and until then the key above is what an Arch-family host ships today.

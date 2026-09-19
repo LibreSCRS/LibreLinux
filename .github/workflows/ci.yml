@@ -611,7 +611,7 @@ jobs:
         # across configurations is how a gap becomes an artefact. Record a
         # runner-side baseline with --update, review it in the same commit, and
         # from then on this step is a ratchet.
-        run: ./ci/scripts/coverage-gate.py --check build-cov
+        run: ./ci/scripts/coverage-gate.py --check --expect-key GNU-16 build-cov
 
   packaging-build:
     # The path a distribution package takes: the agent core comes from a
