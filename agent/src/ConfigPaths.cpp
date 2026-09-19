@@ -8,8 +8,9 @@
 namespace LibreSCRS::Agent {
 namespace {
 // MIRROR-OF: LibreMiddleware/lib/libresign/src/dss/dss_service_manager.cpp -
-// same XDG_CONFIG_HOME/XDG_CACHE_HOME resolution as platformCacheDir(); not a
-// registered name in canonical-types.tsv, so no gate keeps the two in sync.
+// the $XDG_CACHE_HOME branch below matches platformCacheDir(), which also
+// has an __APPLE__ branch and suffixes "/librescrs/dss"; not a registered
+// name in canonical-types.tsv, so no gate keeps the two in sync.
 // $XDG_CONFIG_HOME or $HOME/.config; $XDG_CACHE_HOME or $HOME/.cache, each
 // suffixed "/librescrs". Empty optional only when HOME is unset and no XDG
 // override is present.
