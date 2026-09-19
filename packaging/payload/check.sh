@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
 # check.sh <staged-usr-dir>
 #
 # The split packages' payload is declared in packaging/payload/*.files, and the

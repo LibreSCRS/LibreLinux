@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
 # to-deb-install.sh <payload-name>  -> a debhelper .install list on stdout
 #
 # The payload lists are the single source of truth for what each package

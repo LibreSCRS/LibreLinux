@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: LGPL-2.1-or-later
 # to-rpm-files.sh <payload-name>  -> a %files body on stdout
 #
 # Same source of truth as the Debian side, same non-mechanical mapping: see
