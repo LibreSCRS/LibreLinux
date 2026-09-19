@@ -109,6 +109,58 @@ set(DART_TESTING_TIMEOUT 300 CACHE STRING
     "Default per-test ctest timeout, in seconds")
 include(CTest)
 
+# --- one ctest entry per GoogleTest case ---------------------------------
+# With one entry per binary, ctest counts binaries: `ctest -R` cannot select a
+# case, the manifest check compares file names so a case deleted inside a
+# surviving binary passes, and the skip ledger reads the ctest log and therefore
+# records nothing for a binary whose cases all skipped.
+if(BUILD_TESTING)
+    include(GoogleTest)
+
+    # PRE_TEST, not the default POST_BUILD: POST_BUILD runs each freshly linked
+    # binary in the middle of a parallel build, and on a loaded runner that
+    # yields an empty test-list and kills the build, naming a different target
+    # each time. The failure reads as a regression and is not one.
+    set(CMAKE_GTEST_DISCOVER_TESTS_DISCOVERY_MODE PRE_TEST)
+
+    # Each D-Bus suite gets its own session bus through the target property
+    # GoogleTest's discovery module reads. It reads that property only while
+    # CMP0158 is unset or OLD; under NEW -- which arrives with the first bump of
+    # cmake_minimum_required to 3.29 or later -- the emulator stops being
+    # consulted without cross-compiling, the wrapper silently falls off, and
+    # these suites go to whatever session bus the runner is on. The guard is
+    # required because cmake_policy(SET CMP0158 ...) is an error on CMake 3.24
+    # through 3.28, which this project still declares as its minimum. The
+    # behaviour is asserted separately, because this line cannot fail.
+    if(POLICY CMP0158)
+        cmake_policy(SET CMP0158 OLD)
+    endif()
+
+    find_program(DBUS_RUN_SESSION dbus-run-session REQUIRED)
+
+    # An address no bus can be listening on. ctest hands it to every bus-backed
+    # test in both variables below; dbus-run-session overwrites
+    # DBUS_SESSION_BUS_ADDRESS with the bus it starts, so the two are equal
+    # exactly when the wrapper did not run -- which is what
+    # common/tests/PrivateSessionBusTest.cpp asserts against.
+    set(LIBRELINUX_PRIVATE_BUS_SENTINEL "unix:path=/nonexistent/librescrs-no-private-bus")
+    set(LIBRELINUX_PRIVATE_BUS_ENV
+        "LIBRESCRS_OUTER_BUS=${LIBRELINUX_PRIVATE_BUS_SENTINEL};DBUS_SESSION_BUS_ADDRESS=${LIBRELINUX_PRIVATE_BUS_SENTINEL}")
+    set(LIBRELINUX_PRIVATE_BUS_SOURCE
+        "${CMAKE_CURRENT_SOURCE_DIR}/common/tests/PrivateSessionBusTest.cpp")
+
+    # Wraps <tgt> in its own session bus and compiles in the case that says so.
+    # The suite name carries the target's name because every bus-backed binary
+    # gets this case, and ctest entries are named after the case alone.
+    function(librelinux_private_session_bus tgt)
+        set_target_properties(${tgt} PROPERTIES
+            CROSSCOMPILING_EMULATOR "${DBUS_RUN_SESSION};--")
+        target_sources(${tgt} PRIVATE "${LIBRELINUX_PRIVATE_BUS_SOURCE}")
+        target_compile_definitions(${tgt} PRIVATE
+            LIBRESCRS_PRIVATE_BUS_SUITE=${tgt}PrivateSessionBus)
+    endfunction()
+endif()
+
 # Header-only utilities shared across the daemon, prompter, and module (pure
 # POSIX, no Qt/sdbus/LM): the sealed-memfd creator, the pidfd-pinned /proc
 # readers, and the agent/prompter wire vocabularies.

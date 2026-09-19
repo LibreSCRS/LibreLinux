@@ -16,7 +16,7 @@ add_executable(CertResultWireSignatureTest CertResultWireSignatureTest.cpp)
 target_include_directories(CertResultWireSignatureTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
 target_compile_features(CertResultWireSignatureTest PRIVATE cxx_std_23)
 target_link_libraries(CertResultWireSignatureTest PRIVATE SDBusCpp::sdbus-c++ GTest::gtest GTest::gtest_main)
-add_test(NAME CertResultWireSignatureTest COMMAND CertResultWireSignatureTest)
+gtest_discover_tests(CertResultWireSignatureTest)
 
 # The D-Bus AgentClient implementation against a fake agent on a private session
 # bus. It stayed here because the implementation stayed here: 501 lines of
@@ -28,11 +28,12 @@ target_include_directories(DBusAgentClientTest PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../src)
 target_compile_features(DBusAgentClientTest PRIVATE cxx_std_23)
 target_link_libraries(DBusAgentClientTest PRIVATE SDBusCpp::sdbus-c++ GTest::gtest GTest::gtest_main)
-add_test(NAME DBusAgentClientTest COMMAND ${DBUS_RUN_SESSION} -- $<TARGET_FILE:DBusAgentClientTest>)
+librelinux_private_session_bus(DBusAgentClientTest)
 # A wedged test under dbus-run-session must fail in minutes, not consume the
 # runner's whole wall: every dbus-run-session test here carries an explicit
 # timeout.
-set_tests_properties(DBusAgentClientTest PROPERTIES TIMEOUT 120)
+gtest_discover_tests(DBusAgentClientTest PROPERTIES
+    ENVIRONMENT "${LIBRELINUX_PRIVATE_BUS_ENV}" TIMEOUT 120)
 
 # The same contract suite the agent's own tree instantiates over the socket
 # transport, instantiated here over the bus one. The claims are NOT copied: the
@@ -45,8 +46,7 @@ target_include_directories(DBusAgentClientContractTest PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../src)
 target_compile_features(DBusAgentClientContractTest PRIVATE cxx_std_23)
 target_link_libraries(DBusAgentClientContractTest PRIVATE SDBusCpp::sdbus-c++ GTest::gtest GTest::gtest_main)
-add_test(NAME DBusAgentClientContractTest
-    COMMAND ${DBUS_RUN_SESSION} -- $<TARGET_FILE:DBusAgentClientContractTest>)
+librelinux_private_session_bus(DBusAgentClientContractTest)
 # One claim in that suite is what the client answers when the agent is ABSENT,
 # and on this transport "nobody owns the name" is not the same thing: the bus
 # will try to START the agent from a service file, and a developer machine that
@@ -55,9 +55,9 @@ add_test(NAME DBusAgentClientContractTest
 # difference between two machines, not between two transports, so the search
 # path is emptied rather than inherited and absent means absent everywhere.
 file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/no-bus-services)
-set_tests_properties(DBusAgentClientContractTest PROPERTIES
+gtest_discover_tests(DBusAgentClientContractTest PROPERTIES
     TIMEOUT 120
-    ENVIRONMENT "XDG_DATA_HOME=${CMAKE_CURRENT_BINARY_DIR}/no-bus-services;XDG_DATA_DIRS=${CMAKE_CURRENT_BINARY_DIR}/no-bus-services")
+    ENVIRONMENT "XDG_DATA_HOME=${CMAKE_CURRENT_BINARY_DIR}/no-bus-services;XDG_DATA_DIRS=${CMAKE_CURRENT_BINARY_DIR}/no-bus-services;${LIBRELINUX_PRIVATE_BUS_ENV}")
 
 # Pure-text assertions on the configured .module + deployment-(b) server unit
 # (no p11-kit, no D-Bus). The configured files are produced by the parent
@@ -72,7 +72,7 @@ target_compile_definitions(ModuleConfigTest PRIVATE
     # The declaration may use the bare form only when the two are equal.
     LIBRESCRS_MODULE_DIR_ABS="${LIBRESCRS_P11_MODULE_DIR_ABS}"
     LIBRESCRS_P11_KIT_MODULE_PATH="${_ll_p11_module_path}")
-add_test(NAME ModuleConfigTest COMMAND ModuleConfigTest)
+gtest_discover_tests(ModuleConfigTest)
 
 # RPC integration: drive the EXTERNAL consumer pkcs11-tool against the real .so
 # with the FakeAgent as the card backend (in-process deployment-a path). Needs a
