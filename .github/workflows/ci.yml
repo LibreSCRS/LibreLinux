@@ -320,7 +320,7 @@ jobs:
         # runner and the machine that recorded the baseline do not agree on a
         # diagnostic set, and neither is authoritative over the other.
         working-directory: LibreLinux
-        run: ./ci/scripts/warning-gate.py --check build.log --build-dir build
+        run: ./ci/scripts/warning-gate.py --check --require-key build.log --build-dir build
 
       - name: Check the discovered test set
         working-directory: LibreLinux
