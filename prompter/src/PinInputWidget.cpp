@@ -57,8 +57,8 @@ void PinInputWidget::scrubEdit()
     // guarantee — Qt may have already vended a detached copy of the text
     // (signals, validators, the display buffer) whose storage we cannot reach.
     // True zeroization needs a QLineEdit replacement backed by LM Secure::*
-    // (a zeroizing allocator); that secure-line-edit is the deferred SOTA
-    // follow-up and is tracked separately.
+    // (a zeroizing allocator); shipping without one is a known limitation of
+    // Qt's copy-on-write string handling, accepted for this release.
     const int len = m_edit->text().size();
     if (len > 0) {
         m_edit->setText(QString(len, QLatin1Char('0')));
