@@ -2,8 +2,10 @@
 // SPDX-FileCopyrightText: 2026 hirashix0
 //
 // Proves the auto-prompter's memfd/seal contract end-to-end
-// WITHOUT any smart card, sign, login or real PIN. It is a pure Prompter1 CLIENT
-// (mirrors the agent's PrompterClient) that:
+// WITHOUT any smart card, sign, login or real PIN. It is a pure Prompter1
+// CLIENT that exercises the same contract as the agent's PrompterClient. Not
+// a registered name in canonical-types.tsv, so no gate keeps the two in sync
+// (MIRROR-OF: LibreLinux/agent/src/PrompterClient.cpp). It:
 //
 //   Test A (gate absent)  -> RequestSecret("pin") must return status="cancelled"
 //                            with a 0-byte memfd (fail-safe, no secret leaked).

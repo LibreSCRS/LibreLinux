@@ -7,9 +7,12 @@
 #include <string_view>
 namespace LibreSCRS::Agent {
 namespace {
-// XDG resolution mirroring LM's platformCacheDir(): $XDG_CONFIG_HOME or
-// $HOME/.config; $XDG_CACHE_HOME or $HOME/.cache, each suffixed "/librescrs".
-// Empty optional only when HOME is unset and no XDG override is present.
+// MIRROR-OF: LibreMiddleware/lib/libresign/src/dss/dss_service_manager.cpp -
+// same XDG_CONFIG_HOME/XDG_CACHE_HOME resolution as platformCacheDir(); not a
+// registered name in canonical-types.tsv, so no gate keeps the two in sync.
+// $XDG_CONFIG_HOME or $HOME/.config; $XDG_CACHE_HOME or $HOME/.cache, each
+// suffixed "/librescrs". Empty optional only when HOME is unset and no XDG
+// override is present.
 std::optional<std::filesystem::path> xdgDir(const char* xdgVar, const char* homeSuffix)
 {
     if (const char* x = std::getenv(xdgVar); x != nullptr && x[0] != '\0') {
