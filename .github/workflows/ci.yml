@@ -185,6 +185,13 @@ jobs:
           ./ci/scripts/check-tarball-determinism.selftest.sh
           ./ci/scripts/check-tarball-determinism.sh
 
+      # Every self-test in this repository, by pathspec, and each one must
+      # report the cases it ran and how many proved the gate red. A self-test
+      # nothing runs proves as much as no self-test, and a runner that read only
+      # exit codes would accept `exit 0` as a body.
+      - name: Run every self-test
+        run: ./ci/scripts/run-selftests.sh
+
   build-linux:
     # Arch container: LibreLinux's runtime deps (sdbus-c++ >= 2.0, libsystemd)
     # are not reliably packaged on ubuntu apt, and the owner's dev/target env

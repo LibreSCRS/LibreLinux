@@ -83,8 +83,14 @@ for d in /usr/share/p11-kit/modules /etc/pkcs11/modules; do
 done
 
 failures=0
+cases=0
+red=0
 assert() { # $1 name  $2 want-rc  $3 XDG  $4 fixture  $5... extra gate args
     local name="$1" want="$2" xdg="$3" fixture="$4"; shift 4
+    cases=$((cases + 1))
+    # red-proved: the case in which the gate returned non-zero on a state it
+    # must refuse. Five of these seven are exactly that.
+    if [ "$want" != 0 ]; then red=$((red + 1)); fi
     # The name carries spaces; a filename must not.
     local slug; slug="$(printf '%s' "$name" | tr -c 'A-Za-z0-9' '_')"
     local out="$WORK/out-$slug.txt" got
@@ -115,6 +121,7 @@ echo "== the un-fixtured enumerator is reachable =="
 # Not an assertion about this host's registration state — only that the real
 # path runs, p11-kit is present, and the gate reaches a verdict instead of the
 # exit-2 it uses for "I could not look".
+cases=$((cases + 1))
 XDG_CONFIG_HOME="$S4" "$GATE" > "$WORK/out-live.txt" 2>&1
 live=$?
 if [ "$live" = 0 ] || [ "$live" = 1 ]; then
@@ -128,7 +135,9 @@ fi
 echo
 if [ "$failures" -eq 0 ]; then
     echo "PASS: the gate distinguishes all five states in both modes."
+    printf 'selftest: %s cases, %s red-proved\n' "$cases" "$red"
     exit 0
 fi
 echo "FAIL: $failures assertion(s) failed." >&2
+printf 'selftest: %s cases, %s red-proved\n' "$cases" "$red"
 exit 1
