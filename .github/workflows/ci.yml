@@ -447,8 +447,28 @@ jobs:
             -DLIBRELINUX_WERROR=OFF \
             -DCMAKE_CXX_FLAGS="-fsanitize=thread -g" \
             -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=thread"
+          # One spelling of the selection, used by the build, by the run and by
+          # the count below. Three copies is how one of them stops matching.
+          SUITES="BusExporterReaderRace|ReaderRemoveDrain|AgentShutdownUnderLoad|TypedChannelWedgeDrain|SignSeamWedgeDrain|TransportCaptureGuard"
           cmake --build build-tsan --target BusExporterReaderRaceTest ReaderRemoveDrainTest AgentShutdownUnderLoadTest TypedChannelWedgeDrainTest SignSeamWedgeDrainTest TransportCaptureGuardTest -j4
-          dbus-run-session -- ctest --test-dir build-tsan -R "BusExporterReaderRace|ReaderRemoveDrain|AgentShutdownUnderLoad|TypedChannelWedgeDrain|SignSeamWedgeDrain|TransportCaptureGuard" --output-on-failure --no-tests=error
+          dbus-run-session -- ctest --test-dir build-tsan -R "$SUITES" --output-on-failure --no-tests=error
+          # --no-tests=error fails only when the selection matches NOTHING. The
+          # denominator of a -R leg is the expression, not the build directory,
+          # so renaming one add_test(NAME ...) while leaving the target name
+          # alone still builds, still runs, and covers one suite less. This is
+          # the number; it is regenerated in the change that alters the set.
+          n=$(ctest --test-dir build-tsan -N -R "$SUITES" | grep -c '^ *Test *#' || true)
+          test "$n" = 6 || { echo "the sanitizer leg selected $n suites, not 6"; exit 1; }
+
+      # --no-tests=error above fails only when the regex matches NOTHING. Rename
+      # one add_test(NAME ...) and leave the target name alone and the build still
+      # succeeds, the regex matches five suites instead of six, and the leg reports
+      # success having covered one suite less. The denominator here is the regex,
+      # not the build directory, so the committed listing of what this build
+      # directory registers is the only thing that can see the difference.
+      - name: Check the discovered test set (TSan leg)
+        working-directory: LibreLinux
+        run: ./ci/scripts/test-manifest-gate.sh --check build-tsan tsan
 
       # --- PKCS#11 ownership -----------------------------------------------
       # Install rules cannot prove registration: the declaration once landed
