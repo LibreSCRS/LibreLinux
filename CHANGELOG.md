@@ -19,9 +19,11 @@ Notable user-visible changes per release. Format follows
   and do not consume it yet.
 
 - **The agent and the prompter ship as distribution packages.** `deb` for
-  Debian 13 and Ubuntu 26.04 LTS, `rpm` for Fedora 43. Five of the agent's files
-  have to land in root-owned system directories — a systemd user unit, two D-Bus
-  drop-ins, a polkit action and a p11-kit registration — so no bundle format can
+  Debian 13 and Ubuntu 26.04 LTS, `rpm` for Fedora 43. The agent's files that
+  have to land in root-owned system directories span systemd units
+  (`librescrs-agent.service`, `librescrs-p11-server.service`), D-Bus service
+  activation files, a D-Bus session policy, the D-Bus interface definitions, a
+  polkit action and a p11-kit module registration — so no bundle format can
   deliver it, and a distribution package is the only shape it can take.
 
   **The prompter is a hard dependency, not a suggestion.** An agent with no
