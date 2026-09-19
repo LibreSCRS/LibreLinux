@@ -45,6 +45,7 @@ makedepends=(
     'gtest'                     # agent/tests/CMakeLists.txt: find_package(GTest REQUIRED)
     'dbus'                      # dbus-run-session (prompter + agent integration tests)
 )
+options=('!lto')   # own LibreLinuxAgentCore static archive + IPO can conflict; keep it simple
 source=(
     "$pkgbase-$pkgver.tar.gz::https://github.com/LibreSCRS/LibreLinux/releases/download/$pkgver/librelinux_$pkgver.orig.tar.gz"
 )
