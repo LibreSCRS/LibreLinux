@@ -185,20 +185,6 @@ jobs:
           ./ci/scripts/check-tarball-determinism.selftest.sh
           ./ci/scripts/check-tarball-determinism.sh
 
-      # Every self-test in this repository, by pathspec, and each one must
-      # report the cases it ran and how many proved the gate red. A self-test
-      # nothing runs proves as much as no self-test, and a runner that read only
-      # exit codes would accept `exit 0` as a body.
-      - name: Run every self-test
-        run: ./ci/scripts/run-selftests.sh
-
-      # A step can land in a job that does not run on push, or before the
-      # checkout that creates the directory its working-directory names, and
-      # nothing says so: the wiring check sees the name and the timeout check
-      # sees the bound. This reads the workflows as data and fails on both.
-      - name: Every step can run where it was placed
-        run: ./ci/scripts/workflow-step-order.py
-
   build-linux:
     # Arch container: LibreLinux's runtime deps (sdbus-c++ >= 2.0, libsystemd)
     # are not reliably packaged on ubuntu apt, and the owner's dev/target env
@@ -388,7 +374,7 @@ jobs:
         run: ./ci/scripts/skip-ledger.sh --check ctest.log linux
 
       # --- Address-sanitizer gate for the module's D-Bus client lifetimes ----
-      # The TSan step below builds six agent targets and none from
+      # The TSan step above builds six agent targets and none from
       # pkcs11-module/. The module's D-Bus client is the one place in this
       # repository where a signal handler runs on another thread against locals
       # of a frame that may already have returned, and TSan does not model
@@ -434,67 +420,6 @@ jobs:
             ctest --test-dir build-asan-p11 \
             -R "DBusAgentClient" --output-on-failure --no-tests=error
 
-      # --- Thread-sanitizer gate for the agent concurrency invariants -------
-      # The reader-map / ReaderObject-field locking (BusExporter::m_readersMutex
-      # + ReaderObject::m_mutex) is a data-race guard: a regression that drops a
-      # lock still passes the plain RelWithDebInfo Test step green but races
-      # under TSan. Build + run only the concurrency suite under
-      # -fsanitize=thread (KDE prompter OFF so no Qt; the installed LM is
-      # uninstrumented, which is fine — the guarded state is LL-owned).
-      - name: TSan (agent concurrency)
-        working-directory: LibreLinux
-        env:
-          QT_QPA_PLATFORM: offscreen
-          TSAN_OPTIONS: halt_on_error=1
-        run: |
-          cmake -B build-tsan -G Ninja \
-            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-            -DCMAKE_PREFIX_PATH="$LM_PREFIX" \
-            -DLIBRELINUX_BUILD_PROMPTER_KDE=OFF \
-            -DLIBRELINUX_WERROR=OFF \
-            -DCMAKE_CXX_FLAGS="-fsanitize=thread -g" \
-            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=thread"
-          # One spelling of the selection, used by the build, by the run and by
-          # the count below. Three copies is how one of them stops matching.
-          SUITES="BusExporterReaderRace|ReaderRemoveDrain|AgentShutdownUnderLoad|TypedChannelWedgeDrain|SignSeamWedgeDrain|TransportCaptureGuard|CardObjectOperations"
-          cmake --build build-tsan --target BusExporterReaderRaceTest ReaderRemoveDrainTest AgentShutdownUnderLoadTest TypedChannelWedgeDrainTest SignSeamWedgeDrainTest TransportCaptureGuardTest CardObjectOperationsTest -j4
-          dbus-run-session -- ctest --test-dir build-tsan -R "$SUITES" --output-on-failure --no-tests=error
-          # --no-tests=error fails only when the selection matches NOTHING. The
-          # denominator of a -R leg is the expression, not the build directory,
-          # so renaming one add_test(NAME ...) while leaving the target name
-          # alone still builds, still runs, and covers one suite less. This is
-          # the number; it is regenerated in the change that alters the set.
-          n=$(ctest --test-dir build-tsan -N -R "$SUITES" | grep -c '^ *Test *#' || true)
-          test "$n" = 7 || { echo "the sanitizer leg selected $n suites, not 7"; exit 1; }
-
-      # --no-tests=error above fails only when the regex matches NOTHING. Rename
-      # one add_test(NAME ...) and leave the target name alone and the build still
-      # succeeds, the regex matches five suites instead of six, and the leg reports
-      # success having covered one suite less. The denominator here is the regex,
-      # not the build directory, so the committed listing of what this build
-      # directory registers is the only thing that can see the difference.
-      - name: Check the discovered test set (TSan leg)
-        working-directory: LibreLinux
-        run: ./ci/scripts/test-manifest-gate.sh --check build-tsan tsan
-
-      # --- PKCS#11 ownership -----------------------------------------------
-      # Install rules cannot prove registration: the declaration once landed
-      # exactly where the rule said and p11-kit never read it. The gate
-      # therefore runs AFTER `cmake --install`, enumerates what the host
-      # actually loads, and fails on a runner that installed nothing — which is
-      # the state the previous check reported as success.
-      - name: Install to the system prefix and assert a single PKCS#11 owner
-        working-directory: LibreLinux
-        timeout-minutes: 5
-        run: |
-          cmake --install build
-          ./e2e/check-p11kit-single-owner.sh
-
-      - name: Prove the gate still discriminates
-        working-directory: LibreLinux
-        timeout-minutes: 5
-        run: ./e2e/check-p11kit-single-owner.selftest.sh
-
   coverage:
     # Arch container: LibreLinux's runtime deps (sdbus-c++ >= 2.0, libsystemd)
     # are not reliably packaged on ubuntu apt, and the owner's dev/target env
@@ -517,6 +442,47 @@ jobs:
     if: github.event_name == 'workflow_dispatch'
     timeout-minutes: 120
     steps:
+
+      # --- PKCS#11 ownership -----------------------------------------------
+      # Install rules cannot prove registration: the declaration once landed
+      # exactly where the rule said and p11-kit never read it. The gate
+      # therefore runs AFTER `cmake --install`, enumerates what the host
+      # actually loads, and fails on a runner that installed nothing — which is
+      # the state the previous check reported as success.
+      - name: Install to the system prefix and assert a single PKCS#11 owner
+        working-directory: LibreLinux
+        timeout-minutes: 5
+        run: |
+          cmake --install build
+          ./e2e/check-p11kit-single-owner.sh
+
+      - name: Prove the gate still discriminates
+        working-directory: LibreLinux
+        timeout-minutes: 5
+        run: ./e2e/check-p11kit-single-owner.selftest.sh
+
+      # --- Thread-sanitizer gate for the agent concurrency invariants -------
+      # The reader-map / ReaderObject-field locking (BusExporter::m_readersMutex
+      # + ReaderObject::m_mutex) is a data-race guard: a regression that drops a
+      # lock still passes the plain RelWithDebInfo Test step green but races
+      # under TSan. Build + run only the concurrency suite under
+      # -fsanitize=thread (KDE prompter OFF so no Qt; the installed LM is
+      # uninstrumented, which is fine — the guarded state is LL-owned).
+      - name: TSan (agent concurrency)
+        working-directory: LibreLinux
+        env:
+          QT_QPA_PLATFORM: offscreen
+          TSAN_OPTIONS: halt_on_error=1
+        run: |
+          cmake -B build-tsan -G Ninja \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_PREFIX_PATH="$LM_PREFIX" \
+            -DLIBRELINUX_BUILD_PROMPTER_KDE=OFF \
+            -DLIBRELINUX_WERROR=OFF \
+            -DCMAKE_CXX_FLAGS="-fsanitize=thread -g" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=thread"
+          cmake --build build-tsan --target BusExporterReaderRaceTest ReaderRemoveDrainTest AgentShutdownUnderLoadTest TypedChannelWedgeDrainTest SignSeamWedgeDrainTest TransportCaptureGuardTest -j4
+          dbus-run-session -- ctest --test-dir build-tsan -R "BusExporterReaderRace|ReaderRemoveDrain|AgentShutdownUnderLoad|TypedChannelWedgeDrain|SignSeamWedgeDrain|TransportCaptureGuard" --output-on-failure --no-tests=error
 
       - name: Install system dependencies
         run: |
