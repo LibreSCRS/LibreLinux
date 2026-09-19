@@ -449,8 +449,8 @@ jobs:
             -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=thread"
           # One spelling of the selection, used by the build, by the run and by
           # the count below. Three copies is how one of them stops matching.
-          SUITES="BusExporterReaderRace|ReaderRemoveDrain|AgentShutdownUnderLoad|TypedChannelWedgeDrain|SignSeamWedgeDrain|TransportCaptureGuard"
-          cmake --build build-tsan --target BusExporterReaderRaceTest ReaderRemoveDrainTest AgentShutdownUnderLoadTest TypedChannelWedgeDrainTest SignSeamWedgeDrainTest TransportCaptureGuardTest -j4
+          SUITES="BusExporterReaderRace|ReaderRemoveDrain|AgentShutdownUnderLoad|TypedChannelWedgeDrain|SignSeamWedgeDrain|TransportCaptureGuard|CardObjectOperations"
+          cmake --build build-tsan --target BusExporterReaderRaceTest ReaderRemoveDrainTest AgentShutdownUnderLoadTest TypedChannelWedgeDrainTest SignSeamWedgeDrainTest TransportCaptureGuardTest CardObjectOperationsTest -j4
           dbus-run-session -- ctest --test-dir build-tsan -R "$SUITES" --output-on-failure --no-tests=error
           # --no-tests=error fails only when the selection matches NOTHING. The
           # denominator of a -R leg is the expression, not the build directory,
@@ -458,7 +458,7 @@ jobs:
           # alone still builds, still runs, and covers one suite less. This is
           # the number; it is regenerated in the change that alters the set.
           n=$(ctest --test-dir build-tsan -N -R "$SUITES" | grep -c '^ *Test *#' || true)
-          test "$n" = 6 || { echo "the sanitizer leg selected $n suites, not 6"; exit 1; }
+          test "$n" = 7 || { echo "the sanitizer leg selected $n suites, not 7"; exit 1; }
 
       # --no-tests=error above fails only when the regex matches NOTHING. Rename
       # one add_test(NAME ...) and leave the target name alone and the build still
