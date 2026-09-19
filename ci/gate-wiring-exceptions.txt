@@ -7,3 +7,11 @@
 packaging/ci/build-deb.sh  run as packaging/ci/build-$FAMILY.sh by packaging/ci/package-gate.sh:142
 packaging/ci/build-rpm.sh  run as packaging/ci/build-$FAMILY.sh by packaging/ci/package-gate.sh:142
 ci/scripts/changelog-to-debian.sh  hand-run when refreshing packaging/debian/changelog; no CI step consumes it
+e2e/check-dogfood-sign-module.sh  A gating dogfood guard over the installed PKCS#11 module the native signing path dlopens; it needs that module installed on the host, which a runner does not have.
+e2e/launch-e2e.sh  Brings up a private session bus with the agent daemon for the through-the-agent harness; it needs a card and a PIN, so it is run by hand and its result is recorded in the release checklist.
+e2e/run-hw-smoke.sh  The through-the-agent hardware smoke runner: private bus, headless prompter, PIN gate armed around one call. Needs a reader and a card.
+e2e/run-level-proof.sh  The level-deferral acceptance runner, same bring-up and the same hardware requirement as the smoke runner.
+e2e/run-sign-proof.sh  The one-command sign proof: builds the client and signs once through the agent with the PIN gate armed. Needs a reader and a card.
+e2e/validate.sh  Proves the memfd and seal contract end to end with a dummy PIN and no card, but it still needs a private bus with a real agent and prompter, which the test job does not stand up.
+packaging/payload/to-deb-install.sh  Run by hand to regenerate the debhelper install list from the payload lists, which are the source of truth; the generated list is what the build consumes.
+packaging/payload/to-rpm-files.sh  Run by hand to regenerate the RPM %files body from the same payload lists, for the same reason.
