@@ -3,9 +3,9 @@
 The Linux broker for the LibreSCRS smart-card ecosystem: the per-user
 **LibreSCRS Agent** (`librescrs-agent`) — a headless, Qt-free D-Bus session
 service that is the single owner of the card and its secrets. Desktop clients
-(LibreKDE) reach it over D-Bus; standard PKCS#11 apps reach the card through the
-`librescrs-pkcs11-agent` client module. System-level integration (PAM,
-lockscreen) comes later.
+(LibreCelik, LibreKDE) reach it over D-Bus; standard PKCS#11 apps reach the
+card through the `librescrs-pkcs11-agent` client module. System-level
+integration (PAM, lockscreen) comes later.
 
 Built on LibreMiddleware (LGPL-2.1+).
 
