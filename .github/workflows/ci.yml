@@ -316,9 +316,13 @@ jobs:
 
       - name: Check the warning baseline
         # Counted by the [-Wname] tag, never by the message text: diagnostics
-        # are localised. An unknown compiler is reported, not failed -- this
-        # runner and the machine that recorded the baseline do not agree on a
-        # diagnostic set, and neither is authoritative over the other.
+        # are localised. --require-key means a compiler the baseline has no
+        # section for FAILS rather than being reported: the sentence that used to
+        # stand here -- "an unknown compiler is reported, not failed" -- described
+        # the behaviour this flag removed. The key here is whatever GCC the
+        # archlinux:latest image carries on the day, so this job loses its key the
+        # moment Arch moves the compiler; pinning it means pinning the image by
+        # digest, the way ci/coverage-env.txt pins the environment it records in.
         working-directory: LibreLinux
         run: ./ci/scripts/warning-gate.py --check --require-key build.log --build-dir build
 
