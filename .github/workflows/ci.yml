@@ -473,7 +473,10 @@ jobs:
           # and that is measured rather than assumed: this leg builds only the
           # suites it sanitizes, and with one ctest entry per case the discovery
           # step writes a NOT_BUILT placeholder for every binary the leg does not
-          # build -- 736 of them. The manifest check refuses those, correctly, so
+          # build -- 46 of them. (736 is what `grep -c _NOT_BUILT` returns over that
+          # listing and it is a line count, not a count of entries: ctest prints
+          # sixteen "Looked in the following places" lines per placeholder.)
+          # The manifest check refuses those, correctly, so
           # the number below is what judges this leg.
           n=$(ctest --test-dir build-tsan -N -R "$SUITES" | grep -c '^ *Test *#' || true)
           test "$n" = 40 || { echo "the sanitizer leg selected $n cases, not 40"; exit 1; }
