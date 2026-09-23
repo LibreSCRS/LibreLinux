@@ -47,6 +47,11 @@ makepkg -g      # prints the real sha256sum; paste it into the recipe
 makepkg -si     # builds + installs both split packages
 ```
 
+The recipe inside a release tarball is not authoritative: its `sha256sums` are
+`SKIP`, because the asset they would name does not exist until the tag does. The
+copy on the default branch — which is what AUR builds from — carries the
+checksum of the published asset.
+
 ## Local dogfood build (no remote, no tag — build from this checkout)
 
 Override the source to your local working tree:
