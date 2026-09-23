@@ -37,6 +37,11 @@ on:
   # behaves exactly as it does on a tag push; started against a branch instead,
   # the signature check fails closed, which is the intended outcome.
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Create the release as a draft (rehearsal)'
+        type: boolean
+        default: true
 
 # One run per tag at a time: a re-run racing a still-live earlier run would
 # hand gh release create an already-existing release and fail at the last step.
@@ -242,6 +247,7 @@ jobs:
         # and the tag filter's trailing * accepts an arbitrary suffix.
         env:
           GH_TOKEN: ${{ github.token }}
+          DRY_RUN: ${{ inputs.dry_run }}
           TAG: ${{ github.ref_name }}
           REPO: ${{ github.repository }}
         run: |
@@ -250,6 +256,14 @@ jobs:
           case "$TAG" in
               *-rc*|*-beta*|*-alpha*|*-pre*) PRERELEASE_FLAG="--prerelease" ;;
           esac
+          # A dispatch rehearsal publishes a DRAFT unless dry_run was
+          # explicitly turned off; a tag push never drafts. Without this the
+          # only way to exercise the chain is a tag that cannot be taken back.
+          DRAFT_FLAG=""
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] && [ "$DRY_RUN" != "false" ]; then
+              DRAFT_FLAG="--draft"
+              echo "::notice::dry_run rehearsal -- creating a draft release"
+          fi
           # NOTES_ARG must split into two argv entries and PRERELEASE_FLAG
           # must disappear when empty — deliberately unquoted.
           # shellcheck disable=SC2086
@@ -259,6 +273,7 @@ jobs:
               --verify-tag \
               $NOTES_ARG \
               $PRERELEASE_FLAG \
+              $DRAFT_FLAG \
               dist/*
 
       - name: The published release is the set this repository declares
