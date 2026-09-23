@@ -6,11 +6,10 @@ name: Release
 # distribution packaging (packaging/{arch,debian,rpm}); the Arch recipe fetches
 # the source tarball THIS workflow uploads — not the one GitHub generates for
 # the tag, whose bytes the project does not produce and therefore cannot
-# checksum. So this workflow uploads exactly one asset, that tarball, and
-# cosigns nothing: binary-artifact signing lives in the components that
-# actually ship binaries. A release here needs three things: proof that the tag
+# checksum. So this workflow uploads that tarball and its cosign keyless
+# signature bundle. A release here needs three things: proof that the tag
 # carries the project signature, curated notes taken from CHANGELOG.md, and the
-# source tarball packaging will fetch.
+# signed source tarball packaging will fetch.
 #
 # The workflow deliberately performs NO build. Besides keeping it cheap, that
 # is what keeps tagging independent of the agent core: a source build resolves
@@ -146,6 +145,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      id-token: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -164,6 +164,20 @@ jobs:
           name: source-tarball
           path: dist
 
+
+      - name: Install cosign
+        # By commit, not by tag: this job mints a Sigstore identity for the
+        # project, and a moved tag on a third-party action would run its code
+        # here. A pin nobody maintains goes stale; move it deliberately.
+        uses: sigstore/cosign-installer@faadad0cce49287aee09b3a48701e75088a2c6ad  # v4.0.0
+
+      - name: Sign the source tarball with cosign (keyless via Sigstore OIDC)
+        # The packaging recipe fetches this tarball and its checksum is SKIP
+        # until the tag exists, so the signature is the only integrity claim
+        # it carries.
+        run: |
+          find dist -type f ! -name '*.sigstore.json' \
+            -exec sh -c 'cosign sign-blob "$1" --bundle "$1.sigstore.json" --yes' _ {} \;
       - name: The agent pin is the agent's tag
         # The consumers pin the agent by commit so a build cannot drift onto
         # whatever the agent's branch holds that hour. At release time that pin
@@ -245,7 +259,7 @@ jobs:
               --verify-tag \
               $NOTES_ARG \
               $PRERELEASE_FLAG \
-              dist/*.orig.tar.gz
+              dist/*
 
       - name: The published release is the set this repository declares
         # The release this job just created, read back. A draft is judged too,
