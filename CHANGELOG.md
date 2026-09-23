@@ -134,6 +134,11 @@ and its secure PIN/CAN entry prompter, plus a client PKCS#11 module.
 
 ### Changed
 
+- **The agent ships as source in this release.** `packaging/` carries working
+  Debian, RPM and Arch recipes, and the Arch recipes are the packaged path this
+  release supports; no `.deb` or `.rpm` for the agent is published as a release
+  asset.
+
 - **Dual-interface readers: the contact slot is kept powered while a card
   sits in it.** A dual-interface card in the contact slot of a reader such as
   the OMNIKEY 5422 couples weakly to the reader's contactless coupler, so the
