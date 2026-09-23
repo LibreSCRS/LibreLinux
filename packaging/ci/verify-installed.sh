@@ -141,6 +141,36 @@ for f in /usr/libexec/librescrs-agent /usr/libexec/librescrs-pinentry-kde \
 done
 test "$miss" -eq 0; check "V11 no unresolved shared-library dependency" $?
 
+# ── G4 transitions: the two PKCS#11 providers, each installed over the other ──
+# The packages conflict, and the description says installing either replaces
+# the other. Whether the resolver removes the installed one or refuses the
+# transaction is a property of the resolver, not of the control file, so it is
+# measured here rather than assumed: the transaction's own exit code, exactly
+# one registration afterwards, and WHICH package is gone -- named, not counted.
+# The commands are the ones a user types, with no flag that forces a removal.
+if [ "${FAMILY:-deb}" = deb ]; then
+  install_direct() { apt-get install -y --no-install-recommends /pkg-LibreMiddleware/librescrs-pkcs11-direct_*.deb; }
+  install_agent()  { apt-get install -y --no-install-recommends /pkg/librescrs-agent_*.deb; }
+else
+  install_direct() { dnf -y install /pkg-LibreMiddleware/librescrs-pkcs11-direct-5*.rpm; }
+  install_agent()  { dnf -y install /pkg/librescrs-agent-5*.rpm; }
+fi
+is_installed() { installed_list | grep -qx "$1"; }
+registrations() { ls /usr/share/p11-kit/modules/ 2>/dev/null | grep -c '^librescrs'; }
+transition() {  # transition <label> <install-fn> <expected-present> <expected-removed>
+  "$2" > "/tmp/transition-$1.txt" 2>&1
+  local rc=$?
+  check "T-$1 the transaction succeeds (rc=$rc)" "$rc"
+  [ "$rc" -eq 0 ] || tail -n 15 "/tmp/transition-$1.txt"
+  local n; n=$(registrations)
+  test "$n" -eq 1; check "T-$1 exactly one registration afterwards (counted $n)" $?
+  ls -1 /usr/share/p11-kit/modules/
+  is_installed "$3"; check "T-$1 $3 is installed" $?
+  ! is_installed "$4"; check "T-$1 $4 was removed" $?
+}
+transition direct-over-agent install_direct librescrs-pkcs11-direct librescrs-agent
+transition agent-over-direct install_agent librescrs-agent librescrs-pkcs11-direct
+
 # ── V9: removal leaves nothing under /usr ─────────────────────────────────
 remove_ours
 find /usr -iname '*librescrs*' > /tmp/leftover.txt
