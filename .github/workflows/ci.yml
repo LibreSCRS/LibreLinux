@@ -163,6 +163,16 @@ jobs:
           ./packaging/arch/check-recipe.selftest.sh
           ./packaging/arch/check-recipe.sh
 
+      - name: The artefact-producer check can still fail
+        run: ./ci/scripts/check-release-artifacts.selftest.sh
+
+      - name: Every artefact a release publishes has a producer in the same run
+        # A release job that collects artefacts by pattern is happy with an
+        # empty match: the release simply carries one asset fewer, and the
+        # first run that could notice is the tag. This reads the pairing
+        # through needs on every push instead.
+        run: ci/scripts/check-release-artifacts.sh
+
       - name: The release-asset check can still fail
         run: ./ci/scripts/check-release-assets.selftest.sh
 
