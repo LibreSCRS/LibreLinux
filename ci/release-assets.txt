@@ -9,5 +9,10 @@
 # step before `gh release create`; --published <tag> compares it against the
 # release that exists. Changing what the workflow publishes without changing
 # this file fails the release before it is created.
+#
+# This repository publishes no binary packages in 5.0.0: the job behind the
+# PACKAGE_JOB_ENABLED variable builds them, but nothing publishes them, and
+# turning the variable on before LibreAgent publishes .deb/.rpm assets makes
+# every consumer red, not green.
 librelinux_*.orig.tar.gz   the deterministic source tarball the packaging recipes fetch
 *.sigstore.json            cosign keyless signature bundle, one per asset
