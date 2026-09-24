@@ -169,7 +169,6 @@ jobs:
           name: source-tarball
           path: dist
 
-
       - name: Install cosign
         # By commit, not by tag: this job mints a Sigstore identity for the
         # project, and a moved tag on a third-party action would run its code
@@ -183,6 +182,7 @@ jobs:
         run: |
           find dist -type f ! -name '*.sigstore.json' \
             -exec sh -c 'cosign sign-blob "$1" --bundle "$1.sigstore.json" --yes' _ {} \;
+
       - name: The agent pin is the agent's tag
         # The consumers pin the agent by commit so a build cannot drift onto
         # whatever the agent's branch holds that hour. At release time that pin
