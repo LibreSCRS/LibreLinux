@@ -155,9 +155,24 @@ else
   install_direct() { dnf -y install /pkg-LibreMiddleware/librescrs-pkcs11-direct-5*.rpm; }
   install_agent()  { dnf -y install /pkg/librescrs-agent-5*.rpm; }
 fi
-is_installed() { installed_list | grep -qx "$1"; }
+# By status, not by listing: a removed Debian package that left conffiles is
+# still listed by dpkg-query, in state "config-files".
+if [ "${FAMILY:-deb}" = deb ]; then
+  is_installed() { dpkg-query -W -f='${db:Status-Abbrev}' "$1" 2>/dev/null | grep -q '^ii'; }
+else
+  is_installed() { rpm -q "$1" >/dev/null 2>&1; }
+fi
 registrations() { ls /usr/share/p11-kit/modules/ 2>/dev/null | grep -c '^librescrs'; }
 transition() {  # transition <label> <install-fn> <expected-present> <expected-removed>
+  # The starting state is asserted, not assumed: if the previous transition
+  # failed, the package this one should remove was never installed, and
+  # "was removed" would pass without anything having been removed.
+  if ! { is_installed "$4" && ! is_installed "$3"; }; then
+    check "T-$1 precondition: $4 installed, $3 not" 1
+    echo "     T-$1 not measured: the transition has no starting state to leave"
+    return
+  fi
+  check "T-$1 precondition: $4 installed, $3 not" 0
   "$2" > "/tmp/transition-$1.txt" 2>&1
   local rc=$?
   check "T-$1 the transaction succeeds (rc=$rc)" "$rc"
