@@ -45,7 +45,7 @@ makedepends=(
     'gtest'                     # agent/tests/CMakeLists.txt: find_package(GTest REQUIRED)
     'dbus'                      # dbus-run-session (prompter + agent integration tests)
 )
-options=('!lto')   # vendored LibreAgent::Core static archive (librescrs-agent-core) + IPO can conflict; keep it simple
+options=('!lto')   # links in a clean chroot with LTO off; with makepkg's -flto=auto the link once failed there, cause not established
 source=(
     "$pkgbase-$pkgver.tar.gz::https://github.com/LibreSCRS/LibreLinux/releases/download/$pkgver/librelinux_$pkgver.orig.tar.gz"
 )
