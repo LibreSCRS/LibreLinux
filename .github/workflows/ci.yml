@@ -355,7 +355,13 @@ jobs:
         run: ./ci/scripts/warning-gate.py --check --require-key build.log --build-dir build
 
       - name: Check the discovered test set
+        # Test discovery is PRE_TEST here, so `ctest -N` runs every test
+        # binary with --gtest_list_tests. The Qt ones create their application
+        # object before listing, and with no display that aborts: the set has
+        # to be discovered under the same platform plugin the Test step uses.
         working-directory: LibreLinux
+        env:
+          QT_QPA_PLATFORM: offscreen
         run: ./ci/scripts/test-manifest-gate.sh --check build linux
 
       # --- e2e harness compiles ---------------------------------------------
