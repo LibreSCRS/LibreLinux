@@ -513,7 +513,7 @@ jobs:
           # The manifest check refuses those, correctly, so
           # the number below is what judges this leg.
           n=$(ctest --test-dir build-tsan -N -R "$SUITES" | grep -c '^ *Test *#' || true)
-          test "$n" = 40 || { echo "the sanitizer leg selected $n cases, not 40"; exit 1; }
+          test "$n" = 44 || { echo "the sanitizer leg selected $n cases, not 44"; exit 1; }
 
       # --- PKCS#11 ownership -----------------------------------------------
       # Install rules cannot prove registration: the declaration once landed
