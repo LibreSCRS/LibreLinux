@@ -5,14 +5,16 @@
 #
 # This file is the single place that answers "what do we publish". One script
 # holds it true, three times: --wired proves the release workflow calls it at
-# all; --staged compares this list against the files actually staged, in the
-# step before `gh release create`; --published <tag> compares it against the
-# release that exists. Changing what the workflow publishes without changing
-# this file fails the release before it is created.
-#
-# This repository publishes no binary packages in 5.0.0: the job behind the
-# PACKAGE_JOB_ENABLED variable builds them, but nothing publishes them, and
-# turning the variable on before LibreAgent publishes .deb/.rpm assets makes
-# every consumer red, not green.
-librelinux_*.orig.tar.gz   the deterministic source tarball the packaging recipes fetch
+# all; --staged compares this list against the files actually staged, before
+# the release is created; --published <tag> compares it against the release
+# that exists. Changing what the workflow publishes without changing this file
+# fails the release before it is created.
+*.debian13.deb             the agent and the prompter, built in a Debian 13 container
+*.ubuntu2604.deb           the agent and the prompter, built in an Ubuntu 26.04 LTS container
+*.fedora43.rpm             the agent and the prompter, built in a Fedora 43 container
+*.fedora44.rpm             the agent and the prompter, built in a Fedora 44 container
+*.opensusetw.rpm           the agent and the prompter, built in an openSUSE Tumbleweed container
+librelinux_*.orig.tar.gz   the deterministic source tarball
+sbom.cdx.json              CycloneDX bill of materials naming the statically linked agent core and QCBOR
+SHA256SUMS                 checksums over every other asset in this release
 *.sigstore.json            cosign keyless signature bundle, one per asset

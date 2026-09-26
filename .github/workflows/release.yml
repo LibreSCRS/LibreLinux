@@ -1,286 +1,186 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 name: Release
 
-# LibreLinux distributes no prebuilt binaries of its own. The daemon, the
-# prompter and the PKCS#11 module are compiled from the tag's sources by
-# distribution packaging (packaging/{arch,debian,rpm}); the Arch recipe fetches
-# the source tarball THIS workflow uploads — not the one GitHub generates for
-# the tag, whose bytes the project does not produce and therefore cannot
-# checksum. So this workflow uploads that tarball and its cosign keyless
-# signature bundle. A release here needs three things: proof that the tag
-# carries the project signature, curated notes taken from CHANGELOG.md, and the
-# signed source tarball packaging will fetch.
+# What a release of LibreLinux publishes: the agent and the prompter as .deb
+# and .rpm packages for every distribution the stack supports, the
+# deterministic source tarball, a bill of materials for what the agent binary
+# bundles, SHA256SUMS, and a cosign bundle per file.
 #
-# The workflow deliberately performs NO build. Besides keeping it cheap, that
-# is what keeps tagging independent of the agent core: a source build resolves
-# LibreAgent through cmake/FindOrUseLibreAgent.cmake, which follows the agent's
-# trunk, so a build step here would make publishing this component depend on
-# what the agent happens to have published at that moment. The publish order
-# (agent first, this component after) is a property of the release sequence and
-# is not something this workflow can assert — so it asserts nothing about it
-# and never fetches the agent.
+#   preflight  everything a release can be refused for, before anything is
+#              built or signed: the mode against the ref, the tag's signature
+#              (on a branch: the verifier proved both ways on fixtures), every
+#              version surface against the release, and deps.lock (on a tag:
+#              every upstream row is that upstream's tag of the same version).
+#   build      source tarball + bill of materials; packages per distribution.
+#              On a tag the upstream packages are downloaded from the upstream
+#              releases, which the release order publishes first; in a
+#              rehearsal they are built from the commits deps.lock names.
+#   seal       SHA256SUMS, signatures, and their verification (on a tag:
+#              keyless and a provenance attestation; in a rehearsal: an
+#              ephemeral key, and the keyless path proved on fixtures).
+#   publish    the release (tag), or a workflow artefact (rehearsal).
+#
+# mode=rehearse runs on any ref and publishes nothing; mode=publish only on a
+# tag. A tag push publishes.
 
 on:
   push:
-    tags:
-      # Same shape as the sibling components: no tag in this stack carries a
-      # v prefix. The second spelling was accepted only because
-      # packaging/arch/PKGBUILD asked for `refs/tags/v$pkgver`; the recipe now
-      # fetches the release asset this workflow uploads, and
-      # packaging/arch/check-recipe.sh refuses a prefixed spelling outright, so
-      # nothing is left for the second pattern to serve.
-      - '[0-9]+.[0-9]+.[0-9]+*'
-  # Rehearsal path. A maintainer can start this workflow from the Actions tab
-  # against an existing signed tag (Run workflow -> pick the tag as the ref) to
-  # exercise the whole chain, release notes included, without pushing a fresh
-  # tag. github.ref_name is the tag name on that path too, so every step below
-  # behaves exactly as it does on a tag push; started against a branch instead,
-  # the signature check fails closed, which is the intended outcome.
+    tags: ['[0-9]+.[0-9]+.[0-9]+*']
   workflow_dispatch:
     inputs:
-      dry_run:
-        description: 'Create the release as a draft (rehearsal)'
-        type: boolean
-        default: true
+      mode:
+        description: 'rehearse (any ref) or publish (a tag ref only)'
+        type: choice
+        options: [rehearse, publish]
+        default: rehearse
 
-# One run per tag at a time: a re-run racing a still-live earlier run would
-# hand gh release create an already-existing release and fail at the last step.
+permissions: {}
+
 concurrency:
-  group: release-${{ github.ref_name }}
+  group: release-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  verify-signature:
-    timeout-minutes: 10
-    runs-on: ubuntu-latest
+  preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
     permissions:
       contents: read
-    env:
-      # The release key's PRIMARY fingerprint, named once so the import check
-      # and the signature check cannot pin different keys across a rotation.
-      EXPECTED_FPR: '6B05889AC9A6A7188DF639B06F27A989C2031D16'
+    outputs:
+      mode: ${{ steps.pre.outputs.mode }}
+      version: ${{ steps.pre.outputs.version }}
+      is_prerelease: ${{ steps.pre.outputs.is_prerelease }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-depth: 0
-          ref: ${{ github.ref }}
-
-      - name: Import LibreSCRS release public key
-        run: |
-          # The published project key travels with the repository, as in the
-          # sibling components. Report its absence in terms of what to do
-          # about it rather than letting gpg fail with a bare open error.
-          if [ ! -f KEYS ]; then
-            echo "::error::KEYS is missing from the repository root — a release tag cannot be verified without the published LibreSCRS release public key"
-            exit 1
-          fi
-          gpg --import KEYS
-          gpg --list-keys --with-colons "$EXPECTED_FPR" | grep -q "^pub" \
-            || { echo "::error::Public key import failed or fingerprint mismatch"; exit 1; }
-
-      - name: Verify tag signature
-        # verify-tag alone accepts a good signature by ANY key in the keyring,
-        # so the signer is pinned by fingerprint through --raw's VALIDSIG line.
-        #
-        # Field order is the whole trick here. VALIDSIG's FIRST field is the
-        # fingerprint of the key that physically signed, and this project signs
-        # with a subkey (the primary is certify-only, `cSC`), so the first field
-        # is the SUBKEY. The primary — the identity worth pinning, because it
-        # outlives every subkey rotation — is VALIDSIG's LAST field. Matching
-        # the primary right after "VALIDSIG" therefore rejects every genuinely
-        # signed tag, and pinning the subkey instead would break at the next
-        # rotation; match the primary in the trailing position.
-        #
-        # Anchored, and deliberately not a bare fingerprint grep: gpg also
-        # emits KEY_CONSIDERED with the primary's fingerprint, and it does so
-        # even for a BADSIG, so a loose match would accept a forged tag.
-        #
-        # The ref name moves through the environment, never inline into the
-        # script — a git ref may carry shell metacharacters and the tag
-        # filter's trailing * accepts an arbitrary suffix.
-        env:
-          TAG: ${{ github.ref_name }}
-        run: |
-          git verify-tag --raw "$TAG" 2>&1 \
-            | grep -qE "^\[GNUPG:\] VALIDSIG [0-9A-F]{40} .* ${EXPECTED_FPR}\$" \
-            || { echo "::error::Tag $TAG is not signed by the LibreSCRS release key"; exit 1; }
+          persist-credentials: false
+      - id: pre
+        uses: LibreSCRS/ci/actions/release-preflight@5b9410f9b0e6ab6983c39f931e118e68007c12b4
+        with:
+          mode: ${{ inputs.mode || 'publish' }}
+          version-min: '1'
 
   source-tarball:
-    # The source tarball is produced by this project, not by GitHub. GitHub's
-    # archive/refs/tags tarball omits every submodule tree and its bytes are
-    # not ours to assert; this one comes from a clone with --recurse-submodules
-    # and is byte-identical run to run -- ci/scripts/check-tarball-determinism.sh
-    # measures that on every push, up to the gzip implementation, which is the
-    # one thing the script cannot make a property of the commit -- so the
-    # sha256sums line in packaging/arch/PKGBUILD becomes a claim about bytes
-    # this project made.
-    #
-    # It runs after the signature check for the same reason every other job
-    # does: nothing is built for a tag whose signature has not been proved.
+    # The source tarball is produced by this project, not by GitHub, and is a
+    # function of the commit (the tarball-determinism gate measures that on
+    # every push). The bill of materials names what the agent binary bundles,
+    # read from the locked agent checkout.
+    needs: [preflight]
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
-    needs: verify-signature
-    runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
-          submodules: recursive
           fetch-depth: 0
-
-      - name: Build the source tarball
-        run: |
-          set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/srctar"
-          ci/scripts/make-source-tarball.sh "$RUNNER_TEMP/srctar"
-          ls -l "$RUNNER_TEMP/srctar"
-
-      - uses: actions/upload-artifact@v4
+          persist-credentials: false
+      - name: Deterministic source tarball
+        run: ci/scripts/make-source-tarball.sh out
+      - name: Checkout LibreAgent at the lock
+        id: deps
+        uses: LibreSCRS/ci/actions/checkout-deps@5b9410f9b0e6ab6983c39f931e118e68007c12b4
         with:
-          name: source-tarball
-          path: ${{ runner.temp }}/srctar/*.orig.tar.gz
-          # An empty upload here would make the release job publish a release
-          # with no source at all, and the recipe's source= URL would 404 for
-          # everyone. Fail where it is cheap.
+          names: LibreAgent
+      - name: Bill of materials
+        env:
+          LA_SRC: ${{ steps.deps.outputs.libreagent-path }}
+        run: ci/scripts/make-sbom.sh out/sbom.cdx.json "$LA_SRC"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: tarball-artifacts
+          path: out/*
           if-no-files-found: error
+          retention-days: 3
 
-  release:
+  packages:
+    name: packages (${{ matrix.slug }})
+    needs: [preflight]
+    runs-on: ubuntu-24.04
+    # Measured locally at -j4: middleware 7-9 min, agent libraries 7-9, this
+    # repository 3-4 per distribution, then 2-4 to verify; on a tag the
+    # upstream packages are downloaded instead of built.
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        slug: [debian13, ubuntu2604, fedora43, fedora44, opensusetw]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Build
+        id: build
+        uses: LibreSCRS/ci/actions/pkg-build@5b9410f9b0e6ab6983c39f931e118e68007c12b4
+        with:
+          slug: ${{ matrix.slug }}
+          upstream: ${{ github.ref_type == 'tag' && 'release' || 'source' }}
+          version: ${{ github.ref_type == 'tag' && needs.preflight.outputs.version || '' }}
+      - name: Install and judge the stack
+        uses: LibreSCRS/ci/actions/pkg-verify@5b9410f9b0e6ab6983c39f931e118e68007c12b4
+        with:
+          slug: ${{ matrix.slug }}
+          packages: ${{ steps.build.outputs.art }}/${{ matrix.slug }}
+          report: ${{ runner.temp }}/pkg-report
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: packages-${{ matrix.slug }}
+          path: ${{ steps.build.outputs.dist }}
+          if-no-files-found: error
+          retention-days: 3
+
+  seal:
+    needs: [preflight, source-tarball, packages]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          pattern: '*-artifacts'
+          merge-multiple: true
+          path: artifacts
+      # The package names already carry the distribution, and the collector
+      # refused any clash when it named them, so merging cannot overwrite.
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          pattern: 'packages-*'
+          merge-multiple: true
+          path: artifacts
+      - uses: LibreSCRS/ci/actions/release-seal@5b9410f9b0e6ab6983c39f931e118e68007c12b4
+        with:
+          mode: ${{ needs.preflight.outputs.mode }}
+          version: ${{ needs.preflight.outputs.version }}
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: sealed
+          path: artifacts/*
+          if-no-files-found: error
+          retention-days: 3
+
+  publish:
+    needs: [preflight, seal]
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
-    needs: [verify-signature, source-tarball]
-    runs-on: ubuntu-latest
     permissions:
       contents: write
-      id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
-          sparse-checkout: |
-            ci/release-assets.txt
-            ci/scripts/check-release-assets.sh
-            CHANGELOG.md
-            VERSION
-            ci/scripts/check-release-lockstep.sh
-            deps.lock
-          sparse-checkout-cone-mode: false
-
-      - name: Fetch the source tarball this release publishes
-        uses: actions/download-artifact@v4
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
         with:
-          name: source-tarball
-          path: dist
-
-      - name: Install cosign
-        # By commit, not by tag: this job mints a Sigstore identity for the
-        # project, and a moved tag on a third-party action would run its code
-        # here. A pin nobody maintains goes stale; move it deliberately.
-        uses: sigstore/cosign-installer@faadad0cce49287aee09b3a48701e75088a2c6ad  # v4.0.0
-
-      - name: Sign the source tarball with cosign (keyless via Sigstore OIDC)
-        # The packaging recipe fetches this tarball and its checksum is SKIP
-        # until the tag exists, so the signature is the only integrity claim
-        # it carries.
-        run: |
-          find dist -type f ! -name '*.sigstore.json' \
-            -exec sh -c 'cosign sign-blob "$1" --bundle "$1.sigstore.json" --yes' _ {} \;
-
-      - name: The agent pin is the agent's tag
-        # The consumers pin the agent by commit so a build cannot drift onto
-        # whatever the agent's branch holds that hour. At release time that pin
-        # must be the commit the agent's own tag of the SAME version points at,
-        # or this component ships built against something the agent never
-        # published.
-        #
-        # The lookup dereferences. For an annotated tag the ref endpoint returns
-        # the SHA of the TAG OBJECT, not of the commit, so comparing the two
-        # directly would fail on every correctly signed tag — the same class of
-        # mistake as reading VALIDSIG's fields in the wrong order.
-        env:
-          VER: ${{ github.ref_name }}
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          # The `on:` filter above no longer accepts a v-prefixed tag, but the
-          # rehearsal path does: workflow_dispatch runs against whatever ref it
-          # is pointed at, filter or no filter. The agent publishes unprefixed
-          # tags only, so strip it here the way the notes step below already
-          # does, or a v5.0.0 rehearsal asks the agent for a tag that cannot
-          # exist and fails looking like a pin that was never bumped.
-          VER="${VER#v}"
-          pin=$(awk '$1 == "LibreAgent" {print $3}' deps.lock)
-          tagsha=$(gh api repos/LibreSCRS/LibreAgent/git/ref/tags/"$VER" --jq '.object.sha')
-          type=$(gh api repos/LibreSCRS/LibreAgent/git/ref/tags/"$VER" --jq '.object.type')
-          if [ "$type" = "tag" ]; then
-            tagsha=$(gh api repos/LibreSCRS/LibreAgent/git/tags/"$tagsha" --jq '.object.sha')
-          fi
-          [ "$pin" = "$tagsha" ] || {
-            echo "::error::agent pin is not the agent's $VER tag (pin $pin, tag $tagsha)"
-            exit 1
-          }
-
-      - name: Prepare release notes from CHANGELOG
-        # One extractor, in ci/scripts/check-release-lockstep.sh, shared with
-        # the per-push agreement check. It used to be copied inline into every
-        # release workflow, and one of the copies had drifted: without escaping
-        # the version's dots, tag 5.0.0 also matched a [500.0] heading.
-        #
-        # --section exits non-zero when the section is missing OR holds only
-        # whitespace. Both have to fall back: `gh release create --notes-file`
-        # accepts a blank file and publishes a release with no body at all.
-        # --generate-notes and --notes-file are mutually exclusive, hence the
-        # shell branch.
-        run: |
-          VER="${GITHUB_REF_NAME#v}"
-          if ci/scripts/check-release-lockstep.sh --section "$VER" > "$RUNNER_TEMP/relnotes.md"; then
-            echo "NOTES_ARG=--notes-file $RUNNER_TEMP/relnotes.md" >> "$GITHUB_ENV"
-          else
-            echo "No CHANGELOG section for $VER — falling back to --generate-notes"
-            echo "NOTES_ARG=--generate-notes" >> "$GITHUB_ENV"
-          fi
-
-      - name: The staged asset set is the set this repository declares
-        # The files gh is about to publish, against ci/release-assets.txt, in
-        # both directions, before the release exists.
-        run: ci/scripts/check-release-assets.sh --staged dist
-
-      - name: Create GitHub release
-        # The ref name and repository move through the environment, never
-        # inline into the script — a git ref may carry shell metacharacters
-        # and the tag filter's trailing * accepts an arbitrary suffix.
-        env:
-          GH_TOKEN: ${{ github.token }}
-          DRY_RUN: ${{ inputs.dry_run }}
-          TAG: ${{ github.ref_name }}
-          REPO: ${{ github.repository }}
-        run: |
-          # Mark X.Y.Z-{rc,beta,alpha,…} as pre-release; everything else stable.
-          PRERELEASE_FLAG=""
-          case "$TAG" in
-              *-rc*|*-beta*|*-alpha*|*-pre*) PRERELEASE_FLAG="--prerelease" ;;
-          esac
-          # A dispatch rehearsal publishes a DRAFT unless dry_run was
-          # explicitly turned off; a tag push never drafts. Without this the
-          # only way to exercise the chain is a tag that cannot be taken back.
-          DRAFT_FLAG=""
-          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] && [ "$DRY_RUN" != "false" ]; then
-              DRAFT_FLAG="--draft"
-              echo "::notice::dry_run rehearsal -- creating a draft release"
-          fi
-          # NOTES_ARG must split into two argv entries and PRERELEASE_FLAG
-          # must disappear when empty — deliberately unquoted.
-          # shellcheck disable=SC2086
-          gh release create "$TAG" \
-              --repo "$REPO" \
-              --title "$TAG" \
-              --verify-tag \
-              $NOTES_ARG \
-              $PRERELEASE_FLAG \
-              $DRAFT_FLAG \
-              dist/*
-
-      - name: The published release is the set this repository declares
-        # The release this job just created, read back. A draft is judged too,
-        # and the check prints DRAFT=yes so the log is not taken for evidence
-        # about a published release.
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
-        run: ci/scripts/check-release-assets.sh --published "$TAG"
+          name: sealed
+          path: artifacts
+      - uses: LibreSCRS/ci/actions/release-publish@5b9410f9b0e6ab6983c39f931e118e68007c12b4
+        with:
+          mode: ${{ needs.preflight.outputs.mode }}
+          version: ${{ needs.preflight.outputs.version }}
+          is_prerelease: ${{ needs.preflight.outputs.is_prerelease }}

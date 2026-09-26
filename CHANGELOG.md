@@ -18,6 +18,12 @@ Notable user-visible changes per release. Format follows
   for `dpkg-source`; the `deb` and `rpm` builds still build from the checkout
   and do not consume it yet.
 
+- **Every release is checksummed, signed and accounted for.** Beside the
+  packages and the source tarball it carries `SHA256SUMS`, a cosign bundle for
+  every file, a build provenance attestation, and `sbom.cdx.json`, a CycloneDX
+  bill of materials naming what the agent binary bundles: the agent core it
+  links statically and the QCBOR codec compiled into it, each by commit.
+
 - **The agent and the prompter ship as distribution packages.** `deb` for
   Debian 13 and Ubuntu 26.04 LTS, `rpm` for Fedora 43. The agent's files that
   have to land in root-owned system directories span systemd units
