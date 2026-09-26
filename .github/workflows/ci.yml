@@ -71,10 +71,13 @@ jobs:
       # Format scope, skip reasons, the workflows as data (every gate reached,
       # every job bounded, every step placed where it can run, one pin of the
       # shared gates), the canonical-type registry, duplicate bodies, this
-      # repository's own self-tests, and deps.lock (form, reachable from each
-      # upstream's main, one revision per dependency across the stack).
+      # repository's own self-tests, deps.lock (form, reachable from each
+      # upstream's main, one revision per dependency across the stack), every
+      # version surface against VERSION (so a disagreement shows weeks before
+      # a tag that cannot be taken back), the release workflow's artefacts and
+      # asset check, and the source tarball as a function of the commit.
       - name: Shared gates
-        uses: LibreSCRS/ci/actions/gates@5b9410f9b0e6ab6983c39f931e118e68007c12b4
+        uses: LibreSCRS/ci/actions/gates@373a0f82c9af280b7a8ccc4ee30106c947394ca2
 
       - name: No signal handler outlives the state it captures
         # sdbus-c++ keeps a handler armed for as long as its proxy lives and
@@ -92,45 +95,6 @@ jobs:
         # signed tag, the key it accepts is the one in KEYS, and pkgver is the
         # first line of VERSION. No network. The self-test runs with the others.
         run: ./packaging/arch/check-recipe.sh
-
-      # The version and release-shape gates live in LibreSCRS/ci too, but take
-      # no profile: they are the same scripts the release preflight runs with
-      # the tag's version, run here on every push with the version this tree
-      # is heading for, so a disagreement shows weeks before a tag that cannot
-      # be taken back. Same commit as every other reference to the shared
-      # gates; checked out beside this repository, after the gates above have
-      # judged it.
-      - name: Check out the shared gates
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-        with:
-          repository: LibreSCRS/ci
-          ref: 5b9410f9b0e6ab6983c39f931e118e68007c12b4
-          path: .shared-gates
-          persist-credentials: false
-
-      - name: Every version surface states the version in VERSION
-        # Four arms: the CHANGELOG has a section for VERSION (lockstep), every
-        # first-party find_package floor names its major (floors), project()
-        # follows VERSION until a tag of that major exists (stamp), and the
-        # RPM spec agrees (surfaces). --min 1 is the vacuum guard: a floors
-        # scan that matches nothing is unmeasured, not clean.
-        run: .shared-gates/scripts/check-version.sh --min 1
-
-      - name: Every release artefact has a producer and a consumer
-        # needs, names and producer arms over the release workflow: a download
-        # with no upstream uploader, an upload nothing downloads, and a source
-        # tarball built and thrown away all fail here instead of on the tag.
-        run: .shared-gates/scripts/check-release-artifacts.sh
-
-      - name: The release checks its asset set before publishing
-        run: .shared-gates/scripts/check-release-assets.sh --wired
-
-      - name: The source tarball is a function of the commit
-        # Two runs of ci/scripts/make-source-tarball.sh, forced apart by a
-        # second boundary and a umask boundary, then the property read out of
-        # the archive: commit timestamp, owner 0/0, closed mode set, name
-        # order, nothing under .github/, top directory <Repository>-<VERSION>.
-        run: .shared-gates/scripts/check-tarball-determinism.sh
 
   build-linux:
     # Arch container: LibreLinux's runtime deps (sdbus-c++ >= 2.0, libsystemd)
@@ -190,7 +154,7 @@ jobs:
       # the checkout is that revision.
       - name: Checkout LibreMiddleware at the lock
         id: deps
-        uses: LibreSCRS/ci/actions/checkout-deps@5b9410f9b0e6ab6983c39f931e118e68007c12b4
+        uses: LibreSCRS/ci/actions/checkout-deps@373a0f82c9af280b7a8ccc4ee30106c947394ca2
         with:
           root: LibreLinux
           names: LibreMiddleware
@@ -269,7 +233,7 @@ jobs:
       # object before listing, and with no display that aborts: the set has
       # to be discovered under the same platform plugin the Test step uses.
       - name: Shared gates after the build
-        uses: LibreSCRS/ci/actions/gates@5b9410f9b0e6ab6983c39f931e118e68007c12b4
+        uses: LibreSCRS/ci/actions/gates@373a0f82c9af280b7a8ccc4ee30106c947394ca2
         env:
           QT_QPA_PLATFORM: offscreen
         with:
@@ -479,7 +443,7 @@ jobs:
 
       - name: Checkout LibreMiddleware and LibreAgent at the lock
         id: deps
-        uses: LibreSCRS/ci/actions/checkout-deps@5b9410f9b0e6ab6983c39f931e118e68007c12b4
+        uses: LibreSCRS/ci/actions/checkout-deps@373a0f82c9af280b7a8ccc4ee30106c947394ca2
         with:
           root: LibreLinux
           names: LibreMiddleware LibreAgent
