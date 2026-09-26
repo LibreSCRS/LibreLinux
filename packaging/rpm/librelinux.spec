@@ -86,8 +86,9 @@ format can deliver it. The prompter is a hard dependency: an agent without one
 enumerates a card and then fails on the first PIN.
 
 It registers a PKCS#11 proxy with p11-kit, so it conflicts with
-librescrs-pkcs11-direct: one card must not have two providers. dnf replaces the
-one with the other only with --allowerasing, zypper with --force-resolution.
+librescrs-pkcs11-direct: one card must not have two providers. Switching from
+one to the other needs the package manager's option to replace a conflicting
+package; the project's download page gives the command for each distribution.
 
 %package -n librescrs-pinentry-kde
 Summary:        Secure PIN and CAN entry prompter for the LibreSCRS agent
@@ -96,7 +97,7 @@ Summary:        Secure PIN and CAN entry prompter for the LibreSCRS agent
 The prompter the agent calls to collect a PIN or a card access number. It is
 styled for KDE and built on KF6, and it is currently the only implementation of
 the prompter interface, so a GNOME or XFCE machine installs two KDE Frameworks
-libraries with it (internationalization and core add-ons).
+libraries with it (internationalization and core additions).
 
 %prep
 %autosetup -n %{name}-%{version}
