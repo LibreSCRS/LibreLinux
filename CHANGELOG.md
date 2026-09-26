@@ -7,16 +7,19 @@ Notable user-visible changes per release. Format follows
 
 ### Added
 
-- **Every release carries a source tarball this project built.** The Arch
-  recipe fetches that asset instead of the archive GitHub generates for a tag:
-  the generated one omits every submodule tree, and its bytes are not ours to
-  assert, so the recipe's `sha256sums` line said nothing about what was
-  actually built. The published tarball is a function of the commit — every
-  member carries the commit's own timestamp, owner `0/0` and a mode no umask
-  can widen — so a packager who rebuilds it gets the same bytes back, up to the
-  gzip implementation. It is named so that one file can serve as the `.orig`
-  for `dpkg-source`; the `deb` and `rpm` builds still build from the checkout
-  and do not consume it yet.
+- **Every release carries a source tarball this project built.** Not the
+  archive GitHub generates for a tag, which omits every submodule tree and
+  whose bytes are not ours to assert: the published tarball is a function of
+  the commit — every member carries the commit's own timestamp, owner `0/0` and
+  a mode no umask can widen — so anyone who rebuilds it gets the same bytes
+  back, up to the gzip implementation, and can check them against the signed
+  `SHA256SUMS`. It is named so that one file can serve as the `.orig` for
+  `dpkg-source`.
+
+- **The Arch recipe builds the signed release tag.** Its one source is this
+  repository's git tag, and makepkg refuses it unless the tag is signed by the
+  LibreSCRS release key the recipe names — the key in `KEYS`. There is no
+  checksum left to fill in after the release.
 
 - **Every release is checksummed, signed and accounted for.** Beside the
   packages and the source tarball it carries `SHA256SUMS`, a cosign bundle for
@@ -25,7 +28,9 @@ Notable user-visible changes per release. Format follows
   links statically and the QCBOR codec compiled into it, each by commit.
 
 - **The agent and the prompter ship as distribution packages.** `deb` for
-  Debian 13 and Ubuntu 26.04 LTS, `rpm` for Fedora 43. The agent's files that
+  Debian 13 and Ubuntu 26.04 LTS, `rpm` for Fedora 43 and 44 and openSUSE
+  Tumbleweed, each built in that distribution's own container and installed
+  and checked in a clean one before it is published. The agent's files that
   have to land in root-owned system directories span systemd units
   (`librescrs-agent.service`, `librescrs-p11-server.service`), D-Bus service
   activation files, a D-Bus session policy, the D-Bus interface definitions, a
@@ -46,6 +51,10 @@ Notable user-visible changes per release. Format follows
   Configuration, cached data, a symlink from your own `systemctl --user enable`
   and an NSS profile entry you added yourself all survive uninstallation, on
   purpose.
+
+  **The agent and the direct PKCS#11 module exclude each other**, and switching
+  is one command: `apt install` replaces the other package, dnf needs
+  `--allowerasing` and zypper `--force-resolution`.
 
 
 First public release of the Linux host for the LibreSCRS smart-card
@@ -139,16 +148,6 @@ and its secure PIN/CAN entry prompter, plus a client PKCS#11 module.
   module.
 
 ### Changed
-
-- **The agent and the prompter ship as distribution packages.** Every release
-  carries `librescrs-agent` and `librescrs-pinentry-kde` for Debian 13,
-  Ubuntu 26.04, Fedora 43 and 44 and openSUSE Tumbleweed, each built in that
-  distribution's own container and installed and checked in a clean one before
-  it is published. The agent and the direct PKCS#11 module exclude each other,
-  and switching is one command: `apt install` replaces the other package, dnf
-  needs `--allowerasing` and zypper `--force-resolution`. The Arch recipes
-  still build in a clean Arch chroot, middleware, agent libraries and agent in
-  that order.
 
 - **Dual-interface readers: the contact slot is kept powered while a card
   sits in it.** A dual-interface card in the contact slot of a reader such as

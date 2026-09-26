@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: LGPL-2.1-or-later
-# Selftest for check-recipe.sh. Ten shapes the recipe (or the tree around it)
-# gets wrong, plus the real recipe as a control. One of the ten only applies to
-# a repository whose recipe carries a FetchContent pin; where it does not, the
+# Selftest for check-recipe.sh. The shapes the recipe (or the tree around it)
+# gets wrong, plus the real recipe as a control. One case only applies to a
+# repository whose recipe carries a FetchContent pin; where it does not, the
 # file says so out loud and counts one case fewer, because a silently dropped
 # case is indistinguishable from one that passed.
 #
@@ -14,27 +14,25 @@
 #     refusal that worked from a refusal that fired on something else.
 #
 # Every fixture is a throwaway git repository under /var/tmp -- never the
-# working tree, and never /tmp, which is RAM on this machine. The fixture's top
-# directory carries the REPOSITORY's name: arm 1 compares the owner segment of
-# the source URL against it, so a fixture named anything else would fail every
-# case for a reason the case is not about.
+# working tree, and never /tmp, which is RAM on the maintainer's machine. The
+# repository name the gate compares the recipe against is handed to it the way
+# CI hands it (CHECK_RECIPE_REPO here, GITHUB_REPOSITORY there), so a fixture
+# directory can be named anything.
 #
-# Both git object-writing commands are run with signing turned off for the
-# invocation. A maintainer with tag.gpgSign=true set globally does not get a
-# lightweight tag from `git tag` but a signed annotated one, which asks for a
-# message in an editor and a passphrase from pinentry: the case would either
-# fail to create the tag -- leaving arm 4 to print SKIPPED, exit 0, and the case
-# to report "expected a non-zero exit, got 0" -- or hang on the prompt. CI has
-# no global configuration and would not have seen either, so the gate would have
-# been green there and red or wedged on the machine that has to maintain it.
-#
+# The git commit is run with signing turned off for the invocation: a
+# maintainer with commit.gpgSign=true set globally would otherwise be asked for
+# a passphrase, and the case would hang on the prompt.
 set -u
 
 here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 subject="$here/check-recipe.sh"
 control_recipe="$here/PKGBUILD"
 root=$(CDPATH= cd -- "$here/../.." && pwd)
-rname=$(basename "$root")
+ghrepo="${GITHUB_REPOSITORY:-}"
+rname="${CHECK_RECIPE_REPO:-${ghrepo#*/}}"
+[ -n "$rname" ] || rname=$(git -C "$root" remote get-url origin 2>/dev/null | sed -E 's#\.git$##; s#.*/##')
+[ -n "$rname" ] || rname=$(basename "$root")
+spec_rel=packaging/rpm/librelinux.spec
 
 work="${TMPDIR_SELFTEST:-/var/tmp/check-recipe-selftest.$$}"
 rm -rf "$work"; mkdir -p "$work"
@@ -44,20 +42,18 @@ fails=0
 cases=0
 red=0
 
-fx() { printf '%s/%s/%s\n' "$work" "$1" "$rname"; }
+fx() { printf '%s/%s\n' "$work" "$1"; }
 
 # fixture <name> -> builds $(fx <name>) as a minimal repository
 fixture() {
-    local c="$1" d
-    d=$(fx "$c")
-    mkdir -p "$d/packaging/arch" "$d/ci/scripts"
-    cp "$control_recipe" "$d/packaging/arch/PKGBUILD"
-    cp "$subject"        "$d/packaging/arch/check-recipe.sh"
-    chmod +x "$d/packaging/arch/check-recipe.sh"
-    cp "$root/VERSION"   "$d/VERSION"
-    # arm 1 reads the source name out of this script; without it every case
-    # would fail on a missing input rather than on what it perturbs.
-    cp "$root/ci/scripts/make-source-tarball.sh" "$d/ci/scripts/"
+    local d
+    d=$(fx "$1")
+    mkdir -p "$d/packaging/arch" "$d/packaging/rpm"
+    cp "$control_recipe"  "$d/packaging/arch/PKGBUILD"
+    cp "$subject"         "$d/packaging/arch/check-recipe.sh"
+    cp "$root/VERSION"    "$d/VERSION"
+    cp "$root/KEYS"       "$d/KEYS"
+    cp "$root/$spec_rel"  "$d/$spec_rel"
     [ -f "$root/cmake/FetchQCBOR.cmake" ] && {
         mkdir -p "$d/cmake"
         cp "$root/cmake/FetchQCBOR.cmake" "$d/cmake/"
@@ -70,38 +66,28 @@ fixture() {
 }
 
 run() {  # run <name> ; sets $out and $rc
-    out=$(cd "$(fx "$1")" && bash packaging/arch/check-recipe.sh 2>&1)
+    out=$(cd "$(fx "$1")" && CHECK_RECIPE_REPO="$rname" bash packaging/arch/check-recipe.sh 2>&1)
     rc=$?
 }
 
+changed() {  # changed <name> -- the fixture differs from the control somewhere
+    local d f
+    d=$(fx "$1")
+    for f in packaging/arch/PKGBUILD VERSION KEYS "$spec_rel"; do
+        cmp -s "$d/$f" "$root/$f" 2>/dev/null || return 0
+    done
+    [ -n "$(git -C "$d" ls-files -s | awk '$1 == 160000')" ]
+}
+
 expect_red() {  # expect_red <name> <substring>
-    local c="$1" want="$2" d
-    d=$(fx "$c")
+    local c="$1" want="$2"
     cases=$((cases + 1))
     # every case here is a perturbation: a red one is the proof.
     red=$((red + 1))
-    if cmp -s "$d/packaging/arch/PKGBUILD" "$control_recipe" \
-       && cmp -s "$d/VERSION" "$root/VERSION" 2>/dev/null; then
+    if ! changed "$c"; then
         echo "CASE $c: the fixture is identical to the control -- the perturbation changed nothing"
         fails=$((fails + 1)); return
     fi
-    run "$c"
-    if [ "$rc" -eq 0 ]; then
-        echo "CASE $c: expected a non-zero exit, got 0"; fails=$((fails + 1)); return
-    fi
-    case "$out" in
-        *"$want"*) : ;;
-        *) echo "CASE $c: exit was non-zero but no line mentions '$want'"
-           printf '%s\n' "$out" | sed 's/^/    /'
-           fails=$((fails + 1)) ;;
-    esac
-}
-
-expect_red_out() {  # expect_red_out <name> <substring> -- for perturbations
-                    # that touch the tree rather than the recipe text
-    local c="$1" want="$2"
-    cases=$((cases + 1))
-    red=$((red + 1))
     run "$c"
     if [ "$rc" -eq 0 ]; then
         echo "CASE $c: expected a non-zero exit, got 0"
@@ -109,61 +95,113 @@ expect_red_out() {  # expect_red_out <name> <substring> -- for perturbations
         fails=$((fails + 1)); return
     fi
     case "$out" in
-        *"$want"*) : ;;
+        *"$want"*) echo "ok   $c (rc=$rc)" ;;
         *) echo "CASE $c: exit was non-zero but no line mentions '$want'"
            printf '%s\n' "$out" | sed 's/^/    /'
            fails=$((fails + 1)) ;;
     esac
 }
 
-# 1 -- the v-prefixed auto archive: the shape every recipe carried before the
-#      release workflow began publishing a tarball of its own.
-fixture v_prefixed_archive
-sed -i 's#releases/download/\$pkgver/[^"]*#archive/refs/tags/v$pkgver.tar.gz#' \
-    "$(fx v_prefixed_archive)/packaging/arch/PKGBUILD"
-expect_red v_prefixed_archive "arm1"
+recipe_of() { printf '%s/packaging/arch/PKGBUILD\n' "$(fx "$1")"; }
+src_re='^    "'"$rname"'-\$pkgver::git\+https://github\.com/LibreSCRS/'"$rname"'\.git#tag=\$pkgver\?signed"$'
+set_source() {  # set_source <name> <replacement line, verbatim>
+    local f r
+    f=$(recipe_of "$1")
+    r=$2
+    python3 - "$f" "$src_re" "$r" <<'PY'
+import re, sys
+path, pattern, repl = sys.argv[1:]
+text = open(path).read()
+new, n = re.subn(pattern, lambda _m: repl, text, flags=re.M)
+if n != 1:
+    sys.exit(f"the control source line was not found exactly once ({n})")
+open(path, "w").write(new)
+PY
+}
 
-# 2 -- the UNPREFIXED auto archive. This one resolves for a repository that has
-#      published a tag, so nothing at build time would complain; only the gate
-#      can say the bytes are not ours.
-fixture unprefixed_archive
-sed -i 's#releases/download/\$pkgver/[^"]*#archive/refs/tags/$pkgver.tar.gz#' \
-    "$(fx unprefixed_archive)/packaging/arch/PKGBUILD"
-expect_red unprefixed_archive "auto-generated archive"
+# 1 -- GitHub's generated archive. It resolves for any published tag, so
+#      nothing at build time would complain; only the gate can say the bytes
+#      are not ours.
+fixture generated_archive
+set_source generated_archive '    "$pkgbase-$pkgver.tar.gz::https://github.com/LibreSCRS/'"$rname"'/archive/refs/tags/$pkgver.tar.gz"'
+expect_red generated_archive "auto-generated archive"
 
-# 3 -- pkgver disagrees with VERSION.
+# 2 -- a v-prefixed tag: the spelling every recipe carried before.
+fixture v_prefixed_tag
+set_source v_prefixed_tag '    "'"$rname"'-$pkgver::git+https://github.com/LibreSCRS/'"$rname"'.git#tag=v$pkgver?signed"'
+expect_red v_prefixed_tag "v-prefixed tag"
+
+# 3 -- the tag without ?signed: makepkg checks nothing out of the ordinary and
+#      builds whatever tree the name points at.
+fixture unsigned_tag
+set_source unsigned_tag '    "'"$rname"'-$pkgver::git+https://github.com/LibreSCRS/'"$rname"'.git#tag=$pkgver"'
+expect_red unsigned_tag "no ?signed"
+
+# 4 -- the release tarball the recipe used to fetch: its sum could only be
+#      written after the release, and nothing ties its bytes to a signature.
+fixture release_tarball
+set_source release_tarball '    "$pkgbase-$pkgver.tar.gz::https://github.com/LibreSCRS/'"$rname"'/releases/download/$pkgver/librelinux_$pkgver.orig.tar.gz"'
+expect_red release_tarball "is not this repository's signed release tag"
+
+# 5 -- a SIBLING repository's tag. These recipes are near-copies of one
+#      another, so this is what a careless copy produces.
+fixture sibling_repo
+set_source sibling_repo '    "'"$rname"'-$pkgver::git+https://github.com/LibreSCRS/NotThisRepo.git#tag=$pkgver?signed"'
+expect_red sibling_repo "while this repository is"
+
+# 6 -- a local name build() does not cd into.
+fixture local_name
+set_source local_name '    "'"$rname"'::git+https://github.com/LibreSCRS/'"$rname"'.git#tag=$pkgver?signed"'
+expect_red local_name "is not spelled"
+
+# 7 -- pkgver disagrees with VERSION.
 fixture pkgver_drift
-sed -i 's/^pkgver=.*/pkgver=4.2.0/' "$(fx pkgver_drift)/packaging/arch/PKGBUILD"
-expect_red pkgver_drift "arm2"
+sed -i 's/^pkgver=.*/pkgver=4.2.0/' "$(recipe_of pkgver_drift)"
+expect_red pkgver_drift "arm2: version drift"
 
-# 4 -- VERSION missing entirely. A missing input is a failure, not a skip.
+# 8 -- VERSION missing entirely. A missing input is a failure, not a skip.
 fixture no_version
 rm -f "$(fx no_version)/VERSION"
 expect_red no_version "arm2"
 
-# 5 -- the vacuum: source=() renamed so the pattern matches nothing.
+# 9 -- the vacuum: source=() renamed so the pattern matches nothing.
 fixture vacuum_source
-sed -i 's/^source=(/sources=(/' "$(fx vacuum_source)/packaging/arch/PKGBUILD"
+sed -i 's/^source=(/sources=(/' "$(recipe_of vacuum_source)"
 expect_red vacuum_source "vacuum"
 
-# 6 -- the asset name drifts from the one make-source-tarball.sh writes. The
-#      URL is still a releases/download/ one, so shape alone cannot catch it;
-#      the first makepkg would 404.
-fixture asset_name_drift
-sed -i 's#/\([a-z-]*\)_\$pkgver\.orig\.tar\.gz#/\1-sources_$pkgver.orig.tar.gz#' \
-    "$(fx asset_name_drift)/packaging/arch/PKGBUILD"
-expect_red asset_name_drift "the release workflow uploads"
+# 10 -- a second source beside the tag.
+fixture two_sources
+sed -i '/^source=(/a\    "extra.patch"' "$(recipe_of two_sources)"
+sed -i "s/^sha256sums=('SKIP')/sha256sums=('SKIP' '$(printf '%064d' 0)')/" "$(recipe_of two_sources)"
+expect_red two_sources "expected exactly one entry"
 
-# 7 -- the recipe fetches a SIBLING repository's asset. These four recipes are
-#      near-copies of one another, so this is what a careless copy produces.
-fixture sibling_repo
-sed -i "s#github.com/LibreSCRS/$rname/releases#github.com/LibreSCRS/NotThisRepo/releases#" \
-    "$(fx sibling_repo)/packaging/arch/PKGBUILD"
-expect_red sibling_repo "while this repository is"
+# 11 -- validpgpkeys names a key that is not the release key.
+fixture wrong_key
+sed -i -E "s/^validpgpkeys=\('[0-9A-F]{40}'\)/validpgpkeys=('0123456789ABCDEF0123456789ABCDEF01234567')/" "$(recipe_of wrong_key)"
+expect_red wrong_key "but the release key in KEYS is"
 
-# 8 -- a submodule gitlink the recipe does not pin. This is the drift that
-#      actually ships a package built from the wrong upstream tree, and it is
-#      invisible in the recipe text: the perturbation is in the INDEX.
+# 12 -- no validpgpkeys at all: ?signed then trusts any key the builder trusts.
+fixture no_key
+sed -i '/^validpgpkeys=/d' "$(recipe_of no_key)"
+expect_red no_key "no validpgpkeys"
+
+# 13 -- a sum written for the git source.
+fixture git_sum
+sed -i "s/^sha256sums=('SKIP')/sha256sums=('$(printf '%064d' 0)')/" "$(recipe_of git_sum)"
+expect_red git_sum "carries the sum"
+
+# 14 -- more sums than sources: makepkg pairs them by position.
+fixture sum_count
+sed -i "s/^sha256sums=('SKIP')/sha256sums=('SKIP' 'SKIP')/" "$(recipe_of sum_count)"
+expect_red sum_count "makepkg pairs them"
+
+# 15 -- the RPM spec states another version than VERSION.
+fixture spec_drift
+sed -i -E 's/^(Version:[[:space:]]+).*/\14.2.0/' "$(fx spec_drift)/$spec_rel"
+expect_red spec_drift "arm2c: version drift"
+
+# 16 -- a submodule gitlink the recipe does not pin. The perturbation is in
+#       the INDEX, invisible in the recipe text.
 fixture gitlink_drift
 git -C "$(fx gitlink_drift)" update-index --add \
     --cacheinfo 160000,1111111111111111111111111111111111111111,thirdparty/not-pinned \
@@ -172,58 +210,43 @@ if [ -z "$(git -C "$(fx gitlink_drift)" ls-files -s -- thirdparty/not-pinned)" ]
     echo "CASE gitlink_drift: the gitlink was not written -- the perturbation changed nothing"
     cases=$((cases + 1)); fails=$((fails + 1))
 else
-    expect_red_out gitlink_drift "arm3: submodule"
+    expect_red gitlink_drift "arm3: submodule"
 fi
 
-# 9 -- the FetchContent pin drifts from the cmake module the build fetches
-#      with. Only applies where the recipe carries one.
+# 17 -- the FetchContent pin drifts from the cmake module the build fetches
+#       with. Only applies where the recipe carries one.
 if grep -q '^_qcbor_commit=' "$control_recipe"; then
     fixture fetchcontent_drift
     sed -i -E 's/^([[:space:]]*GIT_TAG[[:space:]]+)[0-9a-f]{40}/\12222222222222222222222222222222222222222/' \
         "$(fx fetchcontent_drift)/cmake/FetchQCBOR.cmake"
-    if cmp -s "$(fx fetchcontent_drift)/cmake/FetchQCBOR.cmake" "$root/cmake/FetchQCBOR.cmake"; then
-        echo "CASE fetchcontent_drift: the pin was not rewritten -- the perturbation changed nothing"
-        cases=$((cases + 1)); fails=$((fails + 1))
-    else
-        expect_red_out fetchcontent_drift "arm3b: QCBOR pin drift"
-    fi
+    cases=$((cases + 1)); red=$((red + 1))
+    run fetchcontent_drift
+    case "$rc:$out" in
+        0:*) echo "CASE fetchcontent_drift: expected a non-zero exit, got 0"; fails=$((fails + 1)) ;;
+        *"arm3b: QCBOR pin drift"*) echo "ok   fetchcontent_drift (rc=$rc)" ;;
+        *) echo "CASE fetchcontent_drift: no line mentions the pin drift"; fails=$((fails + 1)) ;;
+    esac
 else
     echo "CASE fetchcontent_drift: not applicable -- this recipe carries no _qcbor_commit"
 fi
 
-# 10 -- the tag exists and sha256sums is still SKIP. The tag is created in the
-#       throwaway fixture, never in a real clone.
-fixture tag_with_skip
-cases=$((cases + 1))
-v=$(sed -n '1p' "$(fx tag_with_skip)/VERSION" | tr -d '[:space:]')
-git -C "$(fx tag_with_skip)" -c tag.gpgSign=false tag "$v"
-sed -i "s/^pkgver=.*/pkgver=$v/" "$(fx tag_with_skip)/packaging/arch/PKGBUILD"
-sed -i "/^sha256sums=(/,/)/s/'[0-9a-f]\{64\}'/'SKIP'/g" \
-    "$(fx tag_with_skip)/packaging/arch/PKGBUILD"
-run tag_with_skip
-if [ "$rc" -eq 0 ]; then
-    echo "CASE tag_with_skip: expected a non-zero exit, got 0"; fails=$((fails + 1))
-else
-    case "$out" in *"arm4"*) : ;; *)
-        echo "CASE tag_with_skip: exit was non-zero but no line mentions 'arm4'"
-        printf '%s\n' "$out" | sed 's/^/    /'; fails=$((fails + 1)) ;;
-    esac
-fi
-
-# 11 -- control: the real recipe, untouched, must pass, and arm 4 must SAY it is
-#       skipped. A silent skip is the failure mode this whole file exists for.
+# 18 -- control: the real recipe, untouched, must pass, and every arm must
+#       say what it measured.
 fixture control
 cases=$((cases + 1))
 run control
 if [ "$rc" -ne 0 ]; then
     echo "CASE control: the committed recipe does not pass its own gate (rc=$rc)"
     printf '%s\n' "$out" | sed 's/^/    /'; fails=$((fails + 1))
+else
+    for arm in "arm1:" "arm1b:" "arm2:" "arm2c:" "arm3:" "arm3b:" "arm4:"; do
+        case "$out" in *"$arm"*) : ;; *)
+            echo "CASE control: $arm said nothing about itself -- a silent arm is a vacuum"
+            fails=$((fails + 1)) ;;
+        esac
+    done
+    echo "ok   control"
 fi
-case "$out" in
-    *"arm4: SKIPPED"*|*"arm4: tag"*) : ;;
-    *) echo "CASE control: arm 4 said nothing about itself -- a silent arm is a vacuum"
-       printf '%s\n' "$out" | sed 's/^/    /'; fails=$((fails + 1)) ;;
-esac
 
 if [ "$fails" -eq 0 ]; then
     echo "check-recipe selftest: all $cases cases passed"

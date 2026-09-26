@@ -7,8 +7,9 @@
 # build runs `dpkg-buildpackage -b`, which never touches an orig tarball, and
 # the rpm build still rolls its own archive inline, under a different name and
 # a different top directory than the spec's `Source0`/`%autosetup` expect.
-# Today the one consumer is the Arch recipe, which fetches the published asset
-# by URL.
+# The Arch recipe does not either: it builds the signed tag with git. The
+# tarball is published for anyone who wants the release's sources as one file,
+# and SHA256SUMS -- signed with the rest of the release -- names its sum.
 #
 # Two things this script refuses to do, both because they have already gone
 # wrong once:

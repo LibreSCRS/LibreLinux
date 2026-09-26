@@ -13,8 +13,10 @@ The split keeps the agent Qt-free: installing only `librescrs-agent` pulls
 `libLibreSCRS_Auth.so` for secure input handling), plus
 `qt6-base kcoreaddons ki18n`.
 
-The `PKGBUILD` is **release-shaped**: it fetches the source tarball the release
-workflow uploads for the tag, not GitHub's auto-generated one.
+The `PKGBUILD` is **release-shaped**: its one source is this repository's
+signed release tag, fetched with git (`#tag=$pkgver?signed`), and makepkg
+refuses it unless the tag is signed by the key in `validpgpkeys` -- the
+LibreSCRS release key, the primary key in [`KEYS`](../../KEYS).
 `pkgver` is the first line of the repository's `VERSION` file: this component
 no longer carries its own 0.x SemVer and is released in lockstep with the
 rest of the stack.
@@ -38,19 +40,18 @@ path: the polkit action must go to the **system** actions dir, because polkit
 reads actions only from there, and without it `PolkitAuthorizer` cannot
 authorize `org.librescrs.agent.sign`.
 
-## Release build (after the `5.0.0` release is published)
+## Release build (after the `5.0.0` tag is published)
 
 ```sh
+gpg --import KEYS   # once: the key makepkg checks the tag's signature against
 cd packaging/arch
-makepkg -g      # prints the real sha256sum; paste it into the recipe
-                # (updpkgsums does the same but needs pacman-contrib)
-makepkg -si     # builds + installs both split packages
+makepkg -si         # clones the tag, verifies its signature, builds and
+                    # installs both split packages
 ```
 
-The recipe inside a release tarball is not authoritative: its `sha256sums` are
-`SKIP`, because the asset they would name does not exist until the tag does. The
-copy on the default branch carries the checksum of the published asset; build
-from that copy, not from the one inside the tarball.
+A git source has no bytes a checksum could pin, so its `sha256sums` entry is
+`SKIP`; the tag's signature is what binds the build to the release, and it is
+checkable the moment the tag exists.
 
 ## Local dogfood build (no remote, no tag — build from this checkout)
 
@@ -60,15 +61,13 @@ Override the source to your local working tree:
 REPO="$(git rev-parse --show-toplevel)"
 mkdir -p /var/tmp/ll-arch && cp packaging/arch/PKGBUILD /var/tmp/ll-arch/
 cd /var/tmp/ll-arch
-# Replace the multi-line release `source=(...)` array wholesale with a single
-# local-git entry (a single-line `s#^source=.*#...#` would mangle the
-# multi-line array, leaving a dangling URL line + `)`). `sha256sums` is a
-# single line, so a plain `s#` substitution is correct there.
+# Replace the release `source=(...)` array wholesale with a single local-git
+# entry, and drop the signature requirement a working tree cannot meet.
 # A git source named exactly LibreLinux-$pkgver checks out to
 # $srcdir/LibreLinux-$pkgver — matching the hardcoded `cd` lines.
 sed -i \
   -e "/^source=(/,/^)/c\\source=(\"LibreLinux-\$pkgver::git+file://$REPO\")" \
-  -e "s#^sha256sums=.*#sha256sums=('SKIP')#" \
+  -e "/^validpgpkeys=/d" \
   PKGBUILD
 makepkg -si
 ```

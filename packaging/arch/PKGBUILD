@@ -46,15 +46,18 @@ makedepends=(
     'dbus'                      # dbus-run-session (prompter + agent integration tests)
 )
 options=('!lto')   # links in a clean chroot with LTO off; with makepkg's -flto=auto the link once failed there, cause not established
+# The source is this project's signed release tag, fetched with git and
+# refused by makepkg unless the tag carries a valid signature by the key below
+# -- the LibreSCRS release key, whose primary fingerprint is the one in KEYS
+# at the repository root. makepkg checksums the files a source brings, and a
+# git checkout brings none that a sum could pin, so its entry is SKIP: the
+# signature is what binds the build to the release, and it is checkable before
+# the tag exists as much as after it. packaging/arch/check-recipe.sh holds all
+# of this to the tree (repository, tag spelling, signature, fingerprint).
 source=(
-    "$pkgbase-$pkgver.tar.gz::https://github.com/LibreSCRS/LibreLinux/releases/download/$pkgver/librelinux_$pkgver.orig.tar.gz"
+    "LibreLinux-$pkgver::git+https://github.com/LibreSCRS/LibreLinux.git#tag=$pkgver?signed"
 )
-# Placeholder — the real sum is filled at tag time with `makepkg -g` (pacman's
-# own tool; `updpkgsums` needs pacman-contrib). The 5.0.0 release does not
-# exist yet, and the sum is of the tarball the release workflow uploads, so it
-# cannot be computed before it. packaging/arch/check-recipe.sh turns a
-# remaining SKIP into an error the moment the tag exists; see README.md for the
-# local-dogfood build that needs no remote at all.
+validpgpkeys=('6B05889AC9A6A7188DF639B06F27A989C2031D16')  # LibreSCRS release key (KEYS)
 sha256sums=('SKIP')
 
 build() {
