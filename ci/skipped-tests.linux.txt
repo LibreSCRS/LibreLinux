@@ -1,8 +1,0 @@
-# LibreLinux — leg 'linux'. Regenerate: ci/scripts/skip-ledger.sh --update <ctest.log> linux
-# Columns: category, glob, expected count. Categories: CARD NETWORK SERVICE PLATFORM DESIGN TAUTOLOGY TOMBSTONE
-# TODO rows are a draft: --check refuses an unknown category, on purpose.
-# Counted here: 9 skipped by ctest, 0 DISABLED_ in the sources.
-PLATFORM  PluginDirectory.*                                          1
-PLATFORM  PluginDirectoryReport.*                                    1
-CARD      SignHwSmokeCertRead.*                                      2
-CARD      SignHwSmokeSign.*                                          5

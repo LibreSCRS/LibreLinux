@@ -6,6 +6,12 @@ name: CI
 # and installed to a prefix, because LibreLinux consumes it via
 # `find_package(LibreMiddleware 5.0 REQUIRED CONFIG)` (CMakeLists.txt) — there
 # is no FetchContent fallback here, so the package must exist on disk first.
+# The revision is the one deps.lock names, never a branch.
+#
+# The shared gates (format scope, skip reasons, workflow shape, the build-log
+# and test-set gates, the lock checks) come from LibreSCRS/ci, all at one
+# commit; profiles/LibreLinux.txt there says which ones this repository runs
+# in which phase.
 
 on:
   push:
@@ -13,33 +19,32 @@ on:
   pull_request:
     branches: [main]
 
-  # Manual runs. Without this a job that is deliberately not part of every pull
-  # request -- a coverage pass that takes an hour, say -- cannot be started at
-  # all: a branch that is not a pull request gets no run, and a gate that cannot
-  # be triggered is green by construction.
+  # Manual runs: a branch that is not a pull request otherwise gets no run
+  # when nothing is pushed to it.
   workflow_dispatch:
+
+permissions: {}
 
 jobs:
   format-check:
     # Self-contained: the format gate needs neither LibreMiddleware nor the
-    # KF6/sdbus-c++ runtime deps, so it runs on ubuntu-latest with the exact
+    # KF6/sdbus-c++ runtime deps, so it runs on Ubuntu with the exact
     # clang-format-21 the rest of the org pins (apt.llvm.org). The build/test
     # job below runs in an Arch container instead, because Arch's rolling
     # `clang` package is ahead of 21 and would reformat against a different
     # major — the project standard is clang-format 21, not the distro default.
     timeout-minutes: 15
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
     steps:
-      # fetch-tags, deliberately. The recipe check run further down decides
-      # its last arm on whether the LOCAL clone holds refs/tags/<pkgver>: with
-      # a tagless checkout it prints SKIPPED forever, so a sha256sums that is
-      # still a placeholder would outlive the release it waits for and no run
-      # would ever say so. actions/checkout fetches with --no-tags unless this
-      # is set, and a shallow fetch would not carry the tagged commit anyway.
-      - uses: actions/checkout@v4
+      # fetch-tags, deliberately: the stamp arm of the version check reads the
+      # newest tag, and a tagless checkout would only ever show it one side.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-depth: 0
           fetch-tags: true
+          persist-credentials: false
 
       - name: Install clang-format-21
         run: |
@@ -49,7 +54,7 @@ jobs:
           sudo apt-get install -y clang-format-21
 
       - name: Check clang-format
-        # The roots live in ci/format-dirs.txt, which the scope check below
+        # The roots live in ci/format-dirs.txt, which the shared scope check
         # reads too: a directory nobody formats cannot appear without one of
         # these two steps saying so.
         #
@@ -63,11 +68,13 @@ jobs:
             \( -name '*.cpp' -o -name '*.h' -o -name '*.hpp' -o -name '*.mm' \) -print0 \
             | xargs -0 -r clang-format-21 --dry-run --Werror
 
-      - name: Check every tracked source is reachable by the formatter
-        run: ./ci/scripts/check-format-scope.sh
-
-      - name: Prove the signal-lifetime gate discriminates
-        run: ./ci/scripts/check-signal-state-lifetime.selftest.sh
+      # Format scope, skip reasons, the workflows as data (every gate reached,
+      # every job bounded, every step placed where it can run, one pin of the
+      # shared gates), the canonical-type registry, duplicate bodies, this
+      # repository's own self-tests, and deps.lock (form, reachable from each
+      # upstream's main, one revision per dependency across the stack).
+      - name: Shared gates
+        uses: LibreSCRS/ci/actions/gates@5b9410f9b0e6ab6983c39f931e118e68007c12b4
 
       - name: No signal handler outlives the state it captures
         # sdbus-c++ keeps a handler armed for as long as its proxy lives and
@@ -76,156 +83,54 @@ jobs:
         # captures is destroyed after it, and a signal arriving in that window
         # locks a destroyed mutex. The race is microseconds wide and nothing
         # can steer a signal into it on demand; the declaration order is
-        # decidable from the source, so that is what this measures.
+        # decidable from the source, so that is what this measures. Its
+        # self-test runs with the others, in the shared gates above.
         run: ./ci/scripts/check-signal-state-lifetime.sh
 
-      - name: Check every skip carries a reason
-        # A test that skips without saying why is indistinguishable from a test
-        # that passed. Costs a second and builds nothing.
-        run: ./ci/scripts/check-skip-reasons.sh
+      - name: The Arch recipe builds this project's signed tag
+        # Reads the recipe as text: its one source is this repository's own
+        # signed tag, the key it accepts is the one in KEYS, and pkgver is the
+        # first line of VERSION. No network. The self-test runs with the others.
+        run: ./packaging/arch/check-recipe.sh
 
-      - name: Changelog and version agree on the pending release
-        # Run on every push with the version this tree is heading for, so the
-        # agreement is proved weeks before the tag rather than first on a tag
-        # that cannot be taken back. The release job calls the same script with
-        # the tag's version.
-        run: ci/scripts/check-release-lockstep.sh "$(head -n1 VERSION | tr -d '[:space:]')"
+      # The version and release-shape gates live in LibreSCRS/ci too, but take
+      # no profile: they are the same scripts the release preflight runs with
+      # the tag's version, run here on every push with the version this tree
+      # is heading for, so a disagreement shows weeks before a tag that cannot
+      # be taken back. Same commit as every other reference to the shared
+      # gates; checked out beside this repository, after the gates above have
+      # judged it.
+      - name: Check out the shared gates
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          repository: LibreSCRS/ci
+          ref: 5b9410f9b0e6ab6983c39f931e118e68007c12b4
+          path: .shared-gates
+          persist-credentials: false
 
-      - name: Every job carries a time bound
-        # An unbounded job that hangs holds a runner for six hours and will
-        # not serve its log until the run is cancelled, so the failing test
-        # cannot even be named. This fails when a new job arrives without a
-        # bound, which is the only moment the omission is cheap to fix.
-        run: ci/scripts/check-job-timeouts.sh
+      - name: Every version surface states the version in VERSION
+        # Four arms: the CHANGELOG has a section for VERSION (lockstep), every
+        # first-party find_package floor names its major (floors), project()
+        # follows VERSION until a tag of that major exists (stamp), and the
+        # RPM spec agrees (surfaces). --min 1 is the vacuum guard: a floors
+        # scan that matches nothing is unmeasured, not clean.
+        run: .shared-gates/scripts/check-version.sh --min 1
 
-      - name: Every shipped gate is wired into CI
-        # A gate nobody runs is not a gate. dup-scan.py and canonical-types.py
-        # are the shape that hides it: each carries its own selftest, so
-        # reading either says nothing about whether a workflow runs it.
-        run: ci/scripts/check-gates-wired.sh
+      - name: Every release artefact has a producer and a consumer
+        # needs, names and producer arms over the release workflow: a download
+        # with no upstream uploader, an upload nothing downloads, and a source
+        # tarball built and thrown away all fail here instead of on the tag.
+        run: .shared-gates/scripts/check-release-artifacts.sh
 
-      - name: Gate-wiring check self-test
-        run: ci/scripts/check-gates-wired.selftest.sh
-
-      - name: Canonical declaration registry
-        # Single-checkout subset of the workspace scan. The cross-repository
-        # half -- duplicate bodies between two checkouts -- needs every tree
-        # side by side, which no single repository's CI has; this half is the
-        # part one repository can prove on its own.
-        run: python3 tools/canonical-types.py --repo "$(basename "$PWD")"
-
-      - name: Duplicate bodies (this checkout)
-        run: python3 tools/dup-scan.py --repo "$(basename "$PWD")"
-
-      - name: Every first-party version floor names the major in VERSION
-        # The 4.x sweep before 5.0 searched for the token `4.2`; the floor that
-        # mattered read `4.0`, in the only executable consumer the project
-        # ships, and survived. This measures the property instead: every
-        # first-party find_package/find_dependency floor must name the major
-        # the VERSION file names. It reads VERSION and never `git describe`, so
-        # it is decidable before a tag exists -- which is the whole window in
-        # which the mistake is cheap. --min 1 is the vacuum guard: a scan that
-        # matches nothing is unmeasured, not clean.
-        run: ci/scripts/check-version-floors.sh --min 1
-
-      - name: Prove the floor gate still fails when it should
-        # Thirty numbered cases, fifty assertions, instant, no build -- the run
-        # prints each one. A gate nobody has seen fail is a line in a workflow
-        # file.
-        run: ./ci/scripts/check-version-floors.selftest.sh
-
-      - name: The version this tree stamps names the major in VERSION
-        # The floor gate reads VERSION and the sources, so it stays green
-        # whatever the version derivation does, and a check that configures
-        # with git switched off is measuring the one input under which a tag
-        # cannot win. Between code freeze and the tag `git describe` still
-        # answers with the PREVIOUS release, and a tree that lets it decide
-        # installs a package whose major contradicts its own VERSION, changelog
-        # and packaging. This configures the real CMakeLists against a stubbed
-        # tag, in both directions, and creates no tag anywhere.
-        run: ci/scripts/check-version-stamp.sh --verbose
-
-      - name: Prove the stamp gate still fails when it should
-        # Seven fixtures, no compiler, no build. Two of them are shapes that
-        # have really been written: the tag deciding unconditionally, and git
-        # being ignored altogether.
-        run: ./ci/scripts/check-version-stamp.selftest.sh
-      - name: The Arch recipe fetches the tarball this project publishes
-        # Two scripts, because a gate nobody proves is a gate nobody trusts:
-        # the selftest perturbs the recipe -- and the tree around it -- and
-        # requires each refusal to name its own arm, then the gate runs over
-        # the committed recipe. It prints how many cases it ran, which is the
-        # only count that cannot go stale.
-        # Neither touches the network — `git ls-remote` against these SSH
-        # remotes hangs on a developer machine, and a gate that can hang is
-        # worse than one that can fail.
-        run: |
-          ./packaging/arch/check-recipe.selftest.sh
-          ./packaging/arch/check-recipe.sh
-
-      - name: The artefact-producer check can still fail
-        run: ./ci/scripts/check-release-artifacts.selftest.sh
-
-      - name: Every artefact a release publishes has a producer in the same run
-        # A release job that collects artefacts by pattern is happy with an
-        # empty match: the release simply carries one asset fewer, and the
-        # first run that could notice is the tag. This reads the pairing
-        # through needs on every push instead.
-        run: ci/scripts/check-release-artifacts.sh
-
-      - name: Prove the version-surface check still fails when it should
-        run: ./ci/scripts/check-version-surfaces.selftest.sh
-
-      - name: Every surface states the version in VERSION
-        # The build's project() stamp, the Debian changelog and the RPM spec,
-        # each against the version file: a package labelled one version must
-        # not install a binary that calls itself another.
-        run: ./ci/scripts/check-version-surfaces.sh
-
-      - name: The release-asset check can still fail
-        run: ./ci/scripts/check-release-assets.selftest.sh
-
-      - name: The release workflow checks its asset set before publishing
-        # Structural only: the job that runs gh release create runs the
-        # --staged check before it. Whether the set is right is measured on
-        # the tag, over the files themselves.
-        run: ./ci/scripts/check-release-assets.sh --wired
-
-      - name: Every uploaded artefact has someone to download it
-        # An artefact whose name no download step can match is built, kept for
-        # ninety days and dropped from the release without a word: the release
-        # simply carries one asset fewer. Names only -- whether the consumer is
-        # ordered after the producer is the needs question, which this
-        # repository answers only if it carries check-release-artifacts.sh.
-        run: |
-          ./ci/scripts/check-artifact-names.selftest.sh
-          ./ci/scripts/check-artifact-names.sh
+      - name: The release checks its asset set before publishing
+        run: .shared-gates/scripts/check-release-assets.sh --wired
 
       - name: The source tarball is a function of the commit
-        # The recipe carries the tarball's sha256, so a packager who rebuilds
-        # it has to get the same bytes back. Two runs, forced apart by a second
-        # boundary and a umask boundary, then the property read out of the
-        # archive: every member carries the commit's own timestamp, owner 0/0,
-        # a mode from the set --mode writes, and a place in name order rather
-        # than in the order readdir happened to return; nothing sits under
-        # .github/; and the top directory is the one the recipes cd into.
-        run: |
-          ./ci/scripts/check-tarball-determinism.selftest.sh
-          ./ci/scripts/check-tarball-determinism.sh
-
-      # Every self-test in this repository, by pathspec, and each one must
-      # report the cases it ran and how many proved the gate red. A self-test
-      # nothing runs proves as much as no self-test, and a runner that read only
-      # exit codes would accept `exit 0` as a body.
-      - name: Run every self-test
-        run: ./ci/scripts/run-selftests.sh
-
-      # A step can land in a job that does not run on push, or before the
-      # checkout that creates the directory its working-directory names, and
-      # nothing says so: the wiring check sees the name and the timeout check
-      # sees the bound. This reads the workflows as data and fails on both.
-      - name: Every step can run where it was placed
-        run: ./ci/scripts/workflow-step-order.py
+        # Two runs of ci/scripts/make-source-tarball.sh, forced apart by a
+        # second boundary and a umask boundary, then the property read out of
+        # the archive: commit timestamp, owner 0/0, closed mode set, name
+        # order, nothing under .github/, top directory <Repository>-<VERSION>.
+        run: .shared-gates/scripts/check-tarball-determinism.sh
 
   build-linux:
     # Arch container: LibreLinux's runtime deps (sdbus-c++ >= 2.0, libsystemd)
@@ -234,13 +139,16 @@ jobs:
     # OpenSC (for LibreMiddleware), gtest, qt6/kf6 (for the prompter), and
     # dbus-run-session for the agent/prompter integration tests.
     timeout-minutes: 90
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     container: archlinux:latest
+    permissions:
+      contents: read
     env:
       # Where LibreMiddleware is installed and where LibreLinux finds it.
       LM_PREFIX: /opt/libremiddleware
     steps:
       - name: Install system dependencies
+        id: sys
         run: |
           pacman -Syu --noconfirm
           pacman -S --noconfirm --needed \
@@ -251,6 +159,9 @@ jobs:
             p11-kit \
             python-jsonschema \
             qt6-base kcoreaddons ki18n
+          # What the cached middleware install was built with. A rolling image
+          # moves these under a cache keyed on the source commit alone.
+          echo "toolchain=$(pacman -Q gcc glibc openssl pcsclite opensc systemd-libs p11-kit | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
 
       - name: Generate a UTF-8 locale
         # The bare Arch container ships only the C / C.UTF-8 locales, under which
@@ -265,19 +176,20 @@ jobs:
           echo 'en_US.UTF-8 UTF-8' >> /etc/locale.gen
           locale-gen
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           path: LibreLinux
+          persist-credentials: false
 
       # --- LibreMiddleware: build from source + install to a prefix ---------
-      # Mirrors LibreCelik's CI, which builds LibreMiddleware (it FetchContent's
-      # it transitively). LibreLinux requires the installed CONFIG package, so
-      # we build + `cmake --install` it explicitly. SHARED + plugins ON because
-      # the agent dlopen's the card plugins at runtime; native signing backend
-      # (the CI default) — DSS is only a test oracle.
-      # At the commit deps.lock names, never a branch: the action checks the
-      # locked revision out and proves the checkout is that revision.
+      # LibreLinux requires the installed CONFIG package, so we build +
+      # `cmake --install` it explicitly. SHARED + plugins ON because the agent
+      # dlopen's the card plugins at runtime; native signing backend (the CI
+      # default) — DSS is only a test oracle. At the commit deps.lock names,
+      # never a branch: the action checks the locked revision out and proves
+      # the checkout is that revision.
       - name: Checkout LibreMiddleware at the lock
+        id: deps
         uses: LibreSCRS/ci/actions/checkout-deps@5b9410f9b0e6ab6983c39f931e118e68007c12b4
         with:
           root: LibreLinux
@@ -286,15 +198,32 @@ jobs:
           fetch-depth: '0'
           submodules: recursive   # LM vendors OpenSC as a git submodule (thirdparty/opensc-source)
 
+      # The install is a function of the locked commit and of the toolchain
+      # that built it, so that pair is the key; a new lock or a moved compiler
+      # builds it again.
+      - name: Restore the LibreMiddleware install
+        id: lm-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: /opt/libremiddleware
+          key: lm-arch-${{ steps.deps.outputs.libremiddleware-sha }}-${{ steps.sys.outputs.toolchain }}
+
       - name: Build & install LibreMiddleware (Release, SHARED)
-        working-directory: LibreMiddleware
+        if: steps.lm-cache.outputs.cache-hit != 'true'
         run: |
-          cmake -B build -G Ninja \
+          cmake -S LibreMiddleware -B lm-build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX="$LM_PREFIX" \
             -DLIBREMIDDLEWARE_BUILD_SHARED=ON
-          cmake --build build -j4
-          cmake --install build
+          cmake --build lm-build -j4
+          cmake --install lm-build
+
+      - name: Keep the LibreMiddleware install
+        if: steps.lm-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: /opt/libremiddleware
+          key: lm-arch-${{ steps.deps.outputs.libremiddleware-sha }}-${{ steps.sys.outputs.toolchain }}
 
       # --- LibreLinux: configure / build (default system mode) --------------
       # NOT LIBRELINUX_USER_INSTALL — that mode targets per-user XDG dirs for
@@ -328,38 +257,27 @@ jobs:
           set -o pipefail
           LC_ALL=C cmake --build build -j4 2>&1 | tee build.log
 
-      - name: The warning floor is still reachable
-        # warning-gate.py judges the LOG, so a tree that has LOST compile units
-        # makes it refuse every full build and blame the build. This judges the
-        # configured graph instead, so the message names the stale number.
-        working-directory: LibreLinux
-        run: ./ci/scripts/check-warning-floor.sh build
-
-      - name: Warning-floor check self-test
-        working-directory: LibreLinux
-        run: ./ci/scripts/check-warning-floor.selftest.sh
-
-      - name: Check the warning baseline
-        # Counted by the [-Wname] tag, never by the message text: diagnostics
-        # are localised. --require-key means a compiler the baseline has no
-        # section for FAILS rather than being reported: the sentence that used to
-        # stand here -- "an unknown compiler is reported, not failed" -- described
-        # the behaviour this flag removed. The key here is whatever GCC the
-        # archlinux:latest image carries on the day, so this job loses its key the
-        # moment Arch moves the compiler; pinning it means pinning the image by
-        # digest, the way ci/coverage-env.txt pins the environment it records in.
-        working-directory: LibreLinux
-        run: ./ci/scripts/warning-gate.py --check --require-key build.log --build-dir build
-
-      - name: Check the discovered test set
-        # Test discovery is PRE_TEST here, so `ctest -N` runs every test
-        # binary with --gtest_list_tests. The Qt ones create their application
-        # object before listing, and with no display that aborts: the set has
-        # to be discovered under the same platform plugin the Test step uses.
-        working-directory: LibreLinux
+      # The warning baseline over the log (counted by the [-Wname] tag, never
+      # by the localised message; a compiler with no section in the baseline
+      # FAILS, and a floor the configured graph cannot reach is named as
+      # such), the discovered test set against ci/test-manifest.linux.txt,
+      # and the agent sources the configure fetched against the LibreAgent row
+      # of deps.lock -- the tree built, not the message the configure printed.
+      #
+      # Test discovery is PRE_TEST here, so listing the set runs every test
+      # binary with --gtest_list_tests. The Qt ones create their application
+      # object before listing, and with no display that aborts: the set has
+      # to be discovered under the same platform plugin the Test step uses.
+      - name: Shared gates after the build
+        uses: LibreSCRS/ci/actions/gates@5b9410f9b0e6ab6983c39f931e118e68007c12b4
         env:
           QT_QPA_PLATFORM: offscreen
-        run: ./ci/scripts/test-manifest-gate.sh --check build linux
+        with:
+          root: LibreLinux
+          phase: build
+          build-dir: build
+          build-log: build.log
+          leg: linux
 
       # --- e2e harness compiles ---------------------------------------------
       # The hardware-acceptance clients under e2e/ are deliberately outside the
@@ -414,13 +332,6 @@ jobs:
           cat ctest.log
           echo "ctest rc=$rc"
           exit "$rc"
-
-      - name: Check the skip ledger
-        # always(): the ledger's whole point is the run where something did not
-        # run, including runs where something also failed.
-        if: always()
-        working-directory: LibreLinux
-        run: ./ci/scripts/skip-ledger.sh --check ctest.log linux
 
       # --- Address-sanitizer gate for the module's D-Bus client lifetimes ----
       # The TSan step below builds six agent targets and none from
@@ -497,27 +408,25 @@ jobs:
           # --no-tests=error fails only when the selection matches NOTHING, so the
           # denominator of a -R leg is the expression, not the build directory:
           # renaming or deleting a case the expression names still builds, still
-          # runs, and covers less. This is that number, regenerated by whatever
-          # change alters the set.
-          #
-          # A committed listing of the whole build directory cannot serve here,
-          # and that is measured rather than assumed: this leg builds only the
-          # suites it sanitizes, and with one ctest entry per case the discovery
-          # step writes a NOT_BUILT placeholder for every binary the leg does not
-          # build -- 46 of them. (736 is what `grep -c _NOT_BUILT` returns over that
-          # listing and it is a line count, not a count of entries: ctest prints
-          # sixteen "Looked in the following places" lines per placeholder.)
-          # The manifest check refuses those, correctly, so
-          # the number below is what judges this leg.
+          # runs, and covers less. The expected number is not written here: it
+          # is what the same expression selects from ci/test-manifest.linux.txt,
+          # the committed test set the gates step above has just held equal to
+          # what the full build discovers. A case added to or dropped from one
+          # of these suites moves both sides in the same change; a leg that
+          # stops building or selecting one of them does not.
+          want=$(grep -cE "$SUITES" ci/test-manifest.linux.txt || true)
           n=$(ctest --test-dir build-tsan -N -R "$SUITES" | grep -c '^ *Test *#' || true)
-          test "$n" = 44 || { echo "the sanitizer leg selected $n cases, not 44"; exit 1; }
+          echo "the sanitizer leg selected $n cases; the test manifest names $want for the same expression"
+          test "$want" -gt 0 || { echo "the expression selects nothing from the manifest -- unmeasured"; exit 1; }
+          test "$n" = "$want" || { echo "the sanitizer leg selected $n cases, not the $want the manifest names"; exit 1; }
 
       # --- PKCS#11 ownership -----------------------------------------------
       # Install rules cannot prove registration: the declaration once landed
       # exactly where the rule said and p11-kit never read it. The gate
       # therefore runs AFTER `cmake --install`, enumerates what the host
       # actually loads, and fails on a runner that installed nothing — which is
-      # the state the previous check reported as success.
+      # the state the previous check reported as success. Its self-test runs
+      # with the others, in the shared gates of format-check.
       - name: Install to the system prefix and assert a single PKCS#11 owner
         working-directory: LibreLinux
         timeout-minutes: 5
@@ -525,144 +434,32 @@ jobs:
           cmake --install build
           ./e2e/check-p11kit-single-owner.sh
 
-      - name: Prove the gate still discriminates
-        working-directory: LibreLinux
-        timeout-minutes: 5
-        run: ./e2e/check-p11kit-single-owner.selftest.sh
-
-  coverage:
-    # Arch container: LibreLinux's runtime deps (sdbus-c++ >= 2.0, libsystemd)
-    # are not reliably packaged on ubuntu apt, and the owner's dev/target env
-    # is Arch/Manjaro. pacman provides sdbus-cpp 2.x, libsystemd, pcsclite,
-    # OpenSC (for LibreMiddleware), gtest, qt6/kf6 (for the prompter), and
-    # dbus-run-session for the agent/prompter integration tests.
-    runs-on: ubuntu-latest
-    container: archlinux:latest
-    env:
-      # Where LibreMiddleware is installed and where LibreLinux finds it.
-      LM_PREFIX: /opt/libremiddleware
-    # Not on pull_request: this pass costs an hour and the moment a
-    # function actually lands is the push to main. Manual only until one
-    # measured run says what it really costs on a hosted runner.
-    if: github.event_name == 'workflow_dispatch'
-    timeout-minutes: 120
-    steps:
-
-      - name: Install system dependencies
-        run: |
-          pacman -Syu --noconfirm
-          pacman -S --noconfirm --needed \
-            base-devel cmake ninja git pkgconf \
-            sdbus-cpp systemd-libs \
-            openssl pcsclite opensc \
-            gtest dbus \
-            p11-kit \
-            python-jsonschema \
-            qt6-base kcoreaddons ki18n
-
-      - name: Generate a UTF-8 locale
-        # The bare Arch container ships only the C / C.UTF-8 locales, under which
-        # the C library's gettext (which ki18n uses to read .mo catalogs)
-        # suppresses translation entirely. PromptCatalogResolutionTest proves the
-        # sr Cyrillic-primary prompter catalog resolves end-to-end and therefore
-        # needs a real UTF-8 locale present; generate en_US.UTF-8 (the test's own
-        # CTest properties set LANG=en_US.UTF-8 + LANGUAGE=sr). Without this a
-        # broken/empty sr msgstr would ship green (the documented ki18n/gettext
-        # C-locale pitfall).
-        run: |
-          echo 'en_US.UTF-8 UTF-8' >> /etc/locale.gen
-          locale-gen
-
-      - uses: actions/checkout@v4
-        with:
-          path: LibreLinux
-
-      # --- LibreMiddleware: build from source + install to a prefix ---------
-      # Mirrors LibreCelik's CI, which builds LibreMiddleware (it FetchContent's
-      # it transitively). LibreLinux requires the installed CONFIG package, so
-      # we build + `cmake --install` it explicitly. SHARED + plugins ON because
-      # the agent dlopen's the card plugins at runtime; native signing backend
-      # (the CI default) — DSS is only a test oracle.
-      # At the commit deps.lock names, never a branch: the action checks the
-      # locked revision out and proves the checkout is that revision.
-      - name: Checkout LibreMiddleware at the lock
-        uses: LibreSCRS/ci/actions/checkout-deps@5b9410f9b0e6ab6983c39f931e118e68007c12b4
-        with:
-          root: LibreLinux
-          names: LibreMiddleware
-          path: .
-          fetch-depth: '0'
-          submodules: recursive   # LM vendors OpenSC as a git submodule (thirdparty/opensc-source)
-
-      - name: Build & install LibreMiddleware (Release, SHARED)
-        working-directory: LibreMiddleware
-        run: |
-          cmake -B build -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_INSTALL_PREFIX="$LM_PREFIX" \
-            -DLIBREMIDDLEWARE_BUILD_SHARED=ON
-          cmake --build build -j4
-          cmake --install build
-
-      # --- LibreLinux: configure / build (default system mode) --------------
-      # NOT LIBRELINUX_USER_INSTALL — that mode targets per-user XDG dirs for
-      # dogfooding. CI builds the packaging layout (system prefix), which is
-      # what distro packages ship.
-
-      - name: Install gcovr
-        # Pinned: the baseline records the gcovr version it was measured with
-        # and the gate refuses to compare across versions, because the exclude
-        # semantics that decide the denominator have changed between them.
-        run: python3 -m pip install --break-system-packages 'gcovr==8.6'
-
-      - name: Configure (coverage)
-        working-directory: LibreLinux
-        run: cmake --preset coverage -DCMAKE_PREFIX_PATH="$LM_PREFIX"
-
-      - name: Build
-        working-directory: LibreLinux
-        run: cmake --build build-cov -j4
-
-      - name: Test
-        working-directory: LibreLinux
-        run: |
-          set +e
-          dbus-run-session -- ctest --test-dir build-cov --output-on-failure --no-tests=error > ctest.log 2>&1
-          rc=$?
-          set -e
-          cat ctest.log
-          echo "ctest rc=$rc"
-          exit "$rc"
-
-      - name: Check coverage against the baseline
-        working-directory: LibreLinux
-        # The committed baseline was measured with a different compiler than
-        # this runner uses, so the FIRST authorised run of this job is expected
-        # to refuse to compare and say so. Refusing is the design: a coverage
-        # number carries the configuration it was measured under, and comparing
-        # across configurations is how a gap becomes an artefact. Record a
-        # runner-side baseline with --update, review it in the same commit, and
-        # from then on this step is a ratchet.
-        run: ./ci/scripts/coverage-gate.py --check --expect-key GNU-16 build-cov
-
   packaging-build:
     # The path a distribution package takes: the agent core comes from a
     # package, not from a fetch. build-linux keeps the FetchContent path, which
-    # is what proves the recorded pin still resolves; this job proves the
-    # packaging path declares every source it needs, which is a different claim
-    # and needs its own run.
+    # is what proves the locked revision still resolves; this job proves the
+    # packaging path declares every source it needs, and that the install
+    # tree is exactly what packaging/payload/*.files claim when the build is
+    # configured for one prefix and staged into another -- the shape in which
+    # an install destination fixed at configure time lands outside every
+    # package. A package build configures for /usr from the start and cannot
+    # see that; this is why the job stays beside the package builds.
     #
     # The assertion is on the CONSEQUENCE, not on whether the environment
     # happens to have network: a populated _deps directory after configure
     # fails this job. A chroot that isolates the network would prove the same
     # thing by accident and stop proving it the day someone gives it one.
     timeout-minutes: 90
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     container: archlinux:latest
+    permissions:
+      contents: read
     env:
       LM_PREFIX: /opt/libremiddleware
+      LA_PREFIX: /opt/libreagent
     steps:
       - name: Install system dependencies
+        id: sys
         run: |
           pacman -Syu --noconfirm
           pacman -S --noconfirm --needed \
@@ -673,12 +470,15 @@ jobs:
             p11-kit \
             python-jsonschema \
             qt6-base kcoreaddons ki18n
+          echo "toolchain=$(pacman -Q gcc glibc openssl pcsclite opensc systemd-libs p11-kit | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           path: LibreLinux
+          persist-credentials: false
 
       - name: Checkout LibreMiddleware and LibreAgent at the lock
+        id: deps
         uses: LibreSCRS/ci/actions/checkout-deps@5b9410f9b0e6ab6983c39f931e118e68007c12b4
         with:
           root: LibreLinux
@@ -687,15 +487,39 @@ jobs:
           fetch-depth: '0'
           submodules: recursive
 
+      # The same key as build-linux: one install per locked commit and toolchain.
+      - name: Restore the LibreMiddleware install
+        id: lm-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: /opt/libremiddleware
+          key: lm-arch-${{ steps.deps.outputs.libremiddleware-sha }}-${{ steps.sys.outputs.toolchain }}
+
       - name: Build & install LibreMiddleware (Release, SHARED)
-        working-directory: LibreMiddleware
+        if: steps.lm-cache.outputs.cache-hit != 'true'
         run: |
-          cmake -B build -G Ninja \
+          cmake -S LibreMiddleware -B lm-build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX="$LM_PREFIX" \
             -DLIBREMIDDLEWARE_BUILD_SHARED=ON
-          cmake --build build -j4
-          cmake --install build
+          cmake --build lm-build -j4
+          cmake --install lm-build
+
+      - name: Keep the LibreMiddleware install
+        if: steps.lm-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: /opt/libremiddleware
+          key: lm-arch-${{ steps.deps.outputs.libremiddleware-sha }}-${{ steps.sys.outputs.toolchain }}
+
+      # Its own prefix, so the middleware install cached above stays exactly
+      # what that key says it is.
+      - name: Restore the LibreAgent core install
+        id: la-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: /opt/libreagent
+          key: la-arch-${{ steps.deps.outputs.libreagent-sha }}-${{ steps.deps.outputs.libremiddleware-sha }}-${{ steps.sys.outputs.toolchain }}
 
       - name: Build & install LibreAgent (Core) at the lock
         # The locked commit, not the agent's trunk: a package built from
@@ -705,10 +529,11 @@ jobs:
         # for (Core, Wire, Pkcs11Facade; TestSupport is on for a top-level
         # build), so the configure below meets the package a distribution
         # would have installed, not a smaller one.
+        if: steps.la-cache.outputs.cache-hit != 'true'
         run: |
           cmake -S LibreAgent -B la-build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_INSTALL_PREFIX="$LM_PREFIX" \
+            -DCMAKE_INSTALL_PREFIX="$LA_PREFIX" \
             -DCMAKE_PREFIX_PATH="$LM_PREFIX" \
             -DLIBREAGENT_BUILD_CORE=ON \
             -DLIBREAGENT_BUILD_WIRE=ON \
@@ -716,14 +541,23 @@ jobs:
           cmake --build la-build -j4
           cmake --install la-build
 
+      - name: Keep the LibreAgent core install
+        if: steps.la-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: /opt/libreagent
+          key: la-arch-${{ steps.deps.outputs.libreagent-sha }}-${{ steps.deps.outputs.libremiddleware-sha }}-${{ steps.sys.outputs.toolchain }}
+
       - name: Configure the packaging way
         # A separate build directory on purpose: build/ belongs to build-linux
         # and its FetchContent path, and the two claims must not share a cache.
+        # No CMAKE_INSTALL_PREFIX: the staged install below moves it to /usr,
+        # and a destination fixed at configure time would not follow.
         working-directory: LibreLinux
         run: |
           cmake -B build-packaging -G Ninja \
             -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-            -DCMAKE_PREFIX_PATH="$LM_PREFIX" \
+            -DCMAKE_PREFIX_PATH="$LM_PREFIX;$LA_PREFIX" \
             -DLIBRELINUX_USE_INSTALLED_AGENT_CORE=ON
 
       - name: The build declared every source it needs
