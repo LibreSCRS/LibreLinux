@@ -26,7 +26,7 @@ option(LIBRELINUX_USE_INSTALLED_AGENT_CORE
        "Consume LibreAgent via find_package(CONFIG) instead of FetchContent" OFF)
 
 # The revision -- and the URL -- are the LibreAgent row of deps.lock
-# (`<name> <url> <commit> <main|version>`), which `bump-deps` writes and
+# (`<name> <url> <commit>`), which `bump-deps` writes and
 # `bump-deps check` holds (form, reachable from upstream main, same revision
 # as every other consumer, and in CI: the tree actually built == the row).
 # This file only reads the row. CMAKE_CONFIGURE_DEPENDS makes a bumped lock

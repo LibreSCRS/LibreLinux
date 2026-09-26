@@ -52,7 +52,7 @@ options=('!lto')   # links in a clean chroot with LTO off; with makepkg's -flto=
 # at the repository root. makepkg checksums the files a source brings, and a
 # git checkout brings none that a sum could pin, so its entry is SKIP: the
 # signature is what binds the build to the release, and it is checkable before
-# the tag exists as much as after it. packaging/arch/check-recipe.sh holds all
+# the tag exists as much as after it. the shared check-recipe holds all
 # of this to the tree (repository, tag spelling, signature, fingerprint).
 source=(
     "LibreLinux-$pkgver::git+https://github.com/LibreSCRS/LibreLinux.git#tag=$pkgver?signed"

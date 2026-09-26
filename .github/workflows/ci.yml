@@ -8,10 +8,8 @@ name: CI
 # is no FetchContent fallback here, so the package must exist on disk first.
 # The revision is the one deps.lock names, never a branch.
 #
-# The shared gates (format scope, skip reasons, workflow shape, the build-log
-# and test-set gates, the lock checks) come from LibreSCRS/ci, all at one
-# commit; profiles/LibreLinux.txt there says which ones this repository runs
-# in which phase.
+# The shared gates come from LibreSCRS/ci, every reference at one commit; each
+# step names the gates it runs.
 
 on:
   push:
@@ -54,47 +52,25 @@ jobs:
           sudo apt-get install -y clang-format-21
 
       - name: Check clang-format
-        # The roots live in ci/format-dirs.txt, which the shared scope check
-        # reads too: a directory nobody formats cannot appear without one of
-        # these two steps saying so.
-        #
-        # -print0/-0 for paths with spaces, a parenthesised extension filter so
-        # the -o cannot swallow the directory list, and -r because without it an
-        # empty result makes clang-format read stdin and hang rather than fail.
-        # A wedged job in this project once held a runner until it was cancelled by hand.
+        # Every tracked C++ source, from the index: a new directory cannot
+        # escape the formatter by not being listed anywhere. -r because an
+        # empty list would make clang-format read stdin and hang.
         run: |
-          mapfile -t dirs < <(grep -v '^#' ci/format-dirs.txt)
-          find "${dirs[@]}" \
-            \( -name '*.cpp' -o -name '*.h' -o -name '*.hpp' -o -name '*.mm' \) -print0 \
+          git ls-files -z -- '*.cpp' '*.h' '*.hpp' '*.mm' \
             | xargs -0 -r clang-format-21 --dry-run --Werror
 
-      # Format scope, skip reasons, the workflows as data (every gate reached,
-      # every job bounded, every step placed where it can run, one pin of the
-      # shared gates), the canonical-type registry, duplicate bodies, this
-      # repository's own self-tests, deps.lock (form, reachable from each
-      # upstream's main, one revision per dependency across the stack), every
-      # version surface against VERSION (so a disagreement shows weeks before
-      # a tag that cannot be taken back), the release workflow's artefacts and
-      # asset check, and the source tarball as a function of the commit.
+      # The workflows (every job bounded, one pin of the shared gates), every
+      # skip carries a reason, every version surface states VERSION (weeks
+      # before a tag that cannot be taken back), deps.lock (form, reachable
+      # from each upstream's main, one revision per dependency across the
+      # stack), this repository's own self-tests, and the Arch recipe (its one
+      # source is this repository's signed tag, the key it accepts is the one
+      # in KEYS, pkgver is VERSION).
       - name: Shared gates
-        uses: LibreSCRS/ci/actions/gates@373a0f82c9af280b7a8ccc4ee30106c947394ca2
-
-      - name: No signal handler outlives the state it captures
-        # sdbus-c++ keeps a handler armed for as long as its proxy lives and
-        # delivers it on the event-loop thread. Locals die in reverse
-        # declaration order, so a proxy declared before the state its handler
-        # captures is destroyed after it, and a signal arriving in that window
-        # locks a destroyed mutex. The race is microseconds wide and nothing
-        # can steer a signal into it on demand; the declaration order is
-        # decidable from the source, so that is what this measures. Its
-        # self-test runs with the others, in the shared gates above.
-        run: ./ci/scripts/check-signal-state-lifetime.sh
-
-      - name: The Arch recipe builds this project's signed tag
-        # Reads the recipe as text: its one source is this repository's own
-        # signed tag, the key it accepts is the one in KEYS, and pkgver is the
-        # first line of VERSION. No network. The self-test runs with the others.
-        run: ./packaging/arch/check-recipe.sh
+        uses: LibreSCRS/ci/actions/gates@bd36eee50ba085ef4f052ea2767cff910e2e62e7
+        with:
+          gates: check-workflows check-skip-reasons check-version deps-lock selftests check-recipe
+          recipe-args: --srcname 'LibreLinux-$pkgver'
 
   build-linux:
     # Arch container: LibreLinux's runtime deps (sdbus-c++ >= 2.0, libsystemd)
@@ -154,7 +130,7 @@ jobs:
       # the checkout is that revision.
       - name: Checkout LibreMiddleware at the lock
         id: deps
-        uses: LibreSCRS/ci/actions/checkout-deps@373a0f82c9af280b7a8ccc4ee30106c947394ca2
+        uses: LibreSCRS/ci/actions/checkout-deps@bd36eee50ba085ef4f052ea2767cff910e2e62e7
         with:
           root: LibreLinux
           names: LibreMiddleware
@@ -214,34 +190,25 @@ jobs:
 
       - name: Build (agent + prompter)
         working-directory: LibreLinux
-        run: |
-          # set -o pipefail is explicit: without it `| tee` reports tee's status
-          # and a failed build becomes a green step, after which the warning
-          # check measures a log that was never produced.
-          set -o pipefail
-          LC_ALL=C cmake --build build -j4 2>&1 | tee build.log
+        run: cmake --build build -j4
 
-      # The warning baseline over the log (counted by the [-Wname] tag, never
-      # by the localised message; a compiler with no section in the baseline
-      # FAILS, and a floor the configured graph cannot reach is named as
-      # such), the discovered test set against ci/test-manifest.linux.txt,
-      # and the agent sources the configure fetched against the LibreAgent row
-      # of deps.lock -- the tree built, not the message the configure printed.
+      # The agent sources the configure fetched are the LibreAgent row of
+      # deps.lock -- the tree built, not the message the configure printed --
+      # and every test binary registers at least the tests ci/test-floor.txt
+      # names for it: a suite that quietly stops being registered is loud.
       #
       # Test discovery is PRE_TEST here, so listing the set runs every test
       # binary with --gtest_list_tests. The Qt ones create their application
       # object before listing, and with no display that aborts: the set has
       # to be discovered under the same platform plugin the Test step uses.
       - name: Shared gates after the build
-        uses: LibreSCRS/ci/actions/gates@373a0f82c9af280b7a8ccc4ee30106c947394ca2
+        uses: LibreSCRS/ci/actions/gates@bd36eee50ba085ef4f052ea2767cff910e2e62e7
         env:
           QT_QPA_PLATFORM: offscreen
         with:
+          gates: deps-lock-build test-floor
           root: LibreLinux
-          phase: build
           build-dir: build
-          build-log: build.log
-          leg: linux
 
       # --- e2e harness compiles ---------------------------------------------
       # The hardware-acceptance clients under e2e/ are deliberately outside the
@@ -309,8 +276,7 @@ jobs:
       # The window is microseconds wide and the client's wait is a fixed
       # budget with no knob to shorten it, so nothing here can steer a signal
       # into it. It is a regression net for everything else this translation
-      # unit does; the deterministic verdict on declaration order is the
-      # source-shape gate in format-check.
+      # unit does.
       - name: ASan (pkcs11-module lifetimes)
         working-directory: LibreLinux
         env:
@@ -373,16 +339,14 @@ jobs:
           # denominator of a -R leg is the expression, not the build directory:
           # renaming or deleting a case the expression names still builds, still
           # runs, and covers less. The expected number is not written here: it
-          # is what the same expression selects from ci/test-manifest.linux.txt,
-          # the committed test set the gates step above has just held equal to
-          # what the full build discovers. A case added to or dropped from one
-          # of these suites moves both sides in the same change; a leg that
-          # stops building or selecting one of them does not.
-          want=$(grep -cE "$SUITES" ci/test-manifest.linux.txt || true)
+          # is what the same expression selects from the full build above,
+          # whose test binaries the floor has just held. A leg that stops
+          # building or selecting one of these suites falls short of it.
+          want=$(ctest --test-dir build -N -R "$SUITES" | grep -c '^ *Test *#' || true)
           n=$(ctest --test-dir build-tsan -N -R "$SUITES" | grep -c '^ *Test *#' || true)
-          echo "the sanitizer leg selected $n cases; the test manifest names $want for the same expression"
-          test "$want" -gt 0 || { echo "the expression selects nothing from the manifest -- unmeasured"; exit 1; }
-          test "$n" = "$want" || { echo "the sanitizer leg selected $n cases, not the $want the manifest names"; exit 1; }
+          echo "the sanitizer leg selected $n cases; the full build selects $want for the same expression"
+          test "$want" -gt 0 || { echo "the expression selects nothing from the full build -- unmeasured"; exit 1; }
+          test "$n" = "$want" || { echo "the sanitizer leg selected $n cases, not the $want the full build selects"; exit 1; }
 
       # --- PKCS#11 ownership -----------------------------------------------
       # Install rules cannot prove registration: the declaration once landed
@@ -390,7 +354,7 @@ jobs:
       # therefore runs AFTER `cmake --install`, enumerates what the host
       # actually loads, and fails on a runner that installed nothing — which is
       # the state the previous check reported as success. Its self-test runs
-      # with the others, in the shared gates of format-check.
+      # with the shared gates of format-check.
       - name: Install to the system prefix and assert a single PKCS#11 owner
         working-directory: LibreLinux
         timeout-minutes: 5
@@ -443,7 +407,7 @@ jobs:
 
       - name: Checkout LibreMiddleware and LibreAgent at the lock
         id: deps
-        uses: LibreSCRS/ci/actions/checkout-deps@373a0f82c9af280b7a8ccc4ee30106c947394ca2
+        uses: LibreSCRS/ci/actions/checkout-deps@bd36eee50ba085ef4f052ea2767cff910e2e62e7
         with:
           root: LibreLinux
           names: LibreMiddleware LibreAgent
