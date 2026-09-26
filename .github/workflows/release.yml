@@ -21,11 +21,24 @@ name: Release
 #   publish    the release (tag), or a workflow artefact (rehearsal).
 #
 # mode=rehearse runs on any ref and publishes nothing; mode=publish only on a
-# tag. A tag push publishes.
+# tag. A tag push publishes. A branch push that touches something a package is
+# made of -- the recipes, the build, the install rules, the locked upstreams --
+# rehearses, so the packages are built and judged on one path only, this one;
+# a push that touches none of it builds no package.
 
 on:
   push:
     tags: ['[0-9]+.[0-9]+.[0-9]+*']
+    branches: [main, 'ci/**']
+    # Not evaluated for tag pushes, which always run.
+    paths:
+      - 'packaging/**'
+      - 'deps.lock'
+      - 'VERSION'
+      - 'CHANGELOG.md'
+      - '**/CMakeLists.txt'
+      - 'cmake/**'
+      - '.github/workflows/release.yml'
   workflow_dispatch:
     inputs:
       mode:
@@ -56,16 +69,15 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - id: pre
-        uses: LibreSCRS/ci/actions/release-preflight@373a0f82c9af280b7a8ccc4ee30106c947394ca2
+        uses: LibreSCRS/ci/actions/release-preflight@bd36eee50ba085ef4f052ea2767cff910e2e62e7
         with:
-          mode: ${{ inputs.mode || 'publish' }}
+          mode: ${{ inputs.mode || (github.ref_type == 'tag' && 'publish' || 'rehearse') }}
           version-min: '1'
 
   source-tarball:
     # The source tarball is produced by this project, not by GitHub, and is a
-    # function of the commit (the tarball-determinism gate measures that on
-    # every push). The bill of materials names what the agent binary bundles,
-    # read from the locked agent checkout.
+    # function of the commit. The bill of materials names what the agent
+    # binary bundles, read from the locked agent checkout.
     needs: [preflight]
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -76,17 +88,27 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      - name: Check out the shared release scripts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          repository: LibreSCRS/ci
+          ref: bd36eee50ba085ef4f052ea2767cff910e2e62e7
+          path: .ci
+          persist-credentials: false
       - name: Deterministic source tarball
-        run: ci/scripts/make-source-tarball.sh out
+        run: .ci/scripts/make-source-tarball --name librelinux --out out
       - name: Checkout LibreAgent at the lock
         id: deps
-        uses: LibreSCRS/ci/actions/checkout-deps@373a0f82c9af280b7a8ccc4ee30106c947394ca2
+        uses: LibreSCRS/ci/actions/checkout-deps@bd36eee50ba085ef4f052ea2767cff910e2e62e7
         with:
           names: LibreAgent
       - name: Bill of materials
         env:
           LA_SRC: ${{ steps.deps.outputs.libreagent-path }}
-        run: ci/scripts/make-sbom.sh out/sbom.cdx.json "$LA_SRC"
+        run: |
+          .ci/scripts/make-sbom --out out/sbom.cdx.json \
+            --static-dep "LibreAgent=$LA_SRC" --require libreagent --require qcbor
+          .ci/scripts/check-sbom out/sbom.cdx.json
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: tarball-artifacts
@@ -115,17 +137,18 @@ jobs:
           persist-credentials: false
       - name: Build
         id: build
-        uses: LibreSCRS/ci/actions/pkg-build@373a0f82c9af280b7a8ccc4ee30106c947394ca2
+        uses: LibreSCRS/ci/actions/pkg-build@bd36eee50ba085ef4f052ea2767cff910e2e62e7
         with:
           slug: ${{ matrix.slug }}
           upstream: ${{ github.ref_type == 'tag' && 'release' || 'source' }}
           version: ${{ github.ref_type == 'tag' && needs.preflight.outputs.version || '' }}
       - name: Install and judge the stack
-        uses: LibreSCRS/ci/actions/pkg-verify@373a0f82c9af280b7a8ccc4ee30106c947394ca2
+        uses: LibreSCRS/ci/actions/pkg-verify@bd36eee50ba085ef4f052ea2767cff910e2e62e7
         with:
           slug: ${{ matrix.slug }}
           packages: ${{ steps.build.outputs.art }}/${{ matrix.slug }}
           report: ${{ runner.temp }}/pkg-report
+          hook: packaging/ci/verify-installed.sh
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: packages-${{ matrix.slug }}
@@ -154,7 +177,7 @@ jobs:
           pattern: 'packages-*'
           merge-multiple: true
           path: artifacts
-      - uses: LibreSCRS/ci/actions/release-seal@373a0f82c9af280b7a8ccc4ee30106c947394ca2
+      - uses: LibreSCRS/ci/actions/release-seal@bd36eee50ba085ef4f052ea2767cff910e2e62e7
         with:
           mode: ${{ needs.preflight.outputs.mode }}
           version: ${{ needs.preflight.outputs.version }}
@@ -179,7 +202,7 @@ jobs:
         with:
           name: sealed
           path: artifacts
-      - uses: LibreSCRS/ci/actions/release-publish@373a0f82c9af280b7a8ccc4ee30106c947394ca2
+      - uses: LibreSCRS/ci/actions/release-publish@bd36eee50ba085ef4f052ea2767cff910e2e62e7
         with:
           mode: ${{ needs.preflight.outputs.mode }}
           version: ${{ needs.preflight.outputs.version }}
