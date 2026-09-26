@@ -239,11 +239,6 @@ jobs:
     env:
       # Where LibreMiddleware is installed and where LibreLinux finds it.
       LM_PREFIX: /opt/libremiddleware
-      # Git ref of LibreMiddleware to build against. Track its trunk during the
-      # development cycle (LibreCelik does the same); pin to a release tag once
-      # LibreMiddleware tags releases. find_package(LibreMiddleware 5.0) in
-      # CMakeLists.txt enforces the required version independently of this ref.
-      MIDDLEWARE_REF: main
     steps:
       - name: Install system dependencies
         run: |
@@ -280,13 +275,15 @@ jobs:
       # we build + `cmake --install` it explicitly. SHARED + plugins ON because
       # the agent dlopen's the card plugins at runtime; native signing backend
       # (the CI default) — DSS is only a test oracle.
-      - name: Checkout LibreMiddleware
-        uses: actions/checkout@v4
+      # At the commit deps.lock names, never a branch: the action checks the
+      # locked revision out and proves the checkout is that revision.
+      - name: Checkout LibreMiddleware at the lock
+        uses: LibreSCRS/ci/actions/checkout-deps@5b9410f9b0e6ab6983c39f931e118e68007c12b4
         with:
-          repository: LibreSCRS/LibreMiddleware
-          ref: ${{ env.MIDDLEWARE_REF }}
-          path: LibreMiddleware
-          fetch-depth: 0
+          root: LibreLinux
+          names: LibreMiddleware
+          path: .
+          fetch-depth: '0'
           submodules: recursive   # LM vendors OpenSC as a git submodule (thirdparty/opensc-source)
 
       - name: Build & install LibreMiddleware (Release, SHARED)
@@ -544,11 +541,6 @@ jobs:
     env:
       # Where LibreMiddleware is installed and where LibreLinux finds it.
       LM_PREFIX: /opt/libremiddleware
-      # Git ref of LibreMiddleware to build against. Track its trunk during the
-      # development cycle (LibreCelik does the same); pin to a release tag once
-      # LibreMiddleware tags releases. find_package(LibreMiddleware 5.0) in
-      # CMakeLists.txt enforces the required version independently of this ref.
-      MIDDLEWARE_REF: main
     # Not on pull_request: this pass costs an hour and the moment a
     # function actually lands is the push to main. Manual only until one
     # measured run says what it really costs on a hosted runner.
@@ -591,13 +583,15 @@ jobs:
       # we build + `cmake --install` it explicitly. SHARED + plugins ON because
       # the agent dlopen's the card plugins at runtime; native signing backend
       # (the CI default) — DSS is only a test oracle.
-      - name: Checkout LibreMiddleware
-        uses: actions/checkout@v4
+      # At the commit deps.lock names, never a branch: the action checks the
+      # locked revision out and proves the checkout is that revision.
+      - name: Checkout LibreMiddleware at the lock
+        uses: LibreSCRS/ci/actions/checkout-deps@5b9410f9b0e6ab6983c39f931e118e68007c12b4
         with:
-          repository: LibreSCRS/LibreMiddleware
-          ref: ${{ env.MIDDLEWARE_REF }}
-          path: LibreMiddleware
-          fetch-depth: 0
+          root: LibreLinux
+          names: LibreMiddleware
+          path: .
+          fetch-depth: '0'
           submodules: recursive   # LM vendors OpenSC as a git submodule (thirdparty/opensc-source)
 
       - name: Build & install LibreMiddleware (Release, SHARED)
@@ -667,7 +661,6 @@ jobs:
     container: archlinux:latest
     env:
       LM_PREFIX: /opt/libremiddleware
-      MIDDLEWARE_REF: main
     steps:
       - name: Install system dependencies
         run: |
@@ -685,13 +678,13 @@ jobs:
         with:
           path: LibreLinux
 
-      - name: Checkout LibreMiddleware
-        uses: actions/checkout@v4
+      - name: Checkout LibreMiddleware and LibreAgent at the lock
+        uses: LibreSCRS/ci/actions/checkout-deps@5b9410f9b0e6ab6983c39f931e118e68007c12b4
         with:
-          repository: LibreSCRS/LibreMiddleware
-          ref: ${{ env.MIDDLEWARE_REF }}
-          path: LibreMiddleware
-          fetch-depth: 0
+          root: LibreLinux
+          names: LibreMiddleware LibreAgent
+          path: .
+          fetch-depth: '0'
           submodules: recursive
 
       - name: Build & install LibreMiddleware (Release, SHARED)
@@ -704,17 +697,15 @@ jobs:
           cmake --build build -j4
           cmake --install build
 
-      - name: Build & install LibreAgent (Core) at the recorded pin
-        # The pin file, not the agent's trunk: a package built from whatever the
-        # agent happened to have on trunk that hour is the failure this job
-        # exists to rule out. The components are the ones the agent's own
-        # packages build and this repository's installed-package path asks
+      - name: Build & install LibreAgent (Core) at the lock
+        # The locked commit, not the agent's trunk: a package built from
+        # whatever the agent happened to have on trunk that hour is the failure
+        # this job exists to rule out. The components are the ones the agent's
+        # own packages build and this repository's installed-package path asks
         # for (Core, Wire, Pkcs11Facade; TestSupport is on for a top-level
         # build), so the configure below meets the package a distribution
         # would have installed, not a smaller one.
         run: |
-          git clone https://github.com/LibreSCRS/LibreAgent.git LibreAgent
-          git -C LibreAgent checkout "$(tr -d '[:space:]' < LibreLinux/cmake/libreagent.pin)"
           cmake -S LibreAgent -B la-build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX="$LM_PREFIX" \

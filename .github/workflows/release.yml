@@ -160,7 +160,7 @@ jobs:
             CHANGELOG.md
             VERSION
             ci/scripts/check-release-lockstep.sh
-            cmake/libreagent.pin
+            deps.lock
           sparse-checkout-cone-mode: false
 
       - name: Fetch the source tarball this release publishes
@@ -205,7 +205,7 @@ jobs:
           # does, or a v5.0.0 rehearsal asks the agent for a tag that cannot
           # exist and fails looking like a pin that was never bumped.
           VER="${VER#v}"
-          pin=$(tr -d '[:space:]' < cmake/libreagent.pin)
+          pin=$(awk '$1 == "LibreAgent" {print $3}' deps.lock)
           tagsha=$(gh api repos/LibreSCRS/LibreAgent/git/ref/tags/"$VER" --jq '.object.sha')
           type=$(gh api repos/LibreSCRS/LibreAgent/git/ref/tags/"$VER" --jq '.object.type')
           if [ "$type" = "tag" ]; then

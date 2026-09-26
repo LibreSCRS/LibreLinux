@@ -7,7 +7,7 @@
 # build the neutral core from source via FetchContent. Either path provides the
 # namespaced LibreAgent::Core imported/alias target the Linux backend links.
 #
-# The FetchContent path takes a fixed 40-hex revision from cmake/libreagent.pin,
+# The FetchContent path takes a fixed revision from the LibreAgent row of deps.lock,
 # never a branch. This is the DEFAULT path here (the installed-package option
 # below is opt-in), so a branch would make every build of a given LibreLinux
 # revision depend on whatever the agent's trunk happened to be that day: two
@@ -25,15 +25,23 @@
 option(LIBRELINUX_USE_INSTALLED_AGENT_CORE
        "Consume LibreAgent via find_package(CONFIG) instead of FetchContent" OFF)
 
-file(READ "${CMAKE_CURRENT_SOURCE_DIR}/cmake/libreagent.pin" LIBREAGENT_PIN)
-string(STRIP "${LIBREAGENT_PIN}" LIBREAGENT_PIN)
-# Exactly 40 lowercase hex characters. Spelled as a length test plus a
-# character-class test because CMake's regex engine has no {n} repetition
-# operator -- "^[0-9a-f]{40}$" would silently never match.
-string(LENGTH "${LIBREAGENT_PIN}" LIBREAGENT_PIN_LENGTH)
-if(NOT LIBREAGENT_PIN_LENGTH EQUAL 40 OR NOT LIBREAGENT_PIN MATCHES "^[0-9a-f]+$")
-    message(FATAL_ERROR "cmake/libreagent.pin must hold one 40-hex commit SHA")
+# The revision -- and the URL -- are the LibreAgent row of deps.lock
+# (`<name> <url> <commit> <main|version>`), which `bump-deps` writes and
+# `bump-deps check` holds (form, reachable from upstream main, same revision
+# as every other consumer, and in CI: the tree actually built == the row).
+# This file only reads the row. CMAKE_CONFIGURE_DEPENDS makes a bumped lock
+# re-run configure, so the fetched tree follows the lock instead of staying
+# at the revision the build directory first fetched.
+set(_librelinux_deps_lock "${CMAKE_CURRENT_LIST_DIR}/../deps.lock")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_librelinux_deps_lock}")
+file(STRINGS "${_librelinux_deps_lock}" _librelinux_agent_row REGEX "^LibreAgent[ \t]")
+list(LENGTH _librelinux_agent_row _librelinux_agent_rows)
+if(NOT _librelinux_agent_rows EQUAL 1)
+    message(FATAL_ERROR "deps.lock must hold exactly one LibreAgent row")
 endif()
+string(REGEX REPLACE "[ \t]+" ";" _librelinux_agent_row "${_librelinux_agent_row}")
+list(GET _librelinux_agent_row 1 LIBREAGENT_URL)
+list(GET _librelinux_agent_row 2 LIBREAGENT_PIN)
 
 # This backend always builds its own test tree (enable_testing() in the root
 # CMakeLists.txt is unconditional), and one of those tests drives the CSCA
@@ -84,7 +92,7 @@ else()
     # other platform backend already seeds Core and Wire the same way.
     set(LIBREAGENT_BUILD_PKCS11_FACADE ON CACHE BOOL "" FORCE)
     FetchContent_Declare(LibreAgent
-        GIT_REPOSITORY https://github.com/LibreSCRS/LibreAgent.git
+        GIT_REPOSITORY ${LIBREAGENT_URL}
         GIT_TAG ${LIBREAGENT_PIN})
     FetchContent_MakeAvailable(LibreAgent) # provides LibreAgent::Core + ::Pkcs11Facade
 endif()
