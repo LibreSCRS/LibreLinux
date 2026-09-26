@@ -67,7 +67,7 @@ jobs:
       # source is this repository's signed tag, the key it accepts is the one
       # in KEYS, pkgver is VERSION).
       - name: Shared gates
-        uses: LibreSCRS/ci/actions/gates@261a41fb5b6dc060ab18e0ead6dd2b065755ed8e
+        uses: LibreSCRS/ci/actions/gates@2e5c95f7e9a54325bc0321775c0d8c08002aebea
         with:
           gates: check-workflows check-skip-reasons check-version deps-lock selftests check-recipe
           recipe-args: --srcname 'LibreLinux-$pkgver'
@@ -130,7 +130,7 @@ jobs:
       # the checkout is that revision.
       - name: Checkout LibreMiddleware at the lock
         id: deps
-        uses: LibreSCRS/ci/actions/checkout-deps@261a41fb5b6dc060ab18e0ead6dd2b065755ed8e
+        uses: LibreSCRS/ci/actions/checkout-deps@2e5c95f7e9a54325bc0321775c0d8c08002aebea
         with:
           root: LibreLinux
           names: LibreMiddleware
@@ -202,7 +202,7 @@ jobs:
       # object before listing, and with no display that aborts: the set has
       # to be discovered under the same platform plugin the Test step uses.
       - name: Shared gates after the build
-        uses: LibreSCRS/ci/actions/gates@261a41fb5b6dc060ab18e0ead6dd2b065755ed8e
+        uses: LibreSCRS/ci/actions/gates@2e5c95f7e9a54325bc0321775c0d8c08002aebea
         env:
           QT_QPA_PLATFORM: offscreen
         with:
@@ -407,7 +407,7 @@ jobs:
 
       - name: Checkout LibreMiddleware and LibreAgent at the lock
         id: deps
-        uses: LibreSCRS/ci/actions/checkout-deps@261a41fb5b6dc060ab18e0ead6dd2b065755ed8e
+        uses: LibreSCRS/ci/actions/checkout-deps@2e5c95f7e9a54325bc0321775c0d8c08002aebea
         with:
           root: LibreLinux
           names: LibreMiddleware LibreAgent
