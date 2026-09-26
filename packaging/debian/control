@@ -1,7 +1,7 @@
 Source: librelinux
 Section: utils
 Priority: optional
-Maintainer: LibreSCRS <packages@librescrs.org>
+Maintainer: LibreSCRS <librescrs@proton.me>
 Build-Depends: debhelper-compat (= 13),
                cmake (>= 3.24),
                ninja-build,
@@ -32,7 +32,7 @@ Depends: ${shlibs:Depends}, ${misc:Depends},
          librescrs-card-plugins (>= 5.0),
          librescrs-pinentry-kde (= ${binary:Version}),
          p11-kit
-Recommends: pcscd, policykit-1
+Recommends: pcscd, polkitd
 Conflicts: librescrs-pkcs11-direct
 Description: LibreSCRS smart-card session agent (D-Bus)
  A per-user, headless, Qt-free D-Bus session service that is the sole owner of
@@ -49,7 +49,8 @@ Description: LibreSCRS smart-card session agent (D-Bus)
  .
  The agent registers a PKCS#11 proxy with p11-kit, so it conflicts with
  librescrs-pkcs11-direct: one card must not have two providers and two security
- models.
+ models. apt replaces the one with the other on install; dnf does so only with
+ --allowerasing, and zypper with --force-resolution.
 
 Package: librescrs-pinentry-kde
 Architecture: any
@@ -57,5 +58,5 @@ Depends: ${shlibs:Depends}, ${misc:Depends}
 Description: Secure PIN and CAN entry prompter for the LibreSCRS agent
  The prompter the agent calls to collect a PIN or a card access number. It is
  styled for KDE and built on KF6, and it is currently the only implementation
- of the prompter interface, so a GNOME or XFCE machine installs KF6::I18n and
- KF6::CoreAddons with it.
+ of the prompter interface, so a GNOME or XFCE machine installs two KDE
+ Frameworks libraries with it (internationalization and core add-ons).

@@ -134,11 +134,15 @@ and its secure PIN/CAN entry prompter, plus a client PKCS#11 module.
 
 ### Changed
 
-- **The agent ships as source in this release.** `packaging/` carries Debian,
-  RPM and Arch recipes, and the Arch recipes are the packaged path this release
-  supports: the middleware, agent-library and agent recipes build in a clean
-  Arch chroot, in that order. No `.deb` or `.rpm` for the agent is published as
-  a release asset.
+- **The agent and the prompter ship as distribution packages.** Every release
+  carries `librescrs-agent` and `librescrs-pinentry-kde` for Debian 13,
+  Ubuntu 26.04, Fedora 43 and 44 and openSUSE Tumbleweed, each built in that
+  distribution's own container and installed and checked in a clean one before
+  it is published. The agent and the direct PKCS#11 module exclude each other,
+  and switching is one command: `apt install` replaces the other package, dnf
+  needs `--allowerasing` and zypper `--force-resolution`. The Arch recipes
+  still build in a clean Arch chroot, middleware, agent libraries and agent in
+  that order.
 
 - **Dual-interface readers: the contact slot is kept powered while a card
   sits in it.** A dual-interface card in the contact slot of a reader such as

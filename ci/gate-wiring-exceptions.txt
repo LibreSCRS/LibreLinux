@@ -4,9 +4,7 @@
 # scripts that are deliberately hand-run. One path per line, then the reason.
 # The shared check-workflows (its `wired` rule) treats every line here as a reachability root, so what
 # these scripts call counts as run too. A path that stops being tracked fails.
-packaging/ci/build-deb.sh  run as packaging/ci/build-$FAMILY.sh by packaging/ci/package-gate.sh:142
-packaging/ci/build-rpm.sh  run as packaging/ci/build-$FAMILY.sh by packaging/ci/package-gate.sh:142
-ci/scripts/changelog-to-debian.sh  hand-run when refreshing packaging/debian/changelog; no CI step consumes it
+packaging/ci/verify-installed.sh  Run by LibreSCRS/ci pkg-gate.sh (the pkg-build action) in a fresh container of each distribution, over the packages just built; no step here names it because the shared script mounts it by this path.
 e2e/check-dogfood-sign-module.sh  A gating dogfood guard over the installed PKCS#11 module the native signing path dlopens; it needs that module installed on the host, which a runner does not have.
 e2e/launch-e2e.sh  Brings up a private session bus with the agent daemon for the through-the-agent harness; it needs a card and a PIN, so it is run by hand and its result is recorded in the release checklist.
 e2e/run-hw-smoke.sh  The through-the-agent hardware smoke runner: private bus, headless prompter, PIN gate armed around one call. Needs a reader and a card.

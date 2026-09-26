@@ -10,6 +10,26 @@ set -uo pipefail
 fail=0
 check() { if [ "$2" -eq 0 ]; then echo "PASS $1"; else echo "FAIL $1"; fail=1; fi; }
 
+# openSUSE: the same assertions through zypper. The dnf calls below are
+# answered by this function, which drops -y/-q and maps the one package name
+# openSUSE spells differently.
+if [ "${PKG_MANAGER:-}" = zypper ]; then
+  zypper -n -q refresh >/dev/null
+  zypper -n -q install findutils dbus-1-tools >/dev/null
+  dnf() {
+    local a=() x
+    for x in "$@"; do
+      case "$x" in -y|-q) ;; dbus-daemon) a+=(dbus-1-daemon) ;; *) a+=("$x") ;; esac
+    done
+    case "${a[0]}" in
+      install) zypper -n -q --no-gpg-checks install --allow-unsigned-rpm "${a[@]:1}" ;;
+      remove)  zypper -n -q remove "${a[@]:1}" ;;
+      *) echo "dnf shim: ${a[0]} is not mapped" >&2; return 2 ;;
+    esac
+  }
+fi
+
+
 if [ "${FAMILY:-deb}" = deb ]; then
   export DEBIAN_FRONTEND=noninteractive
   # The base container is not a machine. Ubuntu's image ships
@@ -152,8 +172,16 @@ if [ "${FAMILY:-deb}" = deb ]; then
   install_direct() { apt-get install -y --no-install-recommends /pkg-LibreMiddleware/librescrs-pkcs11-direct_*.deb; }
   install_agent()  { apt-get install -y --no-install-recommends /pkg/librescrs-agent_*.deb; }
 else
-  install_direct() { dnf -y install /pkg-LibreMiddleware/librescrs-pkcs11-direct-5*.rpm; }
-  install_agent()  { dnf -y install /pkg/librescrs-agent-5*.rpm; }
+  # The documented switch: dnf refuses a conflicting install unless told it
+  # may erase (--allowerasing); zypper asks, and -n answers "cancel" unless
+  # --force-resolution picks the removal.
+  if [ "${PKG_MANAGER:-dnf}" = zypper ]; then
+    install_direct() { zypper -n --no-gpg-checks install --allow-unsigned-rpm --force-resolution /pkg-LibreMiddleware/librescrs-pkcs11-direct-5*.rpm; }
+    install_agent()  { zypper -n --no-gpg-checks install --allow-unsigned-rpm --force-resolution /pkg/librescrs-agent-5*.rpm; }
+  else
+    install_direct() { command dnf -y install --allowerasing /pkg-LibreMiddleware/librescrs-pkcs11-direct-5*.rpm; }
+    install_agent()  { command dnf -y install --allowerasing /pkg/librescrs-agent-5*.rpm; }
+  fi
 fi
 # By status, not by listing: a removed Debian package that left conffiles is
 # still listed by dpkg-query, in state "config-files".

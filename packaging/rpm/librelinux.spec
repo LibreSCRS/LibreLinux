@@ -85,14 +85,18 @@ Five of its files land in root-owned system directories, which is why no bundle
 format can deliver it. The prompter is a hard dependency: an agent without one
 enumerates a card and then fails on the first PIN.
 
+It registers a PKCS#11 proxy with p11-kit, so it conflicts with
+librescrs-pkcs11-direct: one card must not have two providers. dnf replaces the
+one with the other only with --allowerasing, zypper with --force-resolution.
+
 %package -n librescrs-pinentry-kde
 Summary:        Secure PIN and CAN entry prompter for the LibreSCRS agent
 
 %description -n librescrs-pinentry-kde
 The prompter the agent calls to collect a PIN or a card access number. It is
 styled for KDE and built on KF6, and it is currently the only implementation of
-the prompter interface, so a GNOME or XFCE machine installs KF6::I18n and
-KF6::CoreAddons with it.
+the prompter interface, so a GNOME or XFCE machine installs two KDE Frameworks
+libraries with it (internationalization and core add-ons).
 
 %prep
 %autosetup -n %{name}-%{version}
@@ -119,7 +123,7 @@ KF6::CoreAddons with it.
 %systemd_user_preun librescrs-agent.service
 
 %postun -n librescrs-agent
-%systemd_user_postun_with_reload librescrs-agent.service
+%systemd_user_postun librescrs-agent.service
 
 %files -n librescrs-agent
 %license LICENSE
@@ -142,5 +146,5 @@ KF6::CoreAddons with it.
 %{_datadir}/locale/*/LC_MESSAGES/librescrs-pinentry-kde.mo
 
 %changelog
-* Fri Sep 04 2026 LibreSCRS <packages@librescrs.org> - 5.0.0-1
+* Fri Sep 04 2026 LibreSCRS <librescrs@proton.me> - 5.0.0-1
 - Real packaging for the agent and the prompter, replacing the initial stub.

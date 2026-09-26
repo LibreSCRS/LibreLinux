@@ -15,4 +15,3 @@
 # longer exists fails, and a row that excuses something needing no excuse fails.
 # The last one is what makes these rows disappear when the condition does.
 
-ci.yml:package:4    No repository or organisation variable named PACKAGE_JOB_ENABLED exists, so this job has never run once and the packaging gate it carries has never judged anything. This row goes when the release decision on distribution packages for the agent is taken, either way.

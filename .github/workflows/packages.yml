@@ -1,0 +1,106 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
+name: Packages
+
+# The agent and the prompter as distribution packages, for every distribution
+# a release publishes them for: built in that distribution's own container
+# (LibreSCRS/ci images.lock, pinned by digest) over middleware and agent
+# packages built from the commits deps.lock names, then the whole stack
+# installed in a clean container and judged (libraries resolve, exactly one
+# PKCS#11 provider, systemd units and D-Bus/polkit files where the daemons
+# read them, the switch between this agent and the direct module, lintian or
+# rpmlint).
+#
+# Only when something a package is made of changes: the recipes, the build,
+# the install rules or the locked upstreams. The release workflow runs the
+# same job on every release, and LibreSCRS/ci's stack-chain runs the whole
+# stack weekly.
+
+on:
+  push:
+    branches: [main, 'ci/**']
+    paths:
+      - 'packaging/**'
+      - 'deps.lock'
+      - 'VERSION'
+      - '**/CMakeLists.txt'
+      - 'cmake/**'
+      - '.github/workflows/packages.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'packaging/**'
+      - 'deps.lock'
+      - 'VERSION'
+      - '**/CMakeLists.txt'
+      - 'cmake/**'
+      - '.github/workflows/packages.yml'
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  packages:
+    name: packages (${{ matrix.slug }})
+    runs-on: ubuntu-24.04
+    # Measured locally at -j4: middleware 7-9 min, agent libraries 7-9, this
+    # repository 3-4 per distribution, then 2-4 to verify. The upstream
+    # packages come from the cache while the lock does not move.
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        slug: [debian13, ubuntu2604, fedora43, fedora44, opensusetw]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The upstream packages are a function of the locked commits and the
+      # distribution. Restored only on a hit and saved only after a run in
+      # which every package of the stack built and passed, so a cached
+      # upstream is one that has been judged.
+      - name: Restore the upstream packages
+        id: upstream
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: |
+            ${{ runner.temp }}/librescrs-packages/${{ matrix.slug }}/LibreMiddleware
+            ${{ runner.temp }}/librescrs-packages/${{ matrix.slug }}/LibreAgent
+          key: upstream-${{ matrix.slug }}-${{ hashFiles('deps.lock') }}
+
+      - name: Build
+        id: build
+        uses: LibreSCRS/ci/actions/pkg-build@5b9410f9b0e6ab6983c39f931e118e68007c12b4
+        with:
+          slug: ${{ matrix.slug }}
+          upstream: source
+          art: ${{ runner.temp }}/librescrs-packages
+
+      - name: Install and judge the stack
+        uses: LibreSCRS/ci/actions/pkg-verify@5b9410f9b0e6ab6983c39f931e118e68007c12b4
+        with:
+          slug: ${{ matrix.slug }}
+          packages: ${{ steps.build.outputs.art }}/${{ matrix.slug }}
+          report: ${{ runner.temp }}/pkg-report
+
+      - name: Keep the upstream packages
+        if: steps.upstream.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: |
+            ${{ runner.temp }}/librescrs-packages/${{ matrix.slug }}/LibreMiddleware
+            ${{ runner.temp }}/librescrs-packages/${{ matrix.slug }}/LibreAgent
+          key: upstream-${{ matrix.slug }}-${{ hashFiles('deps.lock') }}
+
+      - name: Keep the logs
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: pkg-report-${{ matrix.slug }}
+          path: |
+            ${{ steps.build.outputs.art }}/log
+            ${{ runner.temp }}/pkg-report
+          retention-days: 7
+          if-no-files-found: warn
