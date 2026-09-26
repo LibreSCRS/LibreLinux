@@ -1,0 +1,74 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
+#
+# Each test binary this build registers with CTest, and the number of tests
+# it must register at least. Raise a count in the change that adds tests; a
+# binary that registers fewer, or disappears, fails the build job.
+# <binary> <n>
+AgentErrorNameParityTest 3
+AgentObjectPathTest 4
+AgentShutdownUnderLoadTest 4
+AgentTransportTest 7
+BusExporterReaderRaceTest 4
+CallerAuthorizerProductionGateTest 2
+CallerAuthorizerTest 6
+CallerIdentityTest 2
+Card1MethodsXmlCodegenTest 1
+CardObjectOperationsTest 33
+CardOperationsIntegrationTest 11
+CertResultWireSignatureTest 1
+Certificates1XmlCodegenTest 1
+Config1PropertyKeyMirrorTest 2
+Config1Test 5
+ConfigPathsTest 8
+CredentialsDbusTest 18
+CscaImportDbusTest 32
+DBusAgentClientContractTest 7
+DBusAgentClientTest 18
+DBusServiceTest 16
+EnvPrompterServiceTest 11
+HostOperationOwnershipTest 3
+Identity1XmlCodegenTest 1
+InputWidgetValidationTest 24
+Manager1XmlCodegenTest 1
+ModuleConfigTest 7
+Operation1AdaptorTest 5
+Operation1ErrorCodeXmlGuardTest 1
+Operation1XmlCodegenTest 1
+OperationManagerNameOwnerChangedTest 2
+Photo1XmlCodegenTest 1
+Pkcs11OutcomeNamesTest 2
+Pkcs11XmlCodegenTest 1
+PluginDirectoryTest 17
+PolkitAuthorizerOutcomeTest 3
+PolkitAuthorizerTest 15
+PromptCatalogResolutionTest 3
+PromptDialogAltKindsTest 12
+PromptDialogClientChromeTest 15
+PromptDialogRejectTest 2
+PromptDialogRetryContextTest 3
+PromptRegistryTest 9
+Prompter1CancelXmlCodegenTest 1
+PrompterAuthIntegrationTest 13
+PrompterCancelTest 1
+PrompterCapabilityTest 4
+PrompterClientInteractiveBudgetTest 3
+PrompterClientPinChangeTest 11
+PrompterConcurrentWindowsTest 13
+PrompterIntegrationTest 34
+PrompterMultiFieldTest 15
+PrompterVocabularyPinTest 1
+ReaderIdentitySeamTest 5
+ReaderRemoveDrainTest 2
+RequestSecretsXmlCodegenTest 2
+SandboxWritableDirsGuardTest 1
+SealedMemfdTest 1
+SecretMemfdReaderTest 5
+Sign1XmlCodegenTest 1
+SignBatch1XmlCodegenTest 1
+SignHwSmokeTest 7
+SignSeamWedgeDrainTest 1
+TransportCaptureGuardTest 8
+TypedChannelWedgeDrainTest 2
+TypedResultStoreTest 16
+WireContractGuardTest 1
+pkcs11_tool_rpc.sh 1
