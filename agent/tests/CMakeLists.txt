@@ -476,7 +476,7 @@ gtest_discover_tests(SignHwSmokeTest)
 # detached-session factory LibreSCRS::SmartCard::detail::makeDetachedCardSession.
 # Its prototype in <LibreSCRS/SmartCard/CardSession.h> is guarded behind
 # LIBRESCRS_INTERNAL_BUILD and the symbol is exported from libLibreSCRS_SmartCard
-# (LM_4), so the TEST TUs that use it must enable the internal declaration — the
+# (LM_5), so the TEST TUs that use it must enable the internal declaration — the
 # same opt-in LibreMiddleware's own tests use. Production agent/module targets
 # NEVER define this, so the internal surface stays out of the shipped binaries.
 foreach(_internal_session_test IN ITEMS
