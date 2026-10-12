@@ -22,8 +22,8 @@ Config1Test 5
 ConfigPathsTest 8
 CredentialsDbusTest 18
 CscaImportDbusTest 32
-DBusAgentClientContractTest 7
-DBusAgentClientTest 18
+DBusAgentClientContractTest 11
+DBusAgentClientTest 20
 DBusServiceTest 16
 EnvPrompterServiceTest 11
 HostOperationOwnershipTest 3

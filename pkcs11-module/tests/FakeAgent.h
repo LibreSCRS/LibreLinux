@@ -192,6 +192,18 @@ public:
             .withArguments(sdbus::ObjectPath{kCard0}, std::vector<std::string>{std::string{kCardIface}});
     }
 
+    // The served certificate's subject CN, in the agent's own marshal shape;
+    // empty (the default) serves no subject fields. Set before the event loop
+    // starts (BusFixture's cfg hook), like the error knobs below.
+    void setSubjectCn(const std::string& cn)
+    {
+        m_subjectCn = cn;
+    }
+    // Serve the card with no certificate at all.
+    void serveNoCertificate()
+    {
+        m_noCertificate = true;
+    }
     void setSignError(const std::string& name)
     {
         m_signError = name;
@@ -226,13 +238,24 @@ public:
 private:
     sdbus::ObjectPath readCertificates()
     {
-        std::thread([this] {
+        std::thread([this, cn = m_subjectCn, none = m_noCertificate] {
             std::this_thread::sleep_for(std::chrono::milliseconds(80));
-            CertResultEntry e{std::string{kCertId},       true,
-                              CertFieldGroups{},          std::uint32_t{0x0C} /*keyEnc|dataEnc*/,
-                              std::vector<std::string>{}, std::vector<std::string>{},
+            CertFieldGroups fields;
+            if (!cn.empty()) {
+                // fields["subject"]["cn"] = (labelKey, fallback, Variant{cn})
+                fields["subject"]["cn"] =
+                    sdbus::Struct{std::string{"label.subject.cn"}, std::string{"CN"}, sdbus::Variant{cn}};
+            }
+            CertResultEntry e{std::string{kCertId},
+                              true,
+                              fields,
+                              std::uint32_t{0x0C} /*keyEnc|dataEnc*/,
+                              std::vector<std::string>{},
+                              std::vector<std::string>{},
                               std::uint32_t{255}};
-            std::vector<CertResultEntry> certs{e};
+            std::vector<CertResultEntry> certs;
+            if (!none)
+                certs.push_back(e);
             m_op->emitSignal(sdbus::SignalName{"Result"})
                 .onInterface(sdbus::InterfaceName{kCertificatesIface})
                 .withArguments(certs);
@@ -249,6 +272,8 @@ private:
     std::unique_ptr<sdbus::IObject> m_op;
     std::atomic<bool> m_hasCard;
     std::string m_preRead;
+    std::string m_subjectCn;
+    bool m_noCertificate = false;
     std::string m_signError;
     std::string m_decryptError;
     std::string m_loginError;

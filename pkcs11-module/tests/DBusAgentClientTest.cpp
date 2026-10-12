@@ -466,3 +466,27 @@ TEST(DBusAgentClient, SnapshotNoCardNoCerts)
     EXPECT_FALSE(snap.readers[0].hasCard);
     EXPECT_TRUE(snap.readers[0].certs.empty());
 }
+
+// The token is named after the holder the signing certificate names, through
+// the same CN demarshal the certificate's own label uses, and the card path's
+// tail tells it apart from any other.
+TEST(DBusAgentClient, SnapshotNamesTheTokenAfterTheCertificateHolder)
+{
+    BusFixture bus(true, "None", [](FakeAgent& f) { f.setSubjectCn("Pera Perić"); });
+    DBusAgentClient client;
+    auto snap = client.snapshot();
+    ASSERT_EQ(snap.readers.size(), 1u);
+    EXPECT_EQ(snap.readers[0].tokenLabel, "Pera Perić");
+    EXPECT_EQ(snap.readers[0].tokenSerial, "0"); // kCard0's tail
+}
+
+TEST(DBusAgentClient, SnapshotEmptyReaderNamesNoToken)
+{
+    BusFixture bus(false);
+    DBusAgentClient client;
+    auto snap = client.snapshot();
+    ASSERT_EQ(snap.readers.size(), 1u);
+    EXPECT_TRUE(snap.readers[0].tokenLabel.empty());
+    EXPECT_TRUE(snap.readers[0].tokenSerial.empty());
+    EXPECT_EQ(snap.readers[0].readerName, "FakeReader") << "an empty reader still describes its slot";
+}

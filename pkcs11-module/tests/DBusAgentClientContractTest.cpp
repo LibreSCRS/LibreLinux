@@ -87,6 +87,21 @@ struct BusContractTraits
     {
         return F::kCertId;
     }
+    // The double's Reader1.Name.
+    static std::string readerName()
+    {
+        return "FakeReader";
+    }
+    // The subject CN every harness below serves.
+    static std::string holderName()
+    {
+        return "Fake Holder";
+    }
+    // The tail of the double's card path, kCard0.
+    static std::string tokenSerial()
+    {
+        return "0";
+    }
 
     // Pkcs11_1.Login answers an idleTimeoutSecs alongside the ack.
     static bool carriesLeaseDuration()
@@ -97,6 +112,17 @@ struct BusContractTraits
     static std::unique_ptr<Harness> serving()
     {
         return make({});
+    }
+
+    static std::unique_ptr<Harness> servingCardWithoutCertificate()
+    {
+        return make([](F::FakeAgent& fake) { fake.serveNoCertificate(); });
+    }
+
+    // An empty CN serves the certificate with no subject fields at all.
+    static std::unique_ptr<Harness> servingCertWithoutCommonName()
+    {
+        return make([](F::FakeAgent& fake) { fake.setSubjectCn(""); });
     }
 
     static std::unique_ptr<Harness> refusingLogin(Refusal r)
@@ -120,7 +146,11 @@ private:
     static std::unique_ptr<Harness> make(const std::function<void(F::FakeAgent&)>& script)
     {
         auto h = std::make_unique<Harness>();
-        h->bus = std::make_unique<F::BusFixture>(/*hasCard=*/true, "None", script);
+        h->bus = std::make_unique<F::BusFixture>(/*hasCard=*/true, "None", [script](F::FakeAgent& fake) {
+            fake.setSubjectCn(holderName());
+            if (script)
+                script(fake);
+        });
         h->impl = std::make_unique<P::DBusAgentClient>();
         return h;
     }

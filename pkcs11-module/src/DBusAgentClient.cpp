@@ -267,6 +267,12 @@ AgentSnapshot DBusAgentClient::enumerate()
         const auto& props = rit->second;
         if (auto hc = props.find("HasCard"); hc != props.end())
             reader.hasCard = hc->second.get<bool>();
+        // Reader1.Name: display only (slot description, token label fallback).
+        try {
+            if (auto n = props.find("Name"); n != props.end())
+                reader.readerName = n->second.get<std::string>();
+        } catch (...) {
+        }
 
         sdbus::ObjectPath cardPath;
         bool haveCardPath = false;
@@ -323,8 +329,10 @@ AgentSnapshot DBusAgentClient::enumerate()
                     ce.label = ce.certId;
                     const auto& fields = e.get<2>();
                     if (auto sg = fields.find("subject"); sg != fields.end()) {
-                        if (auto cn = sg->second.find("cn"); cn != sg->second.end())
-                            ce.label = cn->second.get<2>().get<std::string>();
+                        if (auto cn = sg->second.find("cn"); cn != sg->second.end()) {
+                            ce.holderName = cn->second.get<2>().get<std::string>();
+                            ce.label = ce.holderName;
+                        }
                     }
                     const std::uint32_t keyUsage = e.get<3>();
                     const bool keyUsagePermitsDecrypt = (keyUsage & (kKeyEnciphermentBit | kDataEnciphermentBit)) != 0;
@@ -335,6 +343,10 @@ AgentSnapshot DBusAgentClient::enumerate()
                     reader.certs.push_back(std::move(ce));
                 }
             }
+            // What a loader shows for the token, and what tells two of them
+            // apart: the same derivation the socket transport uses.
+            reader.tokenLabel = tokenLabelFor(reader.certs, reader.readerName);
+            reader.tokenSerial = tokenSerialFor(std::string{cardPath});
         }
 
         snap.readers.push_back(std::move(reader));

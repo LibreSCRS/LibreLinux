@@ -166,3 +166,16 @@ and its secure PIN/CAN entry prompter, plus a client PKCS#11 module.
   the login's own idle limit; as inside the old 45 s window, that on-card
   state is visible to any other local shared PC/SC client while the card
   stays powered.
+
+### Fixed
+
+- **Two cards seated at once now show up as two PKCS#11 tokens.** Every token
+  the agent-proxy module reported was labelled "LibreSCRS Token" with an empty
+  serial number, so a loader such as Firefox could not tell one from the
+  other. The label is now the holder named by the card's signing certificate,
+  or the reader's name for a card whose certificate names no holder; the
+  serial number is the tail of the card's object path, which the agent mints
+  per insertion.
+
+- **A PKCS#11 slot is described by its reader's name**, not by the agent's
+  object path for the reader (`/org/librescrs/Agent/reader/3`).
