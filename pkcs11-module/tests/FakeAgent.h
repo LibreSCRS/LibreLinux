@@ -3,10 +3,13 @@
 //
 // Test-only fake librescrs-agent on a private session bus. Hosts:
 //   - built-in ObjectManager on /org/librescrs/Agent
-//   - org.librescrs.Agent.Pkcs11_1 (CertDer/Login/Logout/SignRaw/Decrypt)
+//   - org.librescrs.Agent.Pkcs11_1 (CertDer/PublicKey/EcPublicKey/Login/Logout/
+//     SignRaw/Decrypt/Derive)
 //   - a Reader1 child + (when hasCard) a Card1 child with ReadCertificates that
 //     emits Certificates1.Result then Operation1.Finished(Ok)
-// Used by AgentClientTest (proxy-level) and ModuleAbiTest (dlopen C_* level).
+// Used by DBusAgentClientContractTest (the shared AgentClient contract over the
+// bus transport) and FakeAgentMain (Pkcs11ToolRpcTest: pkcs11-tool against the
+// built module).
 
 #pragma once
 
@@ -22,6 +25,8 @@
 #include <memory>
 #include <string>
 #include <thread>
+#include <tuple>
+#include <utility>
 #include <vector>
 
 namespace librescrs_pkcs11_testfake {
@@ -104,8 +109,16 @@ public:
                     .withInputParamNames("reader")
                     .withOutputParamNames("idleTimeoutSecs"),
                 sdbus::registerMethod("Logout").implementedAs([](sdbus::ObjectPath) {}).withInputParamNames("reader"),
+                sdbus::registerMethod("EcPublicKey")
+                    .implementedAs(
+                        [](sdbus::ObjectPath, std::string)
+                            -> std::tuple<std::string, std::vector<std::uint8_t>, std::vector<std::uint8_t>> {
+                            return {"P-384", std::vector<std::uint8_t>(48, 0x11), std::vector<std::uint8_t>(48, 0x22)};
+                        })
+                    .withInputParamNames("reader", "certId")
+                    .withOutputParamNames("crv", "x", "y"),
                 sdbus::registerMethod("SignRaw")
-                    .implementedAs([this](sdbus::ObjectPath, std::string,
+                    .implementedAs([this](sdbus::ObjectPath, std::string, std::string mech,
                                           std::vector<std::uint8_t> input) -> std::vector<std::uint8_t> {
                         if (!m_signError.empty())
                             throw sdbus::Error{sdbus::Error::Name{m_signError}, "sign err"};
@@ -114,20 +127,29 @@ public:
                         // module must NOT hold its global lock meanwhile.
                         if (const auto d = m_signDelayMs.load(); d > 0)
                             std::this_thread::sleep_for(std::chrono::milliseconds(d));
+                        m_lastSignMechanism = std::move(mech);
                         m_lastSignInput = input;
                         return kCannedSig;
                     })
-                    .withInputParamNames("reader", "certId", "input")
+                    .withInputParamNames("reader", "certId", "mech", "input")
                     .withOutputParamNames("signature"),
                 sdbus::registerMethod("Decrypt")
-                    .implementedAs(
-                        [this](sdbus::ObjectPath, std::string, std::vector<std::uint8_t>) -> std::vector<std::uint8_t> {
-                            if (!m_decryptError.empty())
-                                throw sdbus::Error{sdbus::Error::Name{m_decryptError}, "dec err"};
-                            return kCannedPlain;
-                        })
-                    .withInputParamNames("reader", "certId", "ciphertext")
-                    .withOutputParamNames("plaintext"))
+                    .implementedAs([this](sdbus::ObjectPath, std::string, std::string,
+                                          std::vector<std::uint8_t>) -> std::vector<std::uint8_t> {
+                        if (!m_decryptError.empty())
+                            throw sdbus::Error{sdbus::Error::Name{m_decryptError}, "dec err"};
+                        return kCannedPlain;
+                    })
+                    .withInputParamNames("reader", "certId", "mech", "ciphertext")
+                    .withOutputParamNames("plaintext"),
+                sdbus::registerMethod("Derive")
+                    .implementedAs([this](sdbus::ObjectPath, std::string, std::vector<std::uint8_t>) {
+                        if (!m_deriveError.empty())
+                            throw sdbus::Error{sdbus::Error::Name{m_deriveError}, "derive err"};
+                        return std::vector<std::uint8_t>(48, 0x5A);
+                    })
+                    .withInputParamNames("reader", "certId", "point")
+                    .withOutputParamNames("z"))
             .forInterface(sdbus::InterfaceName{kPkcs11Iface});
 
         m_reader = sdbus::createObject(conn, sdbus::ObjectPath{kReader0});
@@ -208,6 +230,22 @@ public:
     {
         m_alwaysAuthenticate = on;
     }
+    // The served certificate's key facts, in the agent's own wire words: the
+    // card's key ID, the family token ("RSA", "EC", "OTHER"), the size and
+    // whether the agent derives with it.
+    void setKeyFacts(std::vector<std::uint8_t> keyId, std::string keyType, std::uint32_t bits, bool canDerive)
+    {
+        m_keyId = std::move(keyId);
+        m_keyType = std::move(keyType);
+        m_keyBits = bits;
+        m_canDerive = canDerive;
+    }
+    // Serve the certificate as not signing-capable, with a key-agreement usage.
+    void serveKeyAgreementOnly()
+    {
+        m_signingCapable = false;
+        m_keyUsageBits = 1U << 4; // keyAgreement
+    }
     void setSignError(const std::string& name)
     {
         m_signError = name;
@@ -228,6 +266,10 @@ public:
     {
         m_certDerError = name;
     }
+    void setDeriveError(std::string name)
+    {
+        m_deriveError = std::move(name);
+    }
     // Make SignRaw block for @p ms before replying (simulate a human-paced PIN
     // prompt / slow on-card op). Thread-safe to set from the test thread.
     void setSignDelayMs(int ms)
@@ -238,11 +280,17 @@ public:
     {
         return m_lastSignInput;
     }
+    [[nodiscard]] std::string lastSignMechanism() const
+    {
+        return m_lastSignMechanism;
+    }
 
 private:
     sdbus::ObjectPath readCertificates()
     {
-        std::thread([this, cn = m_subjectCn, none = m_noCertificate, aa = m_alwaysAuthenticate] {
+        std::thread([this, cn = m_subjectCn, none = m_noCertificate, aa = m_alwaysAuthenticate,
+                     signingCapable = m_signingCapable, keyUsage = m_keyUsageBits, keyId = m_keyId, keyType = m_keyType,
+                     keyBits = m_keyBits, canDerive = m_canDerive] {
             std::this_thread::sleep_for(std::chrono::milliseconds(80));
             CertFieldGroups fields;
             if (!cn.empty()) {
@@ -251,13 +299,17 @@ private:
                     sdbus::Struct{std::string{"label.subject.cn"}, std::string{"CN"}, sdbus::Variant{cn}};
             }
             CertResultEntry e{std::string{kCertId},
-                              true,
+                              signingCapable,
                               fields,
-                              std::uint32_t{0x0C} /*keyEnc|dataEnc*/,
+                              keyUsage,
                               std::vector<std::string>{},
                               std::vector<std::string>{},
                               std::uint32_t{255},
-                              aa};
+                              aa,
+                              keyId,
+                              keyType,
+                              keyBits,
+                              canDerive};
             std::vector<CertResultEntry> certs;
             if (!none)
                 certs.push_back(e);
@@ -280,6 +332,13 @@ private:
     std::string m_subjectCn;
     bool m_noCertificate = false;
     bool m_alwaysAuthenticate = false;
+    bool m_signingCapable = true;
+    std::uint32_t m_keyUsageBits = 0x0C; // keyEncipherment | dataEncipherment
+    std::vector<std::uint8_t> m_keyId{0x01};
+    std::string m_keyType{"RSA"};
+    std::uint32_t m_keyBits{2048};
+    bool m_canDerive{false};
+    std::string m_deriveError;
     std::string m_signError;
     std::string m_decryptError;
     std::string m_loginError;
@@ -287,6 +346,7 @@ private:
     std::string m_certDerError;
     std::atomic<int> m_signDelayMs{0};
     std::vector<std::uint8_t> m_lastSignInput;
+    std::string m_lastSignMechanism;
 };
 
 // Stand up the fake on a private session bus and claim the agent's well-known

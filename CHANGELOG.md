@@ -149,6 +149,14 @@ and its secure PIN/CAN entry prompter, plus a client PKCS#11 module.
 
 ### Changed
 
+- The PKCS#11 module reports each key's own `CKA_ID`, its type (RSA or EC)
+  and size, offers EC keys with `CKM_ECDSA` and `CKM_ECDH1_DERIVE`, and holds
+  derived secret keys as session objects. The agent's `Certificates1` result
+  gained four trailing members (`ay keyId, s keyType, u keyBits, b canDerive`);
+  `Pkcs11_1.SignRaw`/`Decrypt` take a mechanism; `Pkcs11_1.EcPublicKey` and
+  `Pkcs11_1.Derive` are new; input refused before any PIN prompt is
+  `Error.InvalidRequest`.
+
 - The PKCS#11 module reports `CKA_ALWAYS_AUTHENTICATE` per key from the
   card; the agent's `Certificates1` result carries the card's per-operation
   consent rule as a trailing boolean.

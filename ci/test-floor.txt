@@ -22,7 +22,7 @@ Config1Test 5
 ConfigPathsTest 8
 CredentialsDbusTest 18
 CscaImportDbusTest 32
-DBusAgentClientContractTest 13
+DBusAgentClientContractTest 21
 DBusAgentClientTest 20
 DBusServiceTest 20
 EnvPrompterServiceTest 11

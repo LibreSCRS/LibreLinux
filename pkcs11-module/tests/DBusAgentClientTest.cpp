@@ -4,8 +4,8 @@
 // DBusAgentClient against a fake agent on a private session bus (dbus-run-session).
 // The fake hosts:
 //   - org.freedesktop.DBus.ObjectManager on /org/librescrs/Agent (reader+card)
-//   - org.librescrs.Agent.Pkcs11_1 on the same path (CertDer/Login/Logout/
-//     SignRaw/Decrypt) returning canned bytes or a chosen Error name
+//   - org.librescrs.Agent.Pkcs11_1 on the same path (CertDer/PublicKey/Login/
+//     Logout/SignRaw/Decrypt) returning canned bytes or a chosen Error name
 //   - org.librescrs.Agent.Card1.ReadCertificates -> an Operation1 that emits
 //     Certificates1.Result then Operation1.Finished(Ok)
 // so DBusAgentClient::snapshot() can enumerate a card's signing certs end to end.
@@ -93,22 +93,22 @@ public:
                     .withOutputParamNames("idleTimeoutSecs"),
                 sdbus::registerMethod("Logout").implementedAs([](sdbus::ObjectPath) {}).withInputParamNames("reader"),
                 sdbus::registerMethod("SignRaw")
-                    .implementedAs(
-                        [this](sdbus::ObjectPath, std::string, std::vector<std::uint8_t>) -> std::vector<std::uint8_t> {
-                            if (!m_signError.empty())
-                                throw sdbus::Error{sdbus::Error::Name{m_signError}, "sign err"};
-                            return kCannedSig;
-                        })
-                    .withInputParamNames("reader", "certId", "input")
+                    .implementedAs([this](sdbus::ObjectPath, std::string, std::string,
+                                          std::vector<std::uint8_t>) -> std::vector<std::uint8_t> {
+                        if (!m_signError.empty())
+                            throw sdbus::Error{sdbus::Error::Name{m_signError}, "sign err"};
+                        return kCannedSig;
+                    })
+                    .withInputParamNames("reader", "certId", "mech", "input")
                     .withOutputParamNames("signature"),
                 sdbus::registerMethod("Decrypt")
-                    .implementedAs(
-                        [this](sdbus::ObjectPath, std::string, std::vector<std::uint8_t>) -> std::vector<std::uint8_t> {
-                            if (!m_decryptError.empty())
-                                throw sdbus::Error{sdbus::Error::Name{m_decryptError}, "dec err"};
-                            return kCannedPlain;
-                        })
-                    .withInputParamNames("reader", "certId", "ciphertext")
+                    .implementedAs([this](sdbus::ObjectPath, std::string, std::string,
+                                          std::vector<std::uint8_t>) -> std::vector<std::uint8_t> {
+                        if (!m_decryptError.empty())
+                            throw sdbus::Error{sdbus::Error::Name{m_decryptError}, "dec err"};
+                        return kCannedPlain;
+                    })
+                    .withInputParamNames("reader", "certId", "mech", "ciphertext")
                     .withOutputParamNames("plaintext"))
             .forInterface(sdbus::InterfaceName{kPkcs11Iface});
 
@@ -210,6 +210,10 @@ private:
                               std::vector<std::string>{},
                               std::vector<std::string>{},
                               std::uint32_t{255},
+                              false,
+                              std::vector<std::uint8_t>{0x01},
+                              std::string{"RSA"},
+                              std::uint32_t{2048},
                               false};
             std::vector<CertResultEntry> certs{e};
             m_op->emitSignal(sdbus::SignalName{"Result"})
@@ -280,7 +284,7 @@ TEST(DBusAgentClient, SignRawReturnsCannedSignature)
     DBusAgentClient client;
     ASSERT_TRUE(client.connected());
     const std::vector<std::uint8_t> input{0x01, 0x02};
-    auto r = client.signRaw(kReader0, "cert-abc", input);
+    auto r = client.signRaw(kReader0, "cert-abc", LibreSCRS::Agent::Mechanism::RsaPkcs1Sign, input);
     EXPECT_EQ(r.status, Status::Ok);
     EXPECT_EQ(r.bytes, kCannedSig);
 }
@@ -317,7 +321,7 @@ TEST(DBusAgentClient, PublicKeyReturnsModulusAndExponent)
 {
     BusFixture bus;
     DBusAgentClient client;
-    auto r = client.publicKey(kReader0, "cert-abc");
+    auto r = client.publicKey(kReader0, "cert-abc", LibreSCRS::Agent::KeyType::Rsa);
     EXPECT_EQ(r.status, Status::Ok);
     EXPECT_EQ(r.modulus, kCannedModulus);
     EXPECT_EQ(r.exponent, kCannedExponent);
@@ -330,13 +334,13 @@ TEST(DBusAgentClient, PublicKeyServesFromCacheOnSecondCall)
     // fake swaps in between is NOT observed).
     BusFixture bus;
     DBusAgentClient client;
-    auto r1 = client.publicKey(kReader0, "cert-abc");
+    auto r1 = client.publicKey(kReader0, "cert-abc", LibreSCRS::Agent::KeyType::Rsa);
     ASSERT_EQ(r1.status, Status::Ok);
     EXPECT_EQ(r1.modulus, kCannedModulus);
     EXPECT_EQ(bus.fake->publicKeyCalls(), 1);
 
     bus.fake->setModulus({0xDE, 0xAD, 0xBE, 0xEF});
-    auto r2 = client.publicKey(kReader0, "cert-abc");
+    auto r2 = client.publicKey(kReader0, "cert-abc", LibreSCRS::Agent::KeyType::Rsa);
     EXPECT_EQ(r2.modulus, kCannedModulus) << "second call served from cache, not re-fetched";
     EXPECT_EQ(bus.fake->publicKeyCalls(), 1) << "no second round-trip";
 }
@@ -349,7 +353,7 @@ TEST(DBusAgentClient, PublicKeyCacheClearedOnCardRemove)
     // modulus IS returned (a fresh round-trip happened).
     BusFixture bus;
     DBusAgentClient client;
-    auto r1 = client.publicKey(kReader0, "cert-abc");
+    auto r1 = client.publicKey(kReader0, "cert-abc", LibreSCRS::Agent::KeyType::Rsa);
     ASSERT_EQ(r1.status, Status::Ok);
     EXPECT_EQ(r1.modulus, kCannedModulus);
     EXPECT_EQ(bus.fake->publicKeyCalls(), 1);
@@ -361,7 +365,7 @@ TEST(DBusAgentClient, PublicKeyCacheClearedOnCardRemove)
     // Let the client's async event loop dispatch the signal + clear the cache.
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
-    auto r2 = client.publicKey(kReader0, "cert-abc");
+    auto r2 = client.publicKey(kReader0, "cert-abc", LibreSCRS::Agent::KeyType::Rsa);
     ASSERT_EQ(r2.status, Status::Ok);
     EXPECT_EQ(r2.modulus, swapped) << "card-remove must clear the pubKeyCache (stale key served otherwise)";
     EXPECT_EQ(bus.fake->publicKeyCalls(), 2) << "a fresh round-trip happened after the cache clear";
@@ -371,7 +375,7 @@ TEST(DBusAgentClient, PublicKeyKeyNotFoundMapped)
 {
     BusFixture bus(true, "None", [](FakeAgent& f) { f.setPublicKeyError("org.librescrs.Agent.Error.KeyNotFound"); });
     DBusAgentClient client;
-    auto r = client.publicKey(kReader0, "cert-abc");
+    auto r = client.publicKey(kReader0, "cert-abc", LibreSCRS::Agent::KeyType::Rsa);
     EXPECT_EQ(r.status, Status::KeyNotFound);
 }
 
@@ -379,7 +383,7 @@ TEST(DBusAgentClient, PublicKeyNotSupportedMapped)
 {
     BusFixture bus(true, "None", [](FakeAgent& f) { f.setPublicKeyError("org.librescrs.Agent.Error.NotSupported"); });
     DBusAgentClient client;
-    auto r = client.publicKey(kReader0, "cert-abc");
+    auto r = client.publicKey(kReader0, "cert-abc", LibreSCRS::Agent::KeyType::Rsa);
     EXPECT_EQ(r.status, Status::NotSupported);
 }
 
@@ -388,7 +392,7 @@ TEST(DBusAgentClient, NotLoggedInErrorMapped)
     BusFixture bus(true, "None", [](FakeAgent& f) { f.setSignError("org.librescrs.Agent.Error.UserNotLoggedIn"); });
     DBusAgentClient client;
     const std::vector<std::uint8_t> input{0x01};
-    auto r = client.signRaw(kReader0, "cert-abc", input);
+    auto r = client.signRaw(kReader0, "cert-abc", LibreSCRS::Agent::Mechanism::RsaPkcs1Sign, input);
     EXPECT_EQ(r.status, Status::UserNotLoggedIn);
 }
 
@@ -397,7 +401,7 @@ TEST(DBusAgentClient, NotSupportedErrorMapped)
     BusFixture bus(true, "None", [](FakeAgent& f) { f.setSignError("org.librescrs.Agent.Error.NotSupported"); });
     DBusAgentClient client;
     const std::vector<std::uint8_t> input{0x01};
-    auto r = client.signRaw(kReader0, "cert-abc", input);
+    auto r = client.signRaw(kReader0, "cert-abc", LibreSCRS::Agent::Mechanism::RsaPkcs1Sign, input);
     EXPECT_EQ(r.status, Status::NotSupported);
 }
 

@@ -11,7 +11,7 @@ link_libraries(librelinux-common)
 link_libraries(LibreAgent::Pkcs11Facade)
 
 # Wire-shape pin: the shared CertResultEntry marshals to the frozen
-# a(sba{sa{s(ssv)}}uasasub) (no .so, no D-Bus, no card).
+# a(sba{sa{s(ssv)}}uasasubaysub) (no .so, no D-Bus, no card).
 add_executable(CertResultWireSignatureTest CertResultWireSignatureTest.cpp)
 target_include_directories(CertResultWireSignatureTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
 target_compile_features(CertResultWireSignatureTest PRIVATE cxx_std_23)

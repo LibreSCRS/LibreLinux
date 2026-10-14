@@ -15,6 +15,9 @@
 #include <condition_variable>
 #include <map>
 #include <mutex>
+#include <string>
+#include <utility>
+#include <vector>
 
 namespace LibreSCRS::Pkcs11Agent {
 
@@ -34,11 +37,11 @@ using LibreLinux::AgentWire::kServiceName;
 // sd-bus's default method-call timeout is ~25s. A human-paced PIN prompt (and
 // the on-card op behind it) routinely exceeds that, and a timeout surfaces as
 // org.freedesktop.DBus.Error.NoReply -> CKR_DEVICE_REMOVED while the agent is
-// still prompting. Give the human-interactive calls (Login/SignRaw/Decrypt) a
-// very generous budget; the public-data fetches (CertDer/PublicKey) a smaller
-// one (mirrors the 60s readCerts wait).
+// still prompting. Give the human-interactive calls (Login/SignRaw/Decrypt/
+// Derive) a very generous budget; the public-data fetches (CertDer/PublicKey/
+// EcPublicKey) a smaller one (mirrors the 60s readCerts wait).
 constexpr std::chrono::seconds kInteractiveTimeout{600}; // PIN prompt + on-card op
-constexpr std::chrono::seconds kPublicDataTimeout{60};   // CertDer / PublicKey
+constexpr std::chrono::seconds kPublicDataTimeout{60};   // CertDer / PublicKey / EcPublicKey
 
 // RFC 5280 §4.2.1.3 KeyUsage bit ordinals (== the agent's frozen
 // Certificates1 keyUsageBits mask). Decrypt needs keyEncipherment OR
@@ -77,6 +80,8 @@ Status mapErrorName(const std::string& errorName) noexcept
         return Status::RateLimited;
     if (errorName == W::kErrCommunication)
         return Status::Communication;
+    if (errorName == W::kErrInvalidRequest)
+        return Status::InvalidInput;
     return Status::GeneralError;
 }
 
@@ -90,10 +95,10 @@ struct DBusAgentClient::Impl
     AgentSnapshot cached;
     std::atomic<bool> dirty{true}; // first snapshot() always enumerates
 
-    // Public-key cache keyed by certId. The RSA public key is immutable for a
-    // given cert, so once fetched it is served from here (ssh/NSS read
-    // CKA_MODULUS / CKA_PUBLIC_EXPONENT repeatedly). Only successful fetches are
-    // cached; an error is retried on the next call.
+    // Public-key cache keyed by certId. A cert's public key is immutable, so
+    // once fetched it is served from here (ssh/NSS read CKA_MODULUS /
+    // CKA_PUBLIC_EXPONENT or CKA_EC_POINT repeatedly). Only successful fetches
+    // are cached; an error is retried on the next call.
     std::mutex pubKeyMtx;
     std::map<std::string, PublicKeyResult> pubKeyCache;
 
@@ -315,16 +320,22 @@ AgentSnapshot DBusAgentClient::enumerate()
 
             std::vector<CertResultEntry> certs;
             if (m_impl->readCerts(cardPath, certs)) {
-                std::uint8_t ckaId = 1;
                 for (const auto& e : certs) {
                     CertEntry ce;
                     ce.certId = e.get<0>();
                     ce.signingCapable = e.get<1>();
-                    if (!ce.signingCapable)
+                    ce.keyType = LibreSCRS::Agent::keyTypeFromToken(e.get<9>());
+                    // The agent derives with EC keys only; an Other key is
+                    // never modelled, so its flag is not believed either.
+                    ce.canDerive = e.get<11>() && ce.keyType == LibreSCRS::Agent::KeyType::Ec;
+                    // A cert enters the model when its key signs or derives.
+                    if (!ce.signingCapable && !ce.canDerive)
                         continue;
-                    // CKA_ID: a stable per-card index (CKA_VALUE/cert DER and the
-                    // certId carry identity; CKA_ID just pairs cert<->key).
-                    ce.ckaId = {ckaId++};
+                    // The key's own CKA_ID, as the card -- or, failing that,
+                    // the agent -- names it.
+                    ce.ckaId = e.get<8>();
+                    ce.keyBits = e.get<10>();
+                    ce.alwaysAuthenticate = e.get<7>();
                     // Label: prefer the subject CN field if present.
                     ce.label = ce.certId;
                     const auto& fields = e.get<2>();
@@ -334,13 +345,16 @@ AgentSnapshot DBusAgentClient::enumerate()
                             ce.label = ce.holderName;
                         }
                     }
+                    const bool isRsa = ce.keyType == LibreSCRS::Agent::KeyType::Rsa;
                     const std::uint32_t keyUsage = e.get<3>();
                     const bool keyUsagePermitsDecrypt = (keyUsage & (kKeyEnciphermentBit | kDataEnciphermentBit)) != 0;
 
-                    ce.canSign = agentCanDriveSigningCredential;
-                    ce.canDecrypt = agentCanDriveDecryptCredential && keyUsagePermitsDecrypt;
-                    ce.signsHashOnCard = cardHashesOnCard;
-                    ce.alwaysAuthenticate = e.get<7>();
+                    // Decrypt and hash-on-card are RSA matters: an EC key never
+                    // decrypts, and a hash-on-card card offers an EC key
+                    // CKM_ECDSA like any other.
+                    ce.canSign = ce.signingCapable && agentCanDriveSigningCredential;
+                    ce.canDecrypt = isRsa && agentCanDriveDecryptCredential && keyUsagePermitsDecrypt;
+                    ce.signsHashOnCard = isRsa && cardHashesOnCard;
                     reader.certs.push_back(std::move(ce));
                 }
             }
@@ -389,33 +403,51 @@ BytesResult DBusAgentClient::certDer(const std::string& reader, const std::strin
     return r;
 }
 
-PublicKeyResult DBusAgentClient::publicKey(const std::string& reader, const std::string& certId)
+PublicKeyResult DBusAgentClient::publicKey(const std::string& reader, const std::string& certId,
+                                           LibreSCRS::Agent::KeyType keyType)
 {
+    using LibreSCRS::Agent::KeyType;
     PublicKeyResult r;
     if (!connected()) {
         r.status = Status::DeviceRemoved;
         return r;
     }
 
-    // Serve a cached success without another round-trip.
+    // Serve a cached success without another round-trip. The cache holds the
+    // key the agent served; a request for another family is answered as an
+    // uncached one would be.
     {
         std::lock_guard lk(m_impl->pubKeyMtx);
-        if (auto it = m_impl->pubKeyCache.find(certId); it != m_impl->pubKeyCache.end())
+        if (auto it = m_impl->pubKeyCache.find(certId); it != m_impl->pubKeyCache.end()) {
+            const KeyType cached = it->second.x.empty() ? KeyType::Rsa : KeyType::Ec;
+            if (cached != keyType) {
+                r.status = Status::NotSupported;
+                return r;
+            }
             return it->second;
+        }
     }
 
     try {
         auto proxy = pkcs11Proxy(*m_impl->conn);
-        std::vector<std::uint8_t> modulus;
-        std::vector<std::uint8_t> exponent;
-        proxy->callMethod("PublicKey")
-            .onInterface(sdbus::InterfaceName{kPkcs11Iface})
-            .withTimeout(kPublicDataTimeout)
-            .withArguments(sdbus::ObjectPath{reader}, certId)
-            .storeResultsTo(modulus, exponent);
+        if (keyType == KeyType::Rsa) {
+            proxy->callMethod("PublicKey")
+                .onInterface(sdbus::InterfaceName{kPkcs11Iface})
+                .withTimeout(kPublicDataTimeout)
+                .withArguments(sdbus::ObjectPath{reader}, certId)
+                .storeResultsTo(r.modulus, r.exponent);
+        } else if (keyType == KeyType::Ec) {
+            proxy->callMethod("EcPublicKey")
+                .onInterface(sdbus::InterfaceName{kPkcs11Iface})
+                .withTimeout(kPublicDataTimeout)
+                .withArguments(sdbus::ObjectPath{reader}, certId)
+                .storeResultsTo(r.crv, r.x, r.y);
+        } else {
+            // No wire method serves an Other key, and none is modelled.
+            r.status = Status::NotSupported;
+            return r;
+        }
         r.status = Status::Ok;
-        r.modulus = std::move(modulus);
-        r.exponent = std::move(exponent);
     } catch (...) {
         r.status = Impl::statusFromException();
         return r; // do NOT cache errors
@@ -467,23 +499,31 @@ Status DBusAgentClient::logout(const std::string& reader)
 }
 
 BytesResult DBusAgentClient::signRaw(const std::string& reader, const std::string& certId,
-                                     std::span<const std::uint8_t> input)
+                                     LibreSCRS::Agent::Mechanism mechanism, std::span<const std::uint8_t> input)
 {
     BytesResult r;
+    // Only a signing mechanism of this wire is sent as a signature. The token
+    // alone does not decide it: RsaPkcs1Decrypt spells the same "rsa-pkcs" as
+    // RsaPkcs1Sign, and a mechanism with no token has nothing to send.
+    const std::string token{LibreSCRS::Agent::mechanismToken(mechanism)};
+    if (token.empty() || LibreSCRS::Agent::signMechanismFromToken(token) != mechanism) {
+        r.status = Status::NotSupported;
+        return r;
+    }
     if (!connected()) {
         r.status = Status::DeviceRemoved;
         return r;
     }
     try {
-        // The input (DigestInfo-or-raw block) and the returned signature are the
-        // only secret-ish bytes the module touches; they pass straight through
-        // and are NEVER logged.
+        // The input (DigestInfo, raw message or digest) and the returned
+        // signature pass straight through and are NEVER logged.
         auto proxy = pkcs11Proxy(*m_impl->conn);
         std::vector<std::uint8_t> sig;
         proxy->callMethod("SignRaw")
             .onInterface(sdbus::InterfaceName{kPkcs11Iface})
             .withTimeout(kInteractiveTimeout)
-            .withArguments(sdbus::ObjectPath{reader}, certId, std::vector<std::uint8_t>{input.begin(), input.end()})
+            .withArguments(sdbus::ObjectPath{reader}, certId, token,
+                           std::vector<std::uint8_t>{input.begin(), input.end()})
             .storeResultsTo(sig);
         r.status = Status::Ok;
         r.bytes = std::move(sig);
@@ -503,15 +543,45 @@ BytesResult DBusAgentClient::decrypt(const std::string& reader, const std::strin
     }
     try {
         auto proxy = pkcs11Proxy(*m_impl->conn);
+        // The plaintext is moved, never copied: nothing is left in this frame
+        // for the caller to miss when it wipes r.bytes.
         std::vector<std::uint8_t> plain;
         proxy->callMethod("Decrypt")
             .onInterface(sdbus::InterfaceName{kPkcs11Iface})
             .withTimeout(kInteractiveTimeout)
             .withArguments(sdbus::ObjectPath{reader}, certId,
+                           std::string{LibreSCRS::Agent::mechanismToken(LibreSCRS::Agent::Mechanism::RsaPkcs1Decrypt)},
                            std::vector<std::uint8_t>{ciphertext.begin(), ciphertext.end()})
             .storeResultsTo(plain);
         r.status = Status::Ok;
         r.bytes = std::move(plain);
+    } catch (...) {
+        r.status = Impl::statusFromException();
+    }
+    return r;
+}
+
+BytesResult DBusAgentClient::derive(const std::string& reader, const std::string& certId,
+                                    std::span<const std::uint8_t> peerPoint)
+{
+    BytesResult r;
+    if (!connected()) {
+        r.status = Status::DeviceRemoved;
+        return r;
+    }
+    try {
+        // The peer's point is public; the secret Z the agent answers is moved
+        // into the result, never copied, and the caller wipes it.
+        auto proxy = pkcs11Proxy(*m_impl->conn);
+        std::vector<std::uint8_t> z;
+        proxy->callMethod("Derive")
+            .onInterface(sdbus::InterfaceName{kPkcs11Iface})
+            .withTimeout(kInteractiveTimeout)
+            .withArguments(sdbus::ObjectPath{reader}, certId,
+                           std::vector<std::uint8_t>{peerPoint.begin(), peerPoint.end()})
+            .storeResultsTo(z);
+        r.status = Status::Ok;
+        r.bytes = std::move(z);
     } catch (...) {
         r.status = Impl::statusFromException();
     }

@@ -3,15 +3,18 @@
 //
 // DBusAgentClient — the sdbus-c++ implementation of AgentClient. It enumerates
 // readers/cards via the agent's ObjectManager, drives the per-card
-// ReadCertificates operation to learn the signing certs + their capabilities,
-// and brokers the low-level Pkcs11_1 primitives (CertDer / Login / Logout /
-// SignRaw / Decrypt) over the session bus.
+// ReadCertificates operation to learn the certs + their keys' facts and
+// capabilities, and brokers the low-level Pkcs11_1 primitives (CertDer /
+// PublicKey / EcPublicKey / Login / Logout / SignRaw / Decrypt / Derive) over
+// the session bus.
 //
 // The agent's D-Bus error names are this transport's vocabulary and are mapped
 // to the interface's Status here, not in the interface.
 
 #pragma once
 
+#include <LibreSCRS/Agent/KeyType.h>
+#include <LibreSCRS/Agent/crypto/Mechanism.h>
 #include <LibreSCRS/Agent/pkcs11/AgentClient.h>
 
 #include <memory>
@@ -49,18 +52,27 @@ public:
     [[nodiscard]] BytesResult certDer(const std::string& reader, const std::string& certId) override;
 
     /// @brief Lazily fetched + cached per certId — the second call for the same
-    ///        key serves the cache.
-    [[nodiscard]] PublicKeyResult publicKey(const std::string& reader, const std::string& certId) override;
+    ///        key serves the cache. An RSA key is fetched over PublicKey, an EC
+    ///        key over EcPublicKey; any other family is NotSupported without a
+    ///        call.
+    [[nodiscard]] PublicKeyResult publicKey(const std::string& reader, const std::string& certId,
+                                            LibreSCRS::Agent::KeyType keyType) override;
 
     [[nodiscard]] LoginResult login(const std::string& reader) override;
 
     Status logout(const std::string& reader) override;
 
+    /// @brief Only a signing mechanism of this wire is ever sent; any other
+    ///        answers NotSupported without reaching the agent.
     [[nodiscard]] BytesResult signRaw(const std::string& reader, const std::string& certId,
+                                      LibreSCRS::Agent::Mechanism mechanism,
                                       std::span<const std::uint8_t> input) override;
 
     [[nodiscard]] BytesResult decrypt(const std::string& reader, const std::string& certId,
                                       std::span<const std::uint8_t> ciphertext) override;
+
+    [[nodiscard]] BytesResult derive(const std::string& reader, const std::string& certId,
+                                     std::span<const std::uint8_t> peerPoint) override;
 
 private:
     /// @brief Do the actual ObjectManager + ReadCertificates enumeration (no cache).
