@@ -87,6 +87,10 @@
                         "trusted", "untrusted-root", "broken-chain", "invalid",
                         "expired", "revoked", "offline-unverified") ride the
                         "security" fields group above.
+    b   alwaysAuthenticate  the card asks for the PIN before EVERY operation with
+                        this certificate's key (PKCS#15 userConsent; PKCS#11
+                        CKA_ALWAYS_AUTHENTICATE). The agent enforces it on every
+                        raw sign and decrypt itself; a client never decides on it.
 
   Late-subscriber recovery — GetResult():
     The Result signal is a one-shot: a client that learns the op path only
@@ -105,11 +109,11 @@
 <node>
   <interface name="org.librescrs.Agent.Operation.Certificates1">
     <signal name="Result">
-      <arg name="certificates" type="a(sba{sa{s(ssv)}}uasasu)"/>
+      <arg name="certificates" type="a(sba{sa{s(ssv)}}uasasub)"/>
     </signal>
 
     <method name="GetResult">
-      <arg name="certificates" type="a(sba{sa{s(ssv)}}uasasu)" direction="out"/>
+      <arg name="certificates" type="a(sba{sa{s(ssv)}}uasasub)" direction="out"/>
     </method>
   </interface>
 </node>

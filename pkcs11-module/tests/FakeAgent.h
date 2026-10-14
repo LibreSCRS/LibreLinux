@@ -204,6 +204,10 @@ public:
     {
         m_noCertificate = true;
     }
+    void setAlwaysAuthenticate(bool on)
+    {
+        m_alwaysAuthenticate = on;
+    }
     void setSignError(const std::string& name)
     {
         m_signError = name;
@@ -238,7 +242,7 @@ public:
 private:
     sdbus::ObjectPath readCertificates()
     {
-        std::thread([this, cn = m_subjectCn, none = m_noCertificate] {
+        std::thread([this, cn = m_subjectCn, none = m_noCertificate, aa = m_alwaysAuthenticate] {
             std::this_thread::sleep_for(std::chrono::milliseconds(80));
             CertFieldGroups fields;
             if (!cn.empty()) {
@@ -252,7 +256,8 @@ private:
                               std::uint32_t{0x0C} /*keyEnc|dataEnc*/,
                               std::vector<std::string>{},
                               std::vector<std::string>{},
-                              std::uint32_t{255}};
+                              std::uint32_t{255},
+                              aa};
             std::vector<CertResultEntry> certs;
             if (!none)
                 certs.push_back(e);
@@ -274,6 +279,7 @@ private:
     std::string m_preRead;
     std::string m_subjectCn;
     bool m_noCertificate = false;
+    bool m_alwaysAuthenticate = false;
     std::string m_signError;
     std::string m_decryptError;
     std::string m_loginError;

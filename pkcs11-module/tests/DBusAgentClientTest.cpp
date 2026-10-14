@@ -209,7 +209,8 @@ private:
                               std::uint32_t{0x0C} /*keyEnc|dataEnc*/,
                               std::vector<std::string>{},
                               std::vector<std::string>{},
-                              std::uint32_t{255}};
+                              std::uint32_t{255},
+                              false};
             std::vector<CertResultEntry> certs{e};
             m_op->emitSignal(sdbus::SignalName{"Result"})
                 .onInterface(sdbus::InterfaceName{kCertificatesIface})

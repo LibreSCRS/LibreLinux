@@ -149,6 +149,10 @@ and its secure PIN/CAN entry prompter, plus a client PKCS#11 module.
 
 ### Changed
 
+- The PKCS#11 module reports `CKA_ALWAYS_AUTHENTICATE` per key from the
+  card; the agent's `Certificates1` result carries the card's per-operation
+  consent rule as a trailing boolean.
+
 - **Dual-interface readers: the contact slot is kept powered while a card
   sits in it.** A dual-interface card in the contact slot of a reader such as
   the OMNIKEY 5422 couples weakly to the reader's contactless coupler, so the

@@ -340,6 +340,7 @@ AgentSnapshot DBusAgentClient::enumerate()
                     ce.canSign = agentCanDriveSigningCredential;
                     ce.canDecrypt = agentCanDriveDecryptCredential && keyUsagePermitsDecrypt;
                     ce.signsHashOnCard = cardHashesOnCard;
+                    ce.alwaysAuthenticate = e.get<7>();
                     reader.certs.push_back(std::move(ce));
                 }
             }

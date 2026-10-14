@@ -29,7 +29,7 @@
 //                     <-> LibreKDE shared/agentclient/ErrorText.h ErrorCode
 //   cert Result sig : agent Certificates1XmlCodegenTest + module
 //                     CertResultWireSignatureTest + KDE AgentResultSignatureTest
-//                     all pin a(sba{sa{s(ssv)}}uasasu)
+//                     all pin a(sba{sa{s(ssv)}}uasasub)
 
 #include <LibreSCRS/Agent/value/ErrorTaxonomy.h>
 

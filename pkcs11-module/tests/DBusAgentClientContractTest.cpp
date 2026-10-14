@@ -125,10 +125,23 @@ struct BusContractTraits
         return make([](F::FakeAgent& fake) { fake.setSubjectCn(""); });
     }
 
+    // The double marks its one certificate's key with the card's
+    // per-operation consent rule.
+    static std::unique_ptr<Harness> servingAlwaysAuthenticateCert()
+    {
+        return make([](F::FakeAgent& fake) { fake.setAlwaysAuthenticate(true); });
+    }
+
     static std::unique_ptr<Harness> refusingLogin(Refusal r)
     {
         const std::string name = errorNameFor(r);
         return make([name](F::FakeAgent& fake) { fake.setLoginError(name); });
+    }
+
+    static std::unique_ptr<Harness> refusingSign(Refusal r)
+    {
+        const std::string name = errorNameFor(r);
+        return make([name](F::FakeAgent& fake) { fake.setSignError(name); });
     }
 
     static std::unique_ptr<Harness> unreachable()

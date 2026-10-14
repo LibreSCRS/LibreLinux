@@ -22,7 +22,7 @@ Config1Test 5
 ConfigPathsTest 8
 CredentialsDbusTest 18
 CscaImportDbusTest 32
-DBusAgentClientContractTest 11
+DBusAgentClientContractTest 13
 DBusAgentClientTest 20
 DBusServiceTest 16
 EnvPrompterServiceTest 11
@@ -31,7 +31,7 @@ Identity1XmlCodegenTest 1
 InputWidgetValidationTest 24
 Manager1XmlCodegenTest 1
 ModuleConfigTest 7
-Operation1AdaptorTest 5
+Operation1AdaptorTest 6
 Operation1ErrorCodeXmlGuardTest 1
 Operation1XmlCodegenTest 1
 OperationManagerNameOwnerChangedTest 2

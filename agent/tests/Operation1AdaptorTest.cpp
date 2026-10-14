@@ -6,6 +6,7 @@
 // exercise the real codepath but no agent infrastructure is needed.
 #include "operations/Operation1Adaptor.h"
 #include <LibreSCRS/Agent/OperationState.h> // relocated struct
+#include <LibreSCRS/Agent/value/CertSnapshot.h>
 #include "org.librescrs.Agent.Operation.Identity1_adaptor.h"
 
 #include <sdbus-c++/Error.h>
@@ -113,4 +114,25 @@ TEST(Operation1Adaptor, EmitWrappersAreNoexceptAndCompleteWithoutSubscribers)
     adaptor.emitPropertiesChangedForOperation1();
 
     conn->leaveEventLoop();
+}
+
+// The card's per-operation consent rule is the struct's last member, after
+// trustStatus. Each entry holds opposite values in the two booleans, so a
+// rule written into signingCapable's place (or the reverse) is seen.
+TEST(Operation1Adaptor, CertificatesWireCarriesTheConsentRuleLast)
+{
+    LibreSCRS::Agent::CertSnapshot marked;
+    marked.certId = "aa";
+    marked.signingCapable = false;
+    marked.alwaysAuthenticate = true;
+    LibreSCRS::Agent::CertSnapshot ordinary;
+    ordinary.certId = "bb";
+    ordinary.signingCapable = true;
+    ordinary.alwaysAuthenticate = false;
+    const auto wire = LibreSCRS::Agent::Operations::buildCertificates1Wire({marked, ordinary});
+    ASSERT_EQ(wire.size(), 2u);
+    EXPECT_FALSE(wire[0].get<1>());
+    EXPECT_TRUE(wire[0].get<7>());
+    EXPECT_TRUE(wire[1].get<1>());
+    EXPECT_FALSE(wire[1].get<7>());
 }

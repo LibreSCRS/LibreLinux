@@ -166,7 +166,7 @@ Certificates1Wire buildCertificates1Wire(const std::vector<CertSnapshot>& certs)
             }
         }
         wire.emplace_back(c.certId, c.signingCapable, std::move(fields), c.keyUsageBits, c.ekuOids, c.chainSubjectCns,
-                          c.trustStatus);
+                          c.trustStatus, c.alwaysAuthenticate);
     }
     return wire;
 }

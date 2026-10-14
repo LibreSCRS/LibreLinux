@@ -56,12 +56,12 @@ using PropMap = std::map<std::string, sdbus::Variant>;
 using IfaceMap = std::map<std::string, PropMap>;
 using ManagedObjects = std::map<sdbus::ObjectPath, IfaceMap>;
 
-// Certificates1.Result payload element: (s b a{sa{s(ssv)}} u as as u).
+// Certificates1.Result payload element: (s b a{sa{s(ssv)}} u as as u b).
 using FieldVal = sdbus::Struct<std::string, std::string, sdbus::Variant>;
 using FieldGroup = std::map<std::string, FieldVal>;
 using Fields = std::map<std::string, FieldGroup>;
 using CertEntry = sdbus::Struct<std::string, bool, Fields, std::uint32_t, std::vector<std::string>,
-                                std::vector<std::string>, std::uint32_t>;
+                                std::vector<std::string>, std::uint32_t, bool>;
 using CertList = std::vector<CertEntry>;
 
 std::string envOr(const char* key, const char* fallback)
