@@ -28,8 +28,8 @@
 //                     LibreAgent include/LibreSCRS/Agent/value/ErrorTaxonomy.h enum to it)
 //                     <-> LibreKDE shared/agentclient/ErrorText.h ErrorCode
 //   cert Result sig : agent Certificates1XmlCodegenTest + module
-//                     CertResultWireSignatureTest + KDE AgentResultSignatureTest
-//                     all pin a(sba{sa{s(ssv)}}uasasub)
+//                     CertResultWireSignatureTest + LibreAgent ClientQt
+//                     AgentResultSignatureTest all pin a(sba{sa{s(ssv)}}uasasubaysub)
 
 #include <LibreSCRS/Agent/value/ErrorTaxonomy.h>
 

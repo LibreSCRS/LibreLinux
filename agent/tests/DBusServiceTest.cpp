@@ -604,6 +604,136 @@ TEST(DBusService, Pkcs11AsyncCertDerFulfilsDeferredErrorReply)
     serverConn->leaveEventLoop();
 }
 
+namespace {
+
+// The error name a Pkcs11_1 call answers with on a FUNCTIONAL broker over a
+// card-less reader; empty when it succeeds. The stack is the one
+// Pkcs11AsyncCertDerFulfilsDeferredErrorReply wires. @p call issues the method
+// on the proxy it is handed.
+template <typename Call>
+std::string pkcs11ErrorName(const char* service, const char* cfg, Call call)
+{
+    std::shared_ptr<sdbus::IConnection> serverConn = sdbus::createSessionBusConnection();
+    if (!serverConn) {
+        return "no-session-bus";
+    }
+    serverConn->requestName(sdbus::ServiceName{service});
+
+    FakeResolver resolver;
+    AllowAllAuthorizer authz;
+    auto prompter = std::make_shared<NopPrompter>();
+    BusExporter exporter(*serverConn);
+    AgentCore core(resolver, exporter, authz, prompter, testCfgDir(cfg) / "agent.conf", testCfgDir(cfg) / "cache",
+                   makeResolveReaderCard(exporter), makeResolveCardKey(exporter));
+    exporter.observePresenceFrom(core.objectRegistry());
+    AgentFrontend frontend(exporter, serverConn, core.operationManager(), core.sharedCryptoContext(),
+                           core.cardReadCache(), core.signingEngineProvider(), core.authorizer(), core.rateLimiter(),
+                           core.configStore(), &core.pkcs11(), "t");
+
+    serverConn->enterEventLoopAsync();
+
+    auto clientConn = sdbus::createSessionBusConnection();
+    clientConn->enterEventLoopAsync();
+    auto proxy = sdbus::createProxy(*clientConn, sdbus::ServiceName{service}, sdbus::ObjectPath{kRootPath});
+
+    std::string name;
+    try {
+        call(*proxy);
+    } catch (const sdbus::Error& e) {
+        name = e.getName();
+    }
+
+    clientConn->leaveEventLoop();
+    serverConn->leaveEventLoop();
+    return name;
+}
+
+constexpr const char* kPkcs11Iface = "org.librescrs.Agent.Pkcs11_1";
+constexpr const char* kCardlessReader = "/org/librescrs/Agent/reader/0";
+
+} // namespace
+
+// A sign whose mechanism token the agent does not know is refused as
+// InvalidRequest before the broker sees it: the same call with a known token
+// on the same card-less reader reaches the broker and answers UnknownCard.
+TEST(DBusService, Pkcs11SignRawRefusesAnUnknownMechanismBeforeTheBroker)
+{
+    const auto signWith = [](const char* mech) {
+        return [mech](sdbus::IProxy& proxy) {
+            std::vector<std::uint8_t> signature;
+            proxy.callMethod("SignRaw")
+                .onInterface(sdbus::InterfaceName{kPkcs11Iface})
+                .withArguments(sdbus::ObjectPath{kCardlessReader}, std::string{"deadbeef"}, std::string{mech},
+                               std::vector<std::uint8_t>{})
+                .storeResultsTo(signature);
+        };
+    };
+    EXPECT_EQ(pkcs11ErrorName("org.librescrs.Agent.Test.SignMech", "dbus-sign-mech", signWith("no-such-mech")),
+              "org.librescrs.Agent.Error.InvalidRequest");
+    EXPECT_EQ(pkcs11ErrorName("org.librescrs.Agent.Test.SignMechKnown", "dbus-sign-mech-known", signWith("rsa-pkcs")),
+              "org.librescrs.Agent.Error.UnknownCard")
+        << "a known token must get past the mechanism gate to the broker";
+}
+
+// Decrypt knows only rsa-pkcs: a signing mechanism's token is unknown to it
+// and refused before the broker, while rsa-pkcs reaches the broker.
+TEST(DBusService, Pkcs11DecryptRefusesAnUnknownMechanismBeforeTheBroker)
+{
+    const auto decryptWith = [](const char* mech) {
+        return [mech](sdbus::IProxy& proxy) {
+            std::vector<std::uint8_t> plaintext;
+            proxy.callMethod("Decrypt")
+                .onInterface(sdbus::InterfaceName{kPkcs11Iface})
+                .withArguments(sdbus::ObjectPath{kCardlessReader}, std::string{"deadbeef"}, std::string{mech},
+                               std::vector<std::uint8_t>{})
+                .storeResultsTo(plaintext);
+        };
+    };
+    EXPECT_EQ(pkcs11ErrorName("org.librescrs.Agent.Test.DecryptMech", "dbus-decrypt-mech", decryptWith("ecdsa")),
+              "org.librescrs.Agent.Error.InvalidRequest");
+    EXPECT_EQ(pkcs11ErrorName("org.librescrs.Agent.Test.DecryptMechKnown", "dbus-decrypt-mech-known",
+                              decryptWith("rsa-pkcs")),
+              "org.librescrs.Agent.Error.UnknownCard")
+        << "a known token must get past the mechanism gate to the broker";
+}
+
+// Derive carries no mechanism token: the agent fixes ECDH with the null KDF
+// and no shared data. The broker judges those before it looks for the card
+// (anything else is NotSupported), so UnknownCard from a card-less reader
+// proves the parameters the agent builds are the ones the broker runs.
+TEST(DBusService, Pkcs11DeriveReachesTheBrokerWithTheNullKdf)
+{
+    const auto derive = [](sdbus::IProxy& proxy) {
+        std::vector<std::uint8_t> z;
+        std::vector<std::uint8_t> point(97, 0x11); // an uncompressed P-384 point's length
+        point[0] = 0x04;
+        proxy.callMethod("Derive")
+            .onInterface(sdbus::InterfaceName{kPkcs11Iface})
+            .withArguments(sdbus::ObjectPath{kCardlessReader}, std::string{"deadbeef"}, point)
+            .storeResultsTo(z);
+    };
+    EXPECT_EQ(pkcs11ErrorName("org.librescrs.Agent.Test.Derive", "dbus-derive", derive),
+              "org.librescrs.Agent.Error.UnknownCard")
+        << "the broker must accept the agent's ECDH parameters and get as far as the card";
+}
+
+// EcPublicKey is the EC family's PublicKey: registered on the interface and
+// bound to the broker, which answers UnknownCard for a card-less reader.
+TEST(DBusService, Pkcs11EcPublicKeyReachesTheBroker)
+{
+    const auto ecPublicKey = [](sdbus::IProxy& proxy) {
+        std::string crv;
+        std::vector<std::uint8_t> x;
+        std::vector<std::uint8_t> y;
+        proxy.callMethod("EcPublicKey")
+            .onInterface(sdbus::InterfaceName{kPkcs11Iface})
+            .withArguments(sdbus::ObjectPath{kCardlessReader}, std::string{"deadbeef"})
+            .storeResultsTo(crv, x, y);
+    };
+    EXPECT_EQ(pkcs11ErrorName("org.librescrs.Agent.Test.EcPublicKey", "dbus-ec-public-key", ecPublicKey),
+              "org.librescrs.Agent.Error.UnknownCard");
+}
+
 TEST(DBusService, MultipleReadersAndCardsAllExported)
 {
     std::shared_ptr<sdbus::IConnection> serverConn = sdbus::createSessionBusConnection();

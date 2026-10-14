@@ -89,8 +89,8 @@
     operation is the human-presence proof, so polkit re-authentication here
     would be redundant. The action exists so a site policy CAN restrict which
     PKCS#11 applications may use a card; the lease + rate-limiter cap abuse
-    under the default-allow posture. SignRaw/Decrypt within an active lease are
-    not re-authorized (the lease IS the grant) but are audited.
+    under the default-allow posture. SignRaw/Decrypt/Derive within an active
+    lease are not re-authorized (the lease IS the grant) but are audited.
   -->
   <action id="org.librescrs.agent.pkcs11.login">
     <description>Use a LibreSCRS smart card from a PKCS#11 application</description>

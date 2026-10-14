@@ -108,14 +108,24 @@ private:
     // Result on completion. Logout stays synchronous (pure lease bookkeeping).
     void CertDer(sdbus::Result<std::vector<std::uint8_t>>&& result, sdbus::ObjectPath reader,
                  std::string certId) override;
+    // PublicKey answers an RSA key, EcPublicKey an EC key; each replies
+    // NotSupported for a key of the other kind (a client picks the method from
+    // Certificates1's keyType).
     void PublicKey(sdbus::Result<std::vector<std::uint8_t>, std::vector<std::uint8_t>>&& result,
                    sdbus::ObjectPath reader, std::string certId) override;
+    void EcPublicKey(sdbus::Result<std::string, std::vector<std::uint8_t>, std::vector<std::uint8_t>>&& result,
+                     sdbus::ObjectPath reader, std::string certId) override;
     void Login(sdbus::Result<std::uint32_t>&& result, sdbus::ObjectPath reader) override;
     void Logout(const sdbus::ObjectPath& reader) override;
+    // SignRaw and Decrypt run exactly the mechanism @p mech names; a token this
+    // surface does not know is refused with InvalidRequest before the broker.
     void SignRaw(sdbus::Result<std::vector<std::uint8_t>>&& result, sdbus::ObjectPath reader, std::string certId,
-                 std::vector<std::uint8_t> input) override;
+                 std::string mech, std::vector<std::uint8_t> input) override;
     void Decrypt(sdbus::Result<std::vector<std::uint8_t>>&& result, sdbus::ObjectPath reader, std::string certId,
-                 std::vector<std::uint8_t> ciphertext) override;
+                 std::string mech, std::vector<std::uint8_t> ciphertext) override;
+    // ECDH (CKD_NULL) with the key against the caller's point: the raw secret.
+    void Derive(sdbus::Result<std::vector<std::uint8_t>>&& result, sdbus::ObjectPath reader, std::string certId,
+                std::vector<std::uint8_t> point) override;
 
     // Requesting client's unique D-Bus name from the in-flight message (reuse-
     // immune polkit-subject handle); empty on failure.

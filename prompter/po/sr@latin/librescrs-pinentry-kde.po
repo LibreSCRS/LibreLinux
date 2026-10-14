@@ -5,7 +5,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: librescrs-pinentry-kde\n"
 "Report-Msgid-Bugs-To: https://librescrs.github.io/\n"
-"POT-Creation-Date: 2026-08-16 09:05+0200\n"
+"POT-Creation-Date: 2026-10-14 22:14+0200\n"
 "PO-Revision-Date: 2026-07-19\n"
 "Last-Translator: hirashix0\n"
 "Language-Team: Serbian\n"
@@ -28,55 +28,61 @@ msgctxt "@item generic PIN role name"
 msgid "PIN"
 msgstr "PIN"
 
-#: prompter/src/ChangePinInputWidget.cpp:57
+#: prompter/src/ChangePinInputWidget.cpp:60
 #, kde-format
 msgctxt "@label:textbox current PIN entry field"
 msgid "Current %1:"
 msgstr "Trenutni %1:"
 
-#: prompter/src/ChangePinInputWidget.cpp:59
+#: prompter/src/ChangePinInputWidget.cpp:62
 #, kde-format
 msgctxt "@label:textbox new PIN entry field"
 msgid "New %1:"
 msgstr "Novi %1:"
 
-#: prompter/src/ChangePinInputWidget.cpp:60
+#: prompter/src/ChangePinInputWidget.cpp:64
 #, kde-format
 msgctxt "@label:textbox new PIN confirmation field"
 msgid "Confirm new %1:"
 msgstr "Potvrdi novi %1:"
 
-#: prompter/src/ChangePinInputWidget.cpp:67
+#: prompter/src/ChangePinInputWidget.cpp:76
 #, kde-format
 msgctxt "@info:status inline error under the confirmation field"
 msgid "The confirmation does not match the new %1."
 msgstr "Potvrda se ne poklapa sa novim %1."
 
-#: prompter/src/main.cpp:53
+#: prompter/src/main.cpp:63
 #, kde-format
 msgctxt "@title application name"
 msgid "LibreSCRS Pinentry"
 msgstr "LibreSCRS unos PIN-a"
 
-#: prompter/src/main.cpp:55
+#: prompter/src/main.cpp:65
 #, kde-format
 msgctxt "@info:tooltip short description"
 msgid "Secure-input prompter for the LibreSCRS smart-card agent."
 msgstr "Bezbedan unos za LibreSCRS agenta pametnih kartica."
 
-#: prompter/src/MrzInputWidget.cpp:110
+#: prompter/src/MrzInputWidget.cpp:103
+#, kde-format
+msgctxt "@info:placeholder unset date entry"
+msgid "select date"
+msgstr "izaberite datum"
+
+#: prompter/src/MrzInputWidget.cpp:123
 #, kde-format
 msgctxt "@label:textbox MRZ document number, without its check digit"
 msgid "Document number:"
 msgstr "Broj dokumenta:"
 
-#: prompter/src/MrzInputWidget.cpp:114
+#: prompter/src/MrzInputWidget.cpp:125
 #, kde-format
 msgctxt "@label MRZ date of birth, calendar entry"
 msgid "Date of birth:"
 msgstr "Datum rođenja:"
 
-#: prompter/src/MrzInputWidget.cpp:116
+#: prompter/src/MrzInputWidget.cpp:127
 #, kde-format
 msgctxt "@label MRZ date of expiry, calendar entry"
 msgid "Date of expiry:"
@@ -88,7 +94,7 @@ msgctxt "@label:textbox PIN entry field"
 msgid "PIN:"
 msgstr "PIN:"
 
-#: prompter/src/PromptDialog.cpp:69
+#: prompter/src/PromptDialog.cpp:91
 #, kde-format
 msgctxt ""
 "@info:status inline error shown above a re-prompt after the card rejected "
@@ -96,26 +102,28 @@ msgctxt ""
 msgid "The value you entered was not accepted. Please try again."
 msgstr "Uneta vrednost nije prihvaćena. Pokušajte ponovo."
 
-#: prompter/src/PromptDialog.cpp:72
+#: prompter/src/PromptDialog.cpp:94
 #, kde-format
 msgctxt "@info:status generic inline error shown above a credential re-prompt"
 msgid "Your previous entry was not accepted. Please try again."
 msgstr "Vaš prethodni unos nije prihvaćen. Pokušajte ponovo."
 
-#: prompter/src/PromptDialog.cpp:85
+#: prompter/src/PromptDialog.cpp:107
 #, kde-format
 msgctxt "@info line naming the credential the visible entry form takes"
 msgid "Enter the card access number (CAN) printed on the document."
 msgstr "Unesite broj za pristup kartici (CAN) odštampan na dokumentu."
 
-#: prompter/src/PromptDialog.cpp:88
+#: prompter/src/PromptDialog.cpp:110
 #, kde-format
 msgctxt "@info line naming the credential the visible entry form takes"
 msgid ""
 "Enter the document details exactly as printed in the machine-readable zone."
-msgstr "Unesite podatke o dokumentu tačno onako kako su odštampani u mašinski čitljivoj zoni."
+msgstr ""
+"Unesite podatke o dokumentu tačno onako kako su odštampani u mašinski "
+"čitljivoj zoni."
 
-#: prompter/src/PromptDialog.cpp:102
+#: prompter/src/PromptDialog.cpp:124
 #, kde-format
 msgctxt ""
 "@action:button switch the credential prompt back to the card access number "
@@ -123,7 +131,7 @@ msgctxt ""
 msgid "Use card access number (CAN) instead"
 msgstr "Pređi na broj za pristup kartici (CAN)"
 
-#: prompter/src/PromptDialog.cpp:105
+#: prompter/src/PromptDialog.cpp:127
 #, kde-format
 msgctxt ""
 "@action:button switch the credential prompt to the passport machine-readable "
@@ -131,147 +139,146 @@ msgctxt ""
 msgid "Use passport MRZ instead"
 msgstr "Pređi na mašinski čitljivu zonu pasoša"
 
-#: prompter/src/PromptDialog.cpp:112
+#: prompter/src/PromptDialog.cpp:134
 #, kde-format
 msgctxt "@title:window PIN entry dialog"
 msgid "Enter PIN"
 msgstr "Unesite PIN"
 
-#: prompter/src/PromptDialog.cpp:114
+#: prompter/src/PromptDialog.cpp:136
 #, kde-format
 msgctxt "@title:window CAN entry dialog"
 msgid "Enter Card Access Number"
 msgstr "Unesite broj za pristup kartici"
 
-#: prompter/src/PromptDialog.cpp:116
+#: prompter/src/PromptDialog.cpp:138
 #, kde-format
 msgctxt "@title:window MRZ entry dialog"
 msgid "Enter Machine-Readable Zone"
 msgstr "Unesite mašinski čitljivu zonu"
 
-#: prompter/src/PromptDialog.cpp:118
+#: prompter/src/PromptDialog.cpp:140
 #, kde-format
 msgctxt "@title:window PIN change dialog"
 msgid "Change PIN"
 msgstr "Promeni PIN"
 
-#: prompter/src/PromptDialog.cpp:120
+#: prompter/src/PromptDialog.cpp:142
 #, kde-format
 msgctxt "@title:window generic credential entry"
 msgid "Enter Credentials"
 msgstr "Unesite pristupne podatke"
 
-#: prompter/src/PromptDialog.cpp:214
-#, kde-format
-msgctxt "@info list of documents included in a batch signing request"
-msgid "Documents: %1"
-msgstr "Dokumenti: %1"
-
-#: prompter/src/PromptDialog.cpp:223
-#, kde-format
-msgctxt "@info card identity label"
-msgid "Card: %1"
-msgstr "Kartica: %1"
-
-#: prompter/src/PromptDialog.cpp:238
-#, kde-format
-msgctxt "@title:group framed area for application-supplied request details"
-msgid "Requested by an application"
-msgstr "Zahtevala aplikacija"
-
-#: prompter/src/PromptDialog.cpp:245
-#, kde-format
-msgctxt "@info requester identity label"
-msgid "Requested by: %1"
-msgstr "Podnosilac zahteva: %1"
-
-#: prompter/src/PromptDialog.cpp:248
-#, kde-format
-msgctxt "@info artifact label"
-msgid "Artifact: %1"
-msgstr "Predmet: %1"
-
-#: prompter/src/PromptDialog.cpp:150
-#, kde-format
-msgctxt "@info consented operation"
-msgid "Reading identity data"
-msgstr "Čitanje ličnih podataka"
-
-#: prompter/src/PromptDialog.cpp:152
-#, kde-format
-msgctxt "@info consented operation"
-msgid "Reading the photograph"
-msgstr "Čitanje fotografije"
-
-#: prompter/src/PromptDialog.cpp:154
-#, kde-format
-msgctxt "@info consented operation"
-msgid "Reading certificates"
-msgstr "Čitanje sertifikata"
-
-#: prompter/src/PromptDialog.cpp:156
-#, kde-format
-msgctxt "@info consented operation"
-msgid "Reading token information"
-msgstr "Čitanje podataka o tokenu"
-
-#: prompter/src/PromptDialog.cpp:158
-#, kde-format
-msgctxt "@info consented operation"
-msgid "Reading PIN status"
-msgstr "Čitanje stanja PIN-a"
-
-#: prompter/src/PromptDialog.cpp:160
-#, kde-format
-msgctxt "@info consented operation"
-msgid "Signing a document"
-msgstr "Potpisivanje dokumenta"
-
-#: prompter/src/PromptDialog.cpp:162
-#, kde-format
-msgctxt "@info consented operation"
-msgid "Signing multiple documents"
-msgstr "Potpisivanje više dokumenata"
-
-#: prompter/src/PromptDialog.cpp:164
-#, kde-format
-msgctxt "@info consented operation"
-msgid "Cryptographic token operation"
-msgstr "Kriptografska operacija tokena"
-
-#: prompter/src/PromptDialog.cpp:255
-#, kde-format
-msgctxt "@info trusted operation label"
-msgid "Operation: %1"
-msgstr "Radnja: %1"
-
-#: prompter/src/MrzInputWidget.cpp:100
-#, kde-format
-msgctxt "@info:placeholder unset date entry"
-msgid "select date"
-msgstr "izaberite datum"
-
-#: prompter/src/PromptDialog.cpp:0
+#: prompter/src/PromptDialog.cpp:167
 #, kde-format
 msgctxt "@info which physical slot of a reader a prompt belongs to"
 msgid "contact"
 msgstr "kontaktni"
 
-#: prompter/src/PromptDialog.cpp:0
+#: prompter/src/PromptDialog.cpp:169
 #, kde-format
 msgctxt "@info which physical slot of a reader a prompt belongs to"
 msgid "contactless"
 msgstr "beskontaktni"
 
-#: prompter/src/PromptDialog.cpp:0
+#: prompter/src/PromptDialog.cpp:195
+#, kde-format
+msgctxt "@info consented operation"
+msgid "Reading identity data"
+msgstr "Čitanje ličnih podataka"
+
+#: prompter/src/PromptDialog.cpp:197
+#, kde-format
+msgctxt "@info consented operation"
+msgid "Reading the photograph"
+msgstr "Čitanje fotografije"
+
+#: prompter/src/PromptDialog.cpp:199
+#, kde-format
+msgctxt "@info consented operation"
+msgid "Reading certificates"
+msgstr "Čitanje sertifikata"
+
+#: prompter/src/PromptDialog.cpp:201
+#, kde-format
+msgctxt "@info consented operation"
+msgid "Reading token information"
+msgstr "Čitanje podataka o tokenu"
+
+#: prompter/src/PromptDialog.cpp:203
+#, kde-format
+msgctxt "@info consented operation"
+msgid "Reading PIN status"
+msgstr "Čitanje stanja PIN-a"
+
+#: prompter/src/PromptDialog.cpp:205
+#, kde-format
+msgctxt "@info consented operation"
+msgid "Signing a document"
+msgstr "Potpisivanje dokumenta"
+
+#: prompter/src/PromptDialog.cpp:207
+#, kde-format
+msgctxt "@info consented operation"
+msgid "Signing multiple documents"
+msgstr "Potpisivanje više dokumenata"
+
+#: prompter/src/PromptDialog.cpp:209
+#, kde-format
+msgctxt "@info consented operation"
+msgid "Cryptographic token operation"
+msgstr "Kriptografska operacija tokena"
+
+#: prompter/src/PromptDialog.cpp:211
+#, kde-format
+msgctxt "@info consented operation"
+msgid "Key agreement with the card key"
+msgstr "Dogovaranje ključa ključem sa kartice"
+
+#: prompter/src/PromptDialog.cpp:304
+#, kde-format
+msgctxt "@info list of documents included in a batch signing request"
+msgid "Documents: %1"
+msgstr "Dokumenti: %1"
+
+#: prompter/src/PromptDialog.cpp:319
 #, kde-format
 msgctxt "@info which reader is asking for the credential"
 msgid "Reader: %1"
 msgstr "Čitač: %1"
 
-#: prompter/src/PromptDialog.cpp:0
+#: prompter/src/PromptDialog.cpp:342
 #, kde-format
 msgctxt "@action:button reveal the reader's full system name"
 msgid "Reader details"
 msgstr "Podaci o čitaču"
 
+#: prompter/src/PromptDialog.cpp:375
+#, kde-format
+msgctxt "@info card identity label"
+msgid "Card: %1"
+msgstr "Kartica: %1"
+
+#: prompter/src/PromptDialog.cpp:389
+#, kde-format
+msgctxt "@info trusted operation label"
+msgid "Operation: %1"
+msgstr "Radnja: %1"
+
+#: prompter/src/PromptDialog.cpp:406
+#, kde-format
+msgctxt "@title:group framed area for application-supplied request details"
+msgid "Requested by an application"
+msgstr "Zahtevala aplikacija"
+
+#: prompter/src/PromptDialog.cpp:413
+#, kde-format
+msgctxt "@info requester identity label"
+msgid "Requested by: %1"
+msgstr "Podnosilac zahteva: %1"
+
+#: prompter/src/PromptDialog.cpp:416
+#, kde-format
+msgctxt "@info artifact label"
+msgid "Artifact: %1"
+msgstr "Predmet: %1"

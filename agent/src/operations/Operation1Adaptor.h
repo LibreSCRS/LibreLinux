@@ -167,12 +167,14 @@ using Identity1Wire =
 // exactly Identity1Wire's mapped_type (the value half of one outer-map
 // entry) named on its own for the Group signal's signature.
 using Identity1GroupFieldsWire = Identity1Wire::mapped_type;
-// Certificates1: a(sba{sa{s(ssv)}}uasasub) — the (ssv) field tuple deliberately
+// Certificates1: a(sba{sa{s(ssv)}}uasasubaysub) — the (ssv) field tuple deliberately
 // drops Identity1's type string (the frozen field-key namespace carries it).
+// The last four members are the key facts: keyId, keyType, keyBits, canDerive.
 using Certificates1FieldTuple = sdbus::Struct<std::string, std::string, sdbus::Variant>;
 using Certificates1FieldMap = std::map<std::string, std::map<std::string, Certificates1FieldTuple>>;
 using Certificates1CertTuple = sdbus::Struct<std::string, bool, Certificates1FieldMap, std::uint32_t,
-                                             std::vector<std::string>, std::vector<std::string>, std::uint32_t, bool>;
+                                             std::vector<std::string>, std::vector<std::string>, std::uint32_t, bool,
+                                             std::vector<std::uint8_t>, std::string, std::uint32_t, bool>;
 using Certificates1Wire = std::vector<Certificates1CertTuple>;
 
 // Marshal an agent-side snapshot into the frozen wire shape. Shared by the

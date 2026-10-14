@@ -3,18 +3,20 @@
  "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
 <!--
   Low-level PKCS#11 broker surface, hosted ONCE on /org/librescrs/Agent (the
-  manager path). Distinct from the high-level Card1.Sign (AdES) path: this is the
-  raw RSA primitive the PKCS#11 module (librescrs-pkcs11-agent.so) consumes.
+  manager path). Distinct from the high-level Card1.Sign (AdES) path: these are
+  the raw key primitives (RSA sign/decrypt, ECDSA, ECDH) the PKCS#11 module
+  (librescrs-pkcs11-agent.so) consumes.
 
   All methods take a 'reader' object path (an exported Reader1) + 'certId' (a
   Certificates1 certId, == sha256hex of the cert DER) to address the exact card +
-  key. The caller is resolved via pidfd peer creds (CallerIdentity); SignRaw and
-  Decrypt are polkit-gated (org.librescrs.agent.pkcs11.login) and lease-scoped.
-  PIN/CAN are NEVER passed here — they are collected by the agent prompter
-  (CKF_PROTECTED_AUTHENTICATION_PATH on the module side).
+  key. The caller is resolved via pidfd peer creds (CallerIdentity); SignRaw,
+  Decrypt and Derive are polkit-gated (org.librescrs.agent.pkcs11.login) and
+  lease-scoped. PIN/CAN are NEVER passed here — they are collected by the agent
+  prompter (CKF_PROTECTED_AUTHENTICATION_PATH on the module side).
 
-  ASYNC HANDOFF: every card-touching method (CertDer, PublicKey, Login, SignRaw,
-  Decrypt) is annotated org.freedesktop.DBus.Method.Async="server". The agent
+  ASYNC HANDOFF: every card-touching method (CertDer, PublicKey, EcPublicKey,
+  Login, SignRaw, Decrypt, Derive) is annotated
+  org.freedesktop.DBus.Method.Async="server". The agent
   validates on the bus-dispatch thread (cheap: authz / lease / card-resolve),
   then hands the actual card I/O to the per-reader worker thread and RELEASES the
   dispatch thread immediately — the worker fulfils the deferred reply on
@@ -23,19 +25,29 @@
   or a stuck op), instead of parking it on a blocking worker wait. Logout is the
   only synchronous method here: it is pure lease bookkeeping and touches no card.
 
-  CertDer:   return the cert DER for certId (public data; no consent, no lease).
-  PublicKey: return the RSA public key (modulus + public exponent) for certId,
-             extracted from the cert's SubjectPublicKeyInfo (public data; the
-             crypto-free module serves CKA_MODULUS / CKA_PUBLIC_EXPONENT from
-             these, which ssh-pkcs11 needs to build the public key).
-  SignRaw:   RSA PKCS#1 v1.5 sign over the supplied DigestInfo-or-raw bytes.
-  Decrypt:   RSA PKCS#1 v1.5 decrypt of an RSA block.
+  CertDer:     return the cert DER for certId (public data; no consent, no lease).
+  PublicKey:   return the RSA public key (modulus + public exponent) for certId,
+               extracted from the cert's SubjectPublicKeyInfo (public data; the
+               crypto-free module serves CKA_MODULUS / CKA_PUBLIC_EXPONENT from
+               these, which ssh-pkcs11 needs to build the public key).
+  EcPublicKey: return the EC point (curve name, x, y) of certId's key on a NIST
+               curve (public data; the module serves CKA_EC_PARAMS /
+               CKA_EC_POINT from these).
+  SignRaw:     sign with the key, by the mechanism the caller names (RSA PKCS#1
+               v1.5 over a complete block or a raw message, or ECDSA over a
+               digest).
+  Decrypt:     RSA PKCS#1 v1.5 decrypt of an RSA block.
+  Derive:      ECDH with the key against the caller's point: the raw secret.
 
   Errors (no result): Error.UnknownCard, Error.KeyNotFound, Error.NotAuthorized,
   Error.UserNotLoggedIn (lease expired/absent → module maps to
-  CKR_USER_NOT_LOGGED_IN), Error.AuthFailed, Error.RateLimited (SignRaw/Decrypt:
-  the cold-lease first-op PIN-prompt rate limit tripped → module maps to
-  CKR_FUNCTION_REJECTED), Error.CommunicationError.
+  CKR_USER_NOT_LOGGED_IN), Error.AuthFailed, Error.RateLimited (SignRaw/Decrypt/
+  Derive: the cold-lease first-op PIN-prompt rate limit tripped → module maps to
+  CKR_FUNCTION_REJECTED), Error.NotSupported (a method of the other key family,
+  a mechanism this surface does not run), Error.InvalidRequest (a request the
+  key refuses before any PIN prompt: an unknown mechanism token, a mechanism of
+  the other family for the key, an input of the wrong length, a peer point off
+  the key's curve), Error.CommunicationError.
 -->
 <node>
   <interface name="org.librescrs.Agent.Pkcs11_1">
@@ -62,10 +74,25 @@
       <arg name="exponent" type="ay" direction="out"/>
     </method>
 
+    <!-- EcPublicKey: the EC point of the certificate's key on a NIST curve.
+         crv is "P-256", "P-384" or "P-521"; x and y are each ceil(bits/8)
+         bytes, left-padded. Public data: no consent, no lease.
+         Error.KeyNotFound for no such certificate, Error.NotSupported for a key
+         that is not EC on a NIST curve. A client knows which method to call
+         from Certificates1's keyType. -->
+    <method name="EcPublicKey">
+      <annotation name="org.freedesktop.DBus.Method.Async" value="server"/>
+      <arg name="reader" type="o"  direction="in"/>
+      <arg name="certId" type="s"  direction="in"/>
+      <arg name="crv"    type="s"  direction="out"/>
+      <arg name="x"      type="ay" direction="out"/>
+      <arg name="y"      type="ay" direction="out"/>
+    </method>
+
     <!-- Establish/refresh the login lease for (caller, card). Optimistic and
          NON-prompting: it only opens the card channel — the agent prompter
-         (PIN, and CAN if PACE) is raised on the first SignRaw/Decrypt of a
-         cold lease, not here. Returns the lease's idle-timeout seconds so the
+         (PIN, and CAN if PACE) is raised on the first SignRaw/Decrypt/Derive
+         of a cold lease, not here. Returns the lease's idle-timeout seconds so the
          module can mirror it. The lease is (caller, card)-scoped, not per-cert
          (C_Login is per-token), so no certId is taken. -->
     <method name="Login">
@@ -79,26 +106,52 @@
       <arg name="reader" type="o" direction="in"/>
     </method>
 
-    <!-- Raw RSA PKCS#1 v1.5 sign. 'input' is the already-DigestInfo-prefixed
-         bytes the module built (CKM_RSA_PKCS: caller-supplied block;
-         CKM_SHAxxx_RSA_PKCS: module prepends the DigestInfo). Requires a live
-         lease; else Error.UserNotLoggedIn. -->
+    <!-- Raw sign with the key, by the mechanism the caller names. mech:
+         "rsa-pkcs" (a complete PKCS#1 v1.5 block the caller built, CKM_RSA_PKCS),
+         "sha256-rsa-pkcs" (the raw message, hashed on the card,
+         CKM_SHA256_RSA_PKCS) or "ecdsa" (the digest, answered r||s,
+         CKM_ECDSA). The agent runs exactly the mechanism named and checks it
+         against the key before any PIN prompt. An unknown token, a mechanism of
+         the other family for the key, an input of the wrong length ->
+         Error.InvalidRequest, before any PIN prompt. Requires a live lease;
+         else Error.UserNotLoggedIn. -->
     <method name="SignRaw">
       <annotation name="org.freedesktop.DBus.Method.Async" value="server"/>
       <arg name="reader"    type="o"  direction="in"/>
       <arg name="certId"    type="s"  direction="in"/>
+      <arg name="mech"      type="s"  direction="in"/>
       <arg name="input"     type="ay" direction="in"/>
       <arg name="signature" type="ay" direction="out"/>
     </method>
 
-    <!-- Raw RSA PKCS#1 v1.5 decrypt. 'ciphertext' is the RSA block; returns the
-         recovered plaintext. Requires a live lease. Every call audited. -->
+    <!-- Raw decrypt of an RSA block, by the mechanism the caller names. mech:
+         "rsa-pkcs" only (PKCS#1 v1.5, CKM_RSA_PKCS); 'ciphertext' is the RSA
+         block; returns the recovered plaintext. An unknown token, a mechanism
+         of the other family for the key, an input of the wrong length ->
+         Error.InvalidRequest, before any PIN prompt. Requires a live lease.
+         Every call audited. -->
     <method name="Decrypt">
       <annotation name="org.freedesktop.DBus.Method.Async" value="server"/>
       <arg name="reader"     type="o"  direction="in"/>
       <arg name="certId"     type="s"  direction="in"/>
+      <arg name="mech"       type="s"  direction="in"/>
       <arg name="ciphertext" type="ay" direction="in"/>
       <arg name="plaintext"  type="ay" direction="out"/>
+    </method>
+
+    <!-- Derive: ECDH with the card's key against the peer's uncompressed point
+         (04||X||Y on the key's curve), CKD_NULL: the raw secret z. Lease-gated
+         and PIN-as-consent like SignRaw (the same Login, the same lease); a key
+         the card marks for consent per operation asks for the PIN every time.
+         Error.InvalidRequest for a point of the wrong size, not uncompressed or
+         not on the key's curve, or a key the agent does not derive with,
+         decided before any PIN prompt; otherwise the errors of SignRaw. -->
+    <method name="Derive">
+      <annotation name="org.freedesktop.DBus.Method.Async" value="server"/>
+      <arg name="reader" type="o"  direction="in"/>
+      <arg name="certId" type="s"  direction="in"/>
+      <arg name="point"  type="ay" direction="in"/>
+      <arg name="z"      type="ay" direction="out"/>
     </method>
   </interface>
 </node>

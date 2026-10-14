@@ -77,6 +77,23 @@ TEST(PromptDialogClientChrome, KnownArtifactAloneShowsTrustedOperationWithoutGro
     EXPECT_EQ(operation->textFormat(), Qt::PlainText);
 }
 
+// The agent's key-agreement prompt is its own trusted operation line, never a
+// client-supplied artifact.
+TEST(PromptDialogClientChrome, AKeyAgreementIsNamedAsSuch)
+{
+    int argc = 1;
+    const char* argv[] = {"chrome-test"};
+    QApplication app(argc, const_cast<char**>(argv));
+
+    PromptDialog dlg(PromptDialog::Kind::Pin, optsWith(QString{}, QStringLiteral("pkcs11-derive")), nullptr);
+
+    EXPECT_EQ(dlg.findChild<QGroupBox*>(QStringLiteral("clientSuppliedGroup")), nullptr)
+        << "an agent-minted token is not client-supplied";
+    auto* operation = dlg.findChild<QLabel*>(QStringLiteral("operationLabel"));
+    ASSERT_NE(operation, nullptr);
+    EXPECT_TRUE(operation->text().contains(QStringLiteral("Key agreement with the card key")));
+}
+
 TEST(PromptDialogClientChrome, UnknownArtifactStaysFramedAndInert)
 {
     int argc = 1;

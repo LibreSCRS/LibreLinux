@@ -3,6 +3,7 @@
 #include "operations/Operation1Adaptor.h"
 
 #include "AgentInterfaceNames.h" // shared service/path/interface names
+#include <LibreSCRS/Agent/KeyType.h>
 #include <LibreSCRS/Agent/value/CardReadSnapshot.h>
 #include <LibreSCRS/Agent/value/CertSnapshot.h>
 #include <LibreSCRS/Agent/backend/Logging.h>
@@ -166,7 +167,8 @@ Certificates1Wire buildCertificates1Wire(const std::vector<CertSnapshot>& certs)
             }
         }
         wire.emplace_back(c.certId, c.signingCapable, std::move(fields), c.keyUsageBits, c.ekuOids, c.chainSubjectCns,
-                          c.trustStatus, c.alwaysAuthenticate);
+                          c.trustStatus, c.alwaysAuthenticate, c.keyId,
+                          std::string{LibreSCRS::Agent::keyTypeToken(c.keyType)}, c.keyBits, c.canDerive);
     }
     return wire;
 }

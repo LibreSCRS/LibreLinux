@@ -207,6 +207,8 @@ QString operationText(const QString& artifactToken)
         return i18nc("@info consented operation", "Signing multiple documents");
     if (artifactToken == QLatin1String("pkcs11"))
         return i18nc("@info consented operation", "Cryptographic token operation");
+    if (artifactToken == QLatin1String("pkcs11-derive"))
+        return i18nc("@info consented operation", "Key agreement with the card key");
     return {};
 }
 

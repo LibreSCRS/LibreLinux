@@ -11,6 +11,7 @@
 #include "dbus/Pkcs11OutcomeNames.h"
 #include <LibreSCRS/Agent/operations/LmSeams.h> // Operations::layoutVisualSignature/appearanceFontBytes
 #include <LibreSCRS/Agent/operations/RateLimiter.h>
+#include <LibreSCRS/Agent/operations/RsaPublicKey.h>    // Operations::RsaPublicKey / EcPublicKey
 #include <LibreSCRS/Agent/operations/SignatureParams.h> // isValidLayoutRect
 #include <LibreSCRS/Agent/pkcs11/Pkcs11Broker.h>
 #include <LibreSCRS/Agent/Reply.h>
@@ -30,8 +31,10 @@
 #include <exception>
 #include <memory>
 #include <optional>
+#include <string>
 #include <tuple>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace LibreSCRS::Agent {
@@ -455,6 +458,28 @@ Reply<Outcome, Results...> deferReply(sdbus::Result<Results...>&& result, Outcom
         fallback};
 }
 
+// A deferred reply whose broker value is converted into the method's own
+// results. @p convert answers false when the key is not the kind this method
+// serves; the caller then gets NotSupported. The value reaches @p convert by
+// reference and is serialised straight into the reply: no copy is taken here.
+template <typename Value, typename Convert, typename... Results>
+Reply<Pkcs11Broker::CryptoOutcome, Value> deferConvertedReply(sdbus::Result<Results...>&& result, Convert convert)
+{
+    auto shared = std::make_shared<sdbus::Result<Results...>>(std::move(result));
+    return Reply<Pkcs11Broker::CryptoOutcome, Value>{
+        [shared, convert](const Value& value) {
+            if (!convert(value, *shared)) {
+                shared->returnError(
+                    sdbus::Error{sdbus::Error::Name{errorNameFor(Pkcs11Broker::CryptoOutcome::NotSupported)},
+                                 "key of another kind"});
+            }
+        },
+        [shared](Pkcs11Broker::CryptoOutcome oc) {
+            shared->returnError(sdbus::Error{sdbus::Error::Name{errorNameFor(oc)}, "pkcs11 operation failed"});
+        },
+        Pkcs11Broker::CryptoOutcome::CardError};
+}
+
 // A null-m_pkcs11 (conformance tests) fails the deferred reply immediately.
 template <typename... Results>
 void failNoPkcs11(sdbus::Result<Results...>&& result)
@@ -485,7 +510,35 @@ void ManagerObject::PublicKey(sdbus::Result<std::vector<std::uint8_t>, std::vect
         return;
     }
     m_pkcs11->publicKey(reader, certId, resolveCaller(callerBusName(), callerLabel()),
-                        deferReply(std::move(result), Pkcs11Broker::CryptoOutcome::CardError));
+                        deferConvertedReply<Pkcs11Broker::PublicKey>(
+                            std::move(result), [](const Pkcs11Broker::PublicKey& key, auto& r) {
+                                const auto* rsa = std::get_if<Operations::RsaPublicKey>(&key);
+                                if (rsa == nullptr) {
+                                    return false;
+                                }
+                                r.returnResults(rsa->modulus, rsa->exponent);
+                                return true;
+                            }));
+}
+
+void ManagerObject::EcPublicKey(
+    sdbus::Result<std::string, std::vector<std::uint8_t>, std::vector<std::uint8_t>>&& result, sdbus::ObjectPath reader,
+    std::string certId)
+{
+    if (!m_pkcs11) {
+        failNoPkcs11(std::move(result));
+        return;
+    }
+    m_pkcs11->publicKey(reader, certId, resolveCaller(callerBusName(), callerLabel()),
+                        deferConvertedReply<Pkcs11Broker::PublicKey>(
+                            std::move(result), [](const Pkcs11Broker::PublicKey& key, auto& r) {
+                                const auto* ec = std::get_if<Operations::EcPublicKey>(&key);
+                                if (ec == nullptr) {
+                                    return false;
+                                }
+                                r.returnResults(ec->crv, ec->x, ec->y);
+                                return true;
+                            }));
 }
 
 void ManagerObject::Login(sdbus::Result<std::uint32_t>&& result, sdbus::ObjectPath reader)
@@ -507,27 +560,55 @@ void ManagerObject::Logout(const sdbus::ObjectPath& reader)
 }
 
 void ManagerObject::SignRaw(sdbus::Result<std::vector<std::uint8_t>>&& result, sdbus::ObjectPath reader,
-                            std::string certId, std::vector<std::uint8_t> input)
+                            std::string certId, std::string mech, std::vector<std::uint8_t> input)
 {
+    // The caller's exact mechanism; an unknown token is refused before anything
+    // else, broker or card.
+    const auto mechanism = signMechanismFromToken(mech);
+    if (!mechanism) {
+        result.returnError(sdbus::Error{sdbus::Error::Name{kErrInvalidRequest}, "unknown mechanism: " + mech});
+        return;
+    }
     if (!m_pkcs11) {
         failNoPkcs11(std::move(result));
         return;
     }
-    m_pkcs11->signRaw(reader, certId, Mechanism::RsaPkcs1Sign, MechParamsEmpty{}, input,
+    m_pkcs11->signRaw(reader, certId, *mechanism, MechParamsEmpty{}, input,
                       resolveCaller(callerBusName(), callerLabel()),
                       deferReply(std::move(result), Pkcs11Broker::CryptoOutcome::CardError));
 }
 
 void ManagerObject::Decrypt(sdbus::Result<std::vector<std::uint8_t>>&& result, sdbus::ObjectPath reader,
-                            std::string certId, std::vector<std::uint8_t> ciphertext)
+                            std::string certId, std::string mech, std::vector<std::uint8_t> ciphertext)
+{
+    // The caller's exact mechanism; an unknown token is refused before anything
+    // else, broker or card.
+    const auto mechanism = decryptMechanismFromToken(mech);
+    if (!mechanism) {
+        result.returnError(sdbus::Error{sdbus::Error::Name{kErrInvalidRequest}, "unknown mechanism: " + mech});
+        return;
+    }
+    if (!m_pkcs11) {
+        failNoPkcs11(std::move(result));
+        return;
+    }
+    m_pkcs11->decrypt(reader, certId, *mechanism, MechParamsEmpty{}, ciphertext,
+                      resolveCaller(callerBusName(), callerLabel()),
+                      deferReply(std::move(result), Pkcs11Broker::CryptoOutcome::CardError));
+}
+
+void ManagerObject::Derive(sdbus::Result<std::vector<std::uint8_t>>&& result, sdbus::ObjectPath reader,
+                           std::string certId, std::vector<std::uint8_t> point)
 {
     if (!m_pkcs11) {
         failNoPkcs11(std::move(result));
         return;
     }
-    m_pkcs11->decrypt(reader, certId, Mechanism::RsaPkcs1Decrypt, MechParamsEmpty{}, ciphertext,
-                      resolveCaller(callerBusName(), callerLabel()),
-                      deferReply(std::move(result), Pkcs11Broker::CryptoOutcome::CardError));
+    // ECDH with CKD_NULL and no shared data: the raw secret, the only derivation this surface runs.
+    m_pkcs11->derive(reader, certId,
+                     MechParamsEcdh{.peerPublicPoint = std::move(point), .kdf = kEcdhKdfNull, .sharedData = {}},
+                     resolveCaller(callerBusName(), callerLabel()),
+                     deferReply(std::move(result), Pkcs11Broker::CryptoOutcome::CardError));
 }
 
 void ManagerObject::SetValue(const std::string& key, const sdbus::Variant& value)

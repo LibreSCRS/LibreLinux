@@ -25,6 +25,8 @@ const char* errorNameFor(Pkcs11Broker::CryptoOutcome outcome) noexcept
         return LibreLinux::AgentWire::kErrUserNotLoggedIn;
     case CO::RateLimited:
         return LibreLinux::AgentWire::kErrRateLimited;
+    case CO::InvalidInput:
+        return LibreLinux::AgentWire::kErrInvalidRequest;
     case CO::Ok:
         break; // Ok is not an error; fail closed to the device (communication) error.
     }

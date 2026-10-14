@@ -7,6 +7,7 @@
 // each value so a future enum edit that silently drops or renames a wire name
 // fails here rather than degrading a client to a generic error.
 #include "dbus/Pkcs11OutcomeNames.h"
+#include "AgentErrorNames.h" // shared wire error-name table
 #include <LibreSCRS/Agent/pkcs11/Pkcs11Broker.h>
 #include <gtest/gtest.h>
 
@@ -25,6 +26,12 @@ TEST(Pkcs11OutcomeNames, CryptoOutcomeMapsToWireNames)
     EXPECT_STREQ(errorNameFor(CO::CardError), "org.librescrs.Agent.Error.CommunicationError");
     // Ok is not an error; it fails closed to the device (communication) error.
     EXPECT_STREQ(errorNameFor(CO::Ok), "org.librescrs.Agent.Error.CommunicationError");
+}
+
+// A request the key refuses before any prompt is the caller's: InvalidRequest.
+TEST(Pkcs11OutcomeNames, AnInvalidInputIsInvalidRequest)
+{
+    EXPECT_STREQ(errorNameFor(Pkcs11Broker::CryptoOutcome::InvalidInput), LibreLinux::AgentWire::kErrInvalidRequest);
 }
 
 TEST(Pkcs11OutcomeNames, LoginOutcomeMapsToWireNames)

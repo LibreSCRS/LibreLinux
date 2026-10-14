@@ -5,6 +5,7 @@
 // session bus (dbus-run-session) so registerAdaptor / unregisterAdaptor
 // exercise the real codepath but no agent infrastructure is needed.
 #include "operations/Operation1Adaptor.h"
+#include <LibreSCRS/Agent/KeyType.h>
 #include <LibreSCRS/Agent/OperationState.h> // relocated struct
 #include <LibreSCRS/Agent/value/CertSnapshot.h>
 #include "org.librescrs.Agent.Operation.Identity1_adaptor.h"
@@ -13,7 +14,9 @@
 #include <sdbus-c++/IConnection.h>
 
 #include <gtest/gtest.h>
+#include <cstdint>
 #include <memory>
+#include <vector>
 
 using LibreSCRS::Agent::Operations::Operation1Adaptor;
 using LibreSCRS::Agent::Operations::OperationState;
@@ -135,4 +138,25 @@ TEST(Operation1Adaptor, CertificatesWireCarriesTheConsentRuleLast)
     EXPECT_TRUE(wire[0].get<7>());
     EXPECT_TRUE(wire[1].get<1>());
     EXPECT_FALSE(wire[1].get<7>());
+}
+
+// The key facts are the struct's last four members, after the consent rule.
+// The entry's two booleans are opposite, so a consent rule written into
+// canDerive's place (or the reverse) is seen.
+TEST(Operation1Adaptor, CertificatesWireCarriesTheKeyFactsLast)
+{
+    LibreSCRS::Agent::CertSnapshot lk;
+    lk.certId = "lk";
+    lk.alwaysAuthenticate = false;
+    lk.keyId = {0xF7, 0x13};
+    lk.keyType = LibreSCRS::Agent::KeyType::Ec;
+    lk.keyBits = 384;
+    lk.canDerive = true;
+    const auto wire = LibreSCRS::Agent::Operations::buildCertificates1Wire({lk});
+    ASSERT_EQ(wire.size(), 1u);
+    EXPECT_FALSE(wire[0].get<7>());
+    EXPECT_EQ(wire[0].get<8>(), (std::vector<std::uint8_t>{0xF7, 0x13}));
+    EXPECT_EQ(wire[0].get<9>(), "EC");
+    EXPECT_EQ(wire[0].get<10>(), 384u);
+    EXPECT_TRUE(wire[0].get<11>());
 }

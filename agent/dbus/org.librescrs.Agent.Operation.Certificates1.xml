@@ -90,7 +90,14 @@
     b   alwaysAuthenticate  the card asks for the PIN before EVERY operation with
                         this certificate's key (PKCS#15 userConsent; PKCS#11
                         CKA_ALWAYS_AUTHENTICATE). The agent enforces it on every
-                        raw sign and decrypt itself; a client never decides on it.
+                        raw sign, decrypt and key agreement itself; a client
+                        never decides on it.
+    ay  keyId               the key's PKCS#11 CKA_ID: the card's own PKCS#15 iD,
+                        else one the agent computes from the public key. Never empty.
+    s   keyType             "RSA", "EC" (NIST P-256/P-384/P-521 only) or "OTHER".
+                        A client that does not know a token reads it as "OTHER".
+    u   keyBits             RSA modulus bits, or 256/384/521; 0 for "OTHER".
+    b   canDerive           the agent runs ECDH (Pkcs11_1.Derive) with this key.
 
   Late-subscriber recovery — GetResult():
     The Result signal is a one-shot: a client that learns the op path only
@@ -109,11 +116,11 @@
 <node>
   <interface name="org.librescrs.Agent.Operation.Certificates1">
     <signal name="Result">
-      <arg name="certificates" type="a(sba{sa{s(ssv)}}uasasub)"/>
+      <arg name="certificates" type="a(sba{sa{s(ssv)}}uasasubaysub)"/>
     </signal>
 
     <method name="GetResult">
-      <arg name="certificates" type="a(sba{sa{s(ssv)}}uasasub)" direction="out"/>
+      <arg name="certificates" type="a(sba{sa{s(ssv)}}uasasubaysub)" direction="out"/>
     </method>
   </interface>
 </node>
