@@ -128,11 +128,13 @@ private:
     makeCardResolver(const std::string& cardPath, const std::string& readerPath, const std::string& readerName);
     // Loop-thread sink: CREATE + export the Card1 object for @p cardPath with the
     // worker-resolved @p caps + @p preReadAuth + @p cardType (deferred publish). A
-    // no-op if the card was removed meanwhile; on a caps==0 resolve failure it
-    // retries a bounded number of times before exporting caps==0 as a last resort.
-    // Guarded by m_cardsMutex.
+    // no-op if the card was removed meanwhile; when the probe could not open the
+    // card (@p opened false) it retries a bounded number of times before
+    // exporting caps==0 as a last resort. A card no plugin serves is exported
+    // with caps==0 at once. Guarded by m_cardsMutex.
     void applyCardResolution(const std::string& cardPath, const std::string& readerPath, const std::string& readerName,
-                             std::uint32_t caps, const std::string& preReadAuth, const std::string& cardType);
+                             bool opened, std::uint32_t caps, const std::string& preReadAuth,
+                             const std::string& cardType);
     // Build the onCardTypeResolved callback CardOperationDeps carries into every
     // typed op this card spawns: value-captures cardPath + the transport's
     // loop-post sink (mirroring makeCardResolver's worker->loop marshal) so the
@@ -147,9 +149,9 @@ private:
 
     // Backpressure / resolve-retry reschedule delay for scheduleCardResolve.
     static constexpr std::chrono::milliseconds kResolveRetryDelay{50};
-    // Bounded retries when fullResolution() yields caps==0 (e.g. the session could
-    // not open): after this many failed attempts the card is exported with caps==0
-    // as a last resort so a card is never left unexported forever.
+    // Bounded retries when fullResolution() reports that the session could not
+    // open: after this many failed attempts the card is exported with caps==0 as
+    // a last resort so a card is never left unexported forever.
     static constexpr int kMaxResolveAttempts{3};
 
     BusExporter& m_transport;

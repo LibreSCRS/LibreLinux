@@ -169,7 +169,11 @@ std::function<void(Operations::CardSessionHolder&)> AgentFrontend::makeCardResol
     // without running — destroying that lambda does not touch the freed frontend.
     auto sink = m_transport.loopPostSink();
     return [this, sink, cardPath, readerPath, readerName](Operations::CardSessionHolder& holder) {
-        const auto resolution = holder.fullResolution();
+        const auto resolved = holder.fullResolution();
+        // An open that failed says nothing about the card, so the loop may ask
+        // again; a resolution, even an empty one, is the answer.
+        const bool opened = resolved.has_value();
+        const CapabilityResolver::CardResolution resolution = opened ? *resolved : CapabilityResolver::CardResolution{};
         const std::uint32_t caps = resolution.capabilities;
         const std::string wire{authMethodName(resolution.preReadAuth)};
         // Card1.CardType: arbitrated over the SAME held-session candidate list
@@ -181,8 +185,8 @@ std::function<void(Operations::CardSessionHolder&)> AgentFrontend::makeCardResol
         const std::string cardType = arbitrateCardType(resolution.candidates);
         // loopPostSink() always hands out a valid callable (it guards its own
         // captured poster internally), so the sink is dereferenced unconditionally.
-        sink(std::chrono::microseconds{0}, [this, cardPath, readerPath, readerName, caps, wire, cardType] {
-            applyCardResolution(cardPath, readerPath, readerName, caps, wire, cardType);
+        sink(std::chrono::microseconds{0}, [this, cardPath, readerPath, readerName, opened, caps, wire, cardType] {
+            applyCardResolution(cardPath, readerPath, readerName, opened, caps, wire, cardType);
         });
     };
 }
@@ -230,7 +234,7 @@ void AgentFrontend::rescheduleCardResolve(const std::string& cardPath, const std
 }
 
 void AgentFrontend::applyCardResolution(const std::string& cardPath, const std::string& readerPath,
-                                        const std::string& readerName, std::uint32_t caps,
+                                        const std::string& readerName, bool opened, std::uint32_t caps,
                                         const std::string& preReadAuth, const std::string& cardType)
 {
     // Event-loop thread (posted by the worker via the loop poster). This is the
@@ -245,9 +249,11 @@ void AgentFrontend::applyCardResolution(const std::string& cardPath, const std::
         auto it = m_pendingCards.find(cardPath);
         if (it == m_pendingCards.end()) {
             action = Action::Drop; // removed while resolving (or already claimed)
-        } else if (caps == 0 && it->second.resolveAttempts < kMaxResolveAttempts) {
-            // Transient resolve failure (e.g. the session could not open): retry a
-            // bounded number of times before giving up. Leave the card pending.
+        } else if (!opened && it->second.resolveAttempts < kMaxResolveAttempts) {
+            // The session could not open: retry a bounded number of times before
+            // giving up. Leave the card pending. A card no plugin serves is not
+            // retried -- that is an answer, and each repeat would connect to a
+            // card that belongs to someone else, probe it and let it go.
             ++it->second.resolveAttempts;
             action = Action::Retry;
         } else {
@@ -295,13 +301,16 @@ void AgentFrontend::applyCardResolution(const std::string& cardPath, const std::
     }
     log::infof("exported card {}", cardPath);
 
-    // Power hold: a card on the CONTACT slot of a dual-interface unit keeps its
-    // reader powered (a bare second session in the reader's worker, no secret,
-    // no traffic) so the same single-chip card's contactless twin stops flapping
-    // in and out of the CL slot. Classified from the exporter's presence roster,
-    // the same lookup the prompt dialog uses; a single-interface reader is never
-    // held. Released by AgentService's card-removed hook.
-    if (isContactSlotOfDualInterfaceUnit(m_transport.presenceRoster(), cardPath)) {
+    // Power hold: a card a plugin serves on the CONTACT slot of a
+    // dual-interface unit keeps its reader powered -- the reader's one session,
+    // parked with no secrets while no operation uses it -- so the same
+    // single-chip card's contactless twin stops flapping in and out of the CL
+    // slot. A card no plugin serves is not held: the probe has just let it go,
+    // and a hold would take the reader back for a card the agent cannot use.
+    // Classified from the exporter's presence roster, the same lookup the
+    // prompt dialog uses; a single-interface reader is never held. Released by
+    // AgentService's card-removed hook.
+    if (caps != 0 && isContactSlotOfDualInterfaceUnit(m_transport.presenceRoster(), cardPath)) {
         m_opManager.setReaderHold(objectIdFromPath(readerPath), true);
         log::infof("reader {}: holding the contact interface to quiet its contactless twin", readerName);
     }

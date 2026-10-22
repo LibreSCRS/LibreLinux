@@ -14,7 +14,7 @@ CallerAuthorizerTest 6
 CallerIdentityTest 2
 Card1MethodsXmlCodegenTest 1
 CardObjectOperationsTest 33
-CardOperationsIntegrationTest 11
+CardOperationsIntegrationTest 14
 CertResultWireSignatureTest 1
 Certificates1XmlCodegenTest 1
 Config1PropertyKeyMirrorTest 2
