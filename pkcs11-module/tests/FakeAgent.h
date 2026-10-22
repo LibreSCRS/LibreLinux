@@ -82,74 +82,87 @@ public:
         m_root = sdbus::createObject(conn, sdbus::ObjectPath{kRootPath});
         m_root->addObjectManager();
         m_root
-            ->addVTable(
-                sdbus::registerMethod("CertDer")
-                    .implementedAs([this](sdbus::ObjectPath, std::string) -> std::vector<std::uint8_t> {
-                        if (!m_certDerError.empty())
-                            throw sdbus::Error{sdbus::Error::Name{m_certDerError}, "certder err"};
-                        return kCannedDer;
-                    })
-                    .withInputParamNames("reader", "certId")
-                    .withOutputParamNames("der"),
-                sdbus::registerMethod("PublicKey")
-                    .implementedAs([this](sdbus::ObjectPath, std::string)
-                                       -> std::tuple<std::vector<std::uint8_t>, std::vector<std::uint8_t>> {
-                        if (!m_publicKeyError.empty())
-                            throw sdbus::Error{sdbus::Error::Name{m_publicKeyError}, "pubkey err"};
-                        return {cannedModulus(), kCannedExponent};
-                    })
-                    .withInputParamNames("reader", "certId")
-                    .withOutputParamNames("modulus", "exponent"),
-                sdbus::registerMethod("Login")
-                    .implementedAs([this](sdbus::ObjectPath) -> std::uint32_t {
-                        if (!m_loginError.empty())
-                            throw sdbus::Error{sdbus::Error::Name{m_loginError}, "login err"};
-                        return 600;
-                    })
-                    .withInputParamNames("reader")
-                    .withOutputParamNames("idleTimeoutSecs"),
-                sdbus::registerMethod("Logout").implementedAs([](sdbus::ObjectPath) {}).withInputParamNames("reader"),
-                sdbus::registerMethod("EcPublicKey")
-                    .implementedAs(
-                        [](sdbus::ObjectPath, std::string)
-                            -> std::tuple<std::string, std::vector<std::uint8_t>, std::vector<std::uint8_t>> {
-                            return {"P-384", std::vector<std::uint8_t>(48, 0x11), std::vector<std::uint8_t>(48, 0x22)};
-                        })
-                    .withInputParamNames("reader", "certId")
-                    .withOutputParamNames("crv", "x", "y"),
-                sdbus::registerMethod("SignRaw")
-                    .implementedAs([this](sdbus::ObjectPath, std::string, std::string mech,
-                                          std::vector<std::uint8_t> input) -> std::vector<std::uint8_t> {
-                        if (!m_signError.empty())
-                            throw sdbus::Error{sdbus::Error::Name{m_signError}, "sign err"};
-                        // Simulate a slow, human-paced on-card sign (PIN
-                        // prompt). The agent stays blocked here; the
-                        // module must NOT hold its global lock meanwhile.
-                        if (const auto d = m_signDelayMs.load(); d > 0)
-                            std::this_thread::sleep_for(std::chrono::milliseconds(d));
-                        m_lastSignMechanism = std::move(mech);
-                        m_lastSignInput = input;
-                        return kCannedSig;
-                    })
-                    .withInputParamNames("reader", "certId", "mech", "input")
-                    .withOutputParamNames("signature"),
-                sdbus::registerMethod("Decrypt")
-                    .implementedAs([this](sdbus::ObjectPath, std::string, std::string,
-                                          std::vector<std::uint8_t>) -> std::vector<std::uint8_t> {
-                        if (!m_decryptError.empty())
-                            throw sdbus::Error{sdbus::Error::Name{m_decryptError}, "dec err"};
-                        return kCannedPlain;
-                    })
-                    .withInputParamNames("reader", "certId", "mech", "ciphertext")
-                    .withOutputParamNames("plaintext"),
-                sdbus::registerMethod("Derive")
-                    .implementedAs([this](sdbus::ObjectPath, std::string, std::vector<std::uint8_t>) {
-                        if (!m_deriveError.empty())
-                            throw sdbus::Error{sdbus::Error::Name{m_deriveError}, "derive err"};
-                        return std::vector<std::uint8_t>(48, 0x5A);
-                    })
-                    .withInputParamNames("reader", "certId", "point")
-                    .withOutputParamNames("z"))
+            ->addVTable(sdbus::registerMethod("CertDer")
+                            .implementedAs([this](sdbus::ObjectPath, std::string) -> std::vector<std::uint8_t> {
+                                if (!m_certDerError.empty())
+                                    throw sdbus::Error{sdbus::Error::Name{m_certDerError}, "certder err"};
+                                return kCannedDer;
+                            })
+                            .withInputParamNames("reader", "certId")
+                            .withOutputParamNames("der"),
+                        sdbus::registerMethod("PublicKey")
+                            .implementedAs([this](sdbus::ObjectPath, std::string)
+                                               -> std::tuple<std::vector<std::uint8_t>, std::vector<std::uint8_t>> {
+                                if (!m_publicKeyError.empty())
+                                    throw sdbus::Error{sdbus::Error::Name{m_publicKeyError}, "pubkey err"};
+                                return {cannedModulus(), kCannedExponent};
+                            })
+                            .withInputParamNames("reader", "certId")
+                            .withOutputParamNames("modulus", "exponent"),
+                        sdbus::registerMethod("Login")
+                            .implementedAs([this](sdbus::ObjectPath) -> std::uint32_t {
+                                if (!m_loginError.empty())
+                                    throw sdbus::Error{sdbus::Error::Name{m_loginError}, "login err"};
+                                m_loggedIn = true;
+                                return 600;
+                            })
+                            .withInputParamNames("reader")
+                            .withOutputParamNames("idleTimeoutSecs"),
+                        sdbus::registerMethod("Logout")
+                            .implementedAs([this](sdbus::ObjectPath) { m_loggedIn = false; })
+                            .withInputParamNames("reader"),
+                        sdbus::registerMethod("LoginState")
+                            .implementedAs([this](sdbus::ObjectPath) -> bool {
+                                // What the bus answers for a method an older agent does not have.
+                                if (m_withoutLoginState)
+                                    throw sdbus::Error{sdbus::Error::Name{"org.freedesktop.DBus.Error.UnknownMethod"},
+                                                       "no such method"};
+                                return m_loggedIn;
+                            })
+                            .withInputParamNames("reader")
+                            .withOutputParamNames("active"),
+                        sdbus::registerMethod("EcPublicKey")
+                            .implementedAs(
+                                [](sdbus::ObjectPath, std::string)
+                                    -> std::tuple<std::string, std::vector<std::uint8_t>, std::vector<std::uint8_t>> {
+                                    return {"P-384", std::vector<std::uint8_t>(48, 0x11),
+                                            std::vector<std::uint8_t>(48, 0x22)};
+                                })
+                            .withInputParamNames("reader", "certId")
+                            .withOutputParamNames("crv", "x", "y"),
+                        sdbus::registerMethod("SignRaw")
+                            .implementedAs([this](sdbus::ObjectPath, std::string, std::string mech,
+                                                  std::vector<std::uint8_t> input) -> std::vector<std::uint8_t> {
+                                if (!m_signError.empty())
+                                    throw sdbus::Error{sdbus::Error::Name{m_signError}, "sign err"};
+                                // Simulate a slow, human-paced on-card sign (PIN
+                                // prompt). The agent stays blocked here; the
+                                // module must NOT hold its global lock meanwhile.
+                                if (const auto d = m_signDelayMs.load(); d > 0)
+                                    std::this_thread::sleep_for(std::chrono::milliseconds(d));
+                                m_lastSignMechanism = std::move(mech);
+                                m_lastSignInput = input;
+                                return kCannedSig;
+                            })
+                            .withInputParamNames("reader", "certId", "mech", "input")
+                            .withOutputParamNames("signature"),
+                        sdbus::registerMethod("Decrypt")
+                            .implementedAs([this](sdbus::ObjectPath, std::string, std::string,
+                                                  std::vector<std::uint8_t>) -> std::vector<std::uint8_t> {
+                                if (!m_decryptError.empty())
+                                    throw sdbus::Error{sdbus::Error::Name{m_decryptError}, "dec err"};
+                                return kCannedPlain;
+                            })
+                            .withInputParamNames("reader", "certId", "mech", "ciphertext")
+                            .withOutputParamNames("plaintext"),
+                        sdbus::registerMethod("Derive")
+                            .implementedAs([this](sdbus::ObjectPath, std::string, std::vector<std::uint8_t>) {
+                                if (!m_deriveError.empty())
+                                    throw sdbus::Error{sdbus::Error::Name{m_deriveError}, "derive err"};
+                                return std::vector<std::uint8_t>(48, 0x5A);
+                            })
+                            .withInputParamNames("reader", "certId", "point")
+                            .withOutputParamNames("z"))
             .forInterface(sdbus::InterfaceName{kPkcs11Iface});
 
         m_reader = sdbus::createObject(conn, sdbus::ObjectPath{kReader0});
@@ -254,6 +267,17 @@ public:
     {
         m_decryptError = name;
     }
+    // An agent from before Pkcs11_1.LoginState.
+    void serveWithoutLoginState()
+    {
+        m_withoutLoginState = true;
+    }
+    // End the login the way the agent does on its own (idle, lifetime).
+    void expireLogin()
+    {
+        m_loggedIn = false;
+    }
+
     void setLoginError(const std::string& name)
     {
         m_loginError = name;
@@ -345,6 +369,8 @@ private:
     std::string m_publicKeyError;
     std::string m_certDerError;
     std::atomic<int> m_signDelayMs{0};
+    std::atomic<bool> m_loggedIn{false};
+    std::atomic<bool> m_withoutLoginState{false};
     std::vector<std::uint8_t> m_lastSignInput;
     std::string m_lastSignMechanism;
 };

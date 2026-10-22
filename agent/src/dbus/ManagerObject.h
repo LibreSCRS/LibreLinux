@@ -105,7 +105,8 @@ private:
     // sdbus::Result into a Pkcs11Broker::Reply, and forwards to m_pkcs11, which
     // validates on this (the bus dispatch) thread then hands the card I/O to the
     // per-reader worker and RELEASES the dispatch thread — the worker fulfils the
-    // Result on completion. Logout stays synchronous (pure lease bookkeeping).
+    // Result on completion. Logout and LoginState stay synchronous (pure lease
+    // bookkeeping).
     void CertDer(sdbus::Result<std::vector<std::uint8_t>>&& result, sdbus::ObjectPath reader,
                  std::string certId) override;
     // PublicKey answers an RSA key, EcPublicKey an EC key; each replies
@@ -117,6 +118,7 @@ private:
                      sdbus::ObjectPath reader, std::string certId) override;
     void Login(sdbus::Result<std::uint32_t>&& result, sdbus::ObjectPath reader) override;
     void Logout(const sdbus::ObjectPath& reader) override;
+    bool LoginState(const sdbus::ObjectPath& reader) override;
     // SignRaw and Decrypt run exactly the mechanism @p mech names; a token this
     // surface does not know is refused with InvalidRequest before the broker.
     void SignRaw(sdbus::Result<std::vector<std::uint8_t>>&& result, sdbus::ObjectPath reader, std::string certId,

@@ -5,8 +5,8 @@
 // readers/cards via the agent's ObjectManager, drives the per-card
 // ReadCertificates operation to learn the certs + their keys' facts and
 // capabilities, and brokers the low-level Pkcs11_1 primitives (CertDer /
-// PublicKey / EcPublicKey / Login / Logout / SignRaw / Decrypt / Derive) over
-// the session bus.
+// PublicKey / EcPublicKey / Login / Logout / LoginState / SignRaw / Decrypt /
+// Derive) over the session bus.
 //
 // The agent's D-Bus error names are this transport's vocabulary and are mapped
 // to the interface's Status here, not in the interface.
@@ -18,6 +18,7 @@
 #include <LibreSCRS/Agent/pkcs11/AgentClient.h>
 
 #include <memory>
+#include <optional>
 
 namespace sdbus {
 class IConnection;
@@ -61,6 +62,7 @@ public:
     [[nodiscard]] LoginResult login(const std::string& reader) override;
 
     Status logout(const std::string& reader) override;
+    [[nodiscard]] std::optional<bool> loginActive(const std::string& reader) override;
 
     /// @brief Only a signing mechanism of this wire is ever sent; any other
     ///        answers NotSupported without reaching the agent.

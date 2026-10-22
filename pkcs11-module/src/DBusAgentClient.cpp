@@ -42,6 +42,9 @@ using LibreLinux::AgentWire::kServiceName;
 // EcPublicKey) a smaller one (mirrors the 60s readCerts wait).
 constexpr std::chrono::seconds kInteractiveTimeout{600}; // PIN prompt + on-card op
 constexpr std::chrono::seconds kPublicDataTimeout{60};   // CertDer / PublicKey / EcPublicKey
+// LoginState: asked about once a second by a loader that is about to sign, so
+// an agent that does not answer must not hold the loader for long.
+constexpr std::chrono::seconds kLoginStateTimeout{2};
 
 // RFC 5280 §4.2.1.3 KeyUsage bit ordinals (== the agent's frozen
 // Certificates1 keyUsageBits mask). Decrypt needs keyEncipherment OR
@@ -481,6 +484,26 @@ LoginResult DBusAgentClient::login(const std::string& reader)
         r.status = Impl::statusFromException();
     }
     return r;
+}
+
+std::optional<bool> DBusAgentClient::loginActive(const std::string& reader)
+{
+    if (!connected())
+        return std::nullopt;
+    try {
+        auto proxy = pkcs11Proxy(*m_impl->conn);
+        bool active = false;
+        proxy->callMethod("LoginState")
+            .onInterface(sdbus::InterfaceName{kPkcs11Iface})
+            .withTimeout(kLoginStateTimeout)
+            .withArguments(sdbus::ObjectPath{reader})
+            .storeResultsTo(active);
+        return active;
+    } catch (...) {
+        // No agent, an agent from before this method (UnknownMethod), or no
+        // answer in time: the module keeps what it knew.
+        return std::nullopt;
+    }
 }
 
 Status DBusAgentClient::logout(const std::string& reader)

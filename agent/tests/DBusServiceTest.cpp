@@ -734,6 +734,25 @@ TEST(DBusService, Pkcs11EcPublicKeyReachesTheBroker)
               "org.librescrs.Agent.Error.UnknownCard");
 }
 
+// LoginState is served: it reaches the broker and answers whether the caller's
+// login holds -- for a card-less reader, that it does not. Not an error, so a
+// module reads it as an answer rather than as an agent that cannot be asked.
+TEST(DBusService, Pkcs11LoginStateIsServed)
+{
+    bool active = true;
+    bool answered = false;
+    const auto loginState = [&](sdbus::IProxy& proxy) {
+        proxy.callMethod("LoginState")
+            .onInterface(sdbus::InterfaceName{kPkcs11Iface})
+            .withArguments(sdbus::ObjectPath{kCardlessReader})
+            .storeResultsTo(active);
+        answered = true;
+    };
+    EXPECT_EQ(pkcs11ErrorName("org.librescrs.Agent.Test.LoginState", "dbus-login-state", loginState), "");
+    EXPECT_TRUE(answered);
+    EXPECT_FALSE(active);
+}
+
 TEST(DBusService, MultipleReadersAndCardsAllExported)
 {
     std::shared_ptr<sdbus::IConnection> serverConn = sdbus::createSessionBusConnection();

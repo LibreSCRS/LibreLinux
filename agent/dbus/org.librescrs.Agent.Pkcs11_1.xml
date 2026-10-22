@@ -22,8 +22,9 @@
   dispatch thread immediately — the worker fulfils the deferred reply on
   completion. This keeps the single bus event loop responsive to other clients
   (and to SIGTERM) for the whole duration of an in-flight card op (a ~1 s sign,
-  or a stuck op), instead of parking it on a blocking worker wait. Logout is the
-  only synchronous method here: it is pure lease bookkeeping and touches no card.
+  or a stuck op), instead of parking it on a blocking worker wait. Logout and
+  LoginState are the synchronous methods here: they are pure lease bookkeeping
+  and touch no card.
 
   CertDer:     return the cert DER for certId (public data; no consent, no lease).
   PublicKey:   return the RSA public key (modulus + public exponent) for certId,
@@ -38,6 +39,8 @@
                digest).
   Decrypt:     RSA PKCS#1 v1.5 decrypt of an RSA block.
   Derive:      ECDH with the key against the caller's point: the raw secret.
+  LoginState:  whether the caller's lease on the card still holds, without
+               extending it (no card I/O; false for a reader with no card).
 
   Errors (no result): Error.UnknownCard, Error.KeyNotFound, Error.NotAuthorized,
   Error.UserNotLoggedIn (lease expired/absent → module maps to
@@ -104,6 +107,15 @@
     <!-- Drop the lease for (caller, card). Idempotent. -->
     <method name="Logout">
       <arg name="reader" type="o" direction="in"/>
+    </method>
+
+    <!-- Whether the lease for (caller, card) still holds. Asking does not
+         extend it: a PKCS#11 module asks this before its loader signs, so a
+         lease the agent has ended (idle, lifetime, the card removed) reads as
+         ended there. False for a reader with no card. -->
+    <method name="LoginState">
+      <arg name="reader" type="o" direction="in"/>
+      <arg name="active" type="b" direction="out"/>
     </method>
 
     <!-- Raw sign with the key, by the mechanism the caller names. mech:

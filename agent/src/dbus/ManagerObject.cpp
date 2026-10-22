@@ -559,6 +559,14 @@ void ManagerObject::Logout(const sdbus::ObjectPath& reader)
     m_pkcs11->logout(reader, resolveCaller(callerBusName(), callerLabel()));
 }
 
+bool ManagerObject::LoginState(const sdbus::ObjectPath& reader)
+{
+    if (!m_pkcs11) {
+        throw sdbus::Error{sdbus::Error::Name{kErrInternalPkcs11}, "PKCS#11 surface not wired"};
+    }
+    return m_pkcs11->loginActive(reader, resolveCaller(callerBusName(), callerLabel()));
+}
+
 void ManagerObject::SignRaw(sdbus::Result<std::vector<std::uint8_t>>&& result, sdbus::ObjectPath reader,
                             std::string certId, std::string mech, std::vector<std::uint8_t> input)
 {

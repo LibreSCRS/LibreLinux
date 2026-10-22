@@ -23,6 +23,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -116,6 +117,11 @@ struct BusContractTraits
     static std::unique_ptr<Harness> serving()
     {
         return make({});
+    }
+
+    static std::unique_ptr<Harness> servingWithoutLoginState()
+    {
+        return make([](F::FakeAgent& fake) { fake.serveWithoutLoginState(); });
     }
 
     static std::unique_ptr<Harness> servingCardWithoutCertificate()
@@ -213,6 +219,16 @@ private:
         return h;
     }
 };
+
+// The agent ends a login on its own (idle, lifetime, the card left); the answer
+// follows the agent, not what this client last did.
+TEST(DBusAgentClientWire, ALoginTheAgentEndedReadsAsEnded)
+{
+    auto harness = BusContractTraits::serving();
+    ASSERT_EQ(harness->client().login(BusContractTraits::reader()).status, P::Status::Ok);
+    harness->bus->fake->expireLogin();
+    EXPECT_EQ(harness->client().loginActive(BusContractTraits::reader()), std::optional<bool>{false});
+}
 
 // The contract proves which mechanisms go out as a signature; this is the bus
 // side of it: the token the agent reads for an ECDSA request is "ecdsa", as
