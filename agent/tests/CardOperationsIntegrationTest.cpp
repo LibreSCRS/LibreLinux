@@ -1902,3 +1902,213 @@ TEST(CardOperationsIntegration, CardTypeUpdateForWithdrawnCardIsDroppedWithoutCr
     }
     sd_event_unref(ev);
 }
+
+// ---------------------------------------------------------------------------
+// The insertion probe's verdict, as the frontend acts on it: a card no plugin
+// serves is opened once and exported with no capabilities, a probe that could
+// not open the card is asked again, and only a served card on the contact slot
+// of a dual-interface unit takes the power hold. Same harness as above: the
+// production presence path (PresenceModel -> BusExporter -> AgentFrontend ->
+// per-reader worker -> loop), a counting session factory in place of PC/SC.
+// ---------------------------------------------------------------------------
+namespace {
+
+constexpr const char* kAgentServiceInsertion = "org.librescrs.Agent.Test.E2E.Insertion";
+// The OMNIKEY 5422's two slots share a serial and differ only in the bracketed
+// product string, which is what tells the contact slot from its CL twin.
+constexpr const char* kContactSlot =
+    "HID Global OMNIKEY 5422 Smartcard Reader [OMNIKEY 5422 Smartcard Reader] (IM0O2C00NF10456904) 01 00";
+constexpr const char* kContactlessSlot =
+    "HID Global OMNIKEY 5422 Smartcard Reader [OMNIKEY 5422CL Smartcard Reader] (IM0O2C00NF10456904) 00 00";
+
+class ServingPlugin final : public LibreSCRS::Plugin::CardPlugin
+{
+public:
+    ServingPlugin()
+    {
+        setIdentity("serving-stub", "stub", 0);
+    }
+    LibreSCRS::Plugin::CardCapabilities capabilities() const override
+    {
+        return LibreSCRS::Plugin::CardCapabilities::PKI;
+    }
+    std::span<const LibreSCRS::Plugin::Atr> supportedAtrs() const noexcept override
+    {
+        return {};
+    }
+
+protected:
+    LibreSCRS::Plugin::ReadResult doReadCard(LibreSCRS::SmartCard::CardSession& /*session*/,
+                                             GroupCallback /*onGroup*/) const override
+    {
+        return LibreSCRS::Plugin::ReadResult::communicationError(LibreSCRS::Auth::ErrorKeys::genericComm());
+    }
+};
+
+// Serves every card when @c serves, none otherwise; resolvePlugin finds none,
+// so the ATR alone never decides.
+class InsertionResolver final : public CapabilityResolver
+{
+public:
+    explicit InsertionResolver(bool servesCards) : serves(servesCards) {}
+    std::vector<std::shared_ptr<const LibreSCRS::Plugin::CardPlugin>>
+    resolveCandidates(std::span<const std::uint8_t>, LibreSCRS::SmartCard::CardSession&) override
+    {
+        if (serves) {
+            return {std::make_shared<ServingPlugin>()};
+        }
+        return {};
+    }
+    bool serves;
+};
+
+struct InsertionOutcome
+{
+    bool exported{false};
+    std::uint32_t caps{0};
+    int opens{0};
+    bool held{false};
+};
+
+// Insert one card into the OMNIKEY's contact slot (its CL twin present, empty)
+// and wait for the card to be exported. @p failFirst opens are refused, the
+// way a card another process holds exclusively refuses them.
+InsertionOutcome insertIntoContactSlot(bool servesCards, int failFirst)
+{
+    InsertionOutcome out;
+    std::shared_ptr<sdbus::IConnection> serverConn = sdbus::createSessionBusConnection();
+    EXPECT_NE(serverConn, nullptr) << "run under dbus-run-session";
+    if (serverConn == nullptr) {
+        return out;
+    }
+    serverConn->requestName(sdbus::ServiceName{kAgentServiceInsertion});
+    sd_event* ev = nullptr;
+    if (sd_event_new(&ev) < 0) {
+        ADD_FAILURE() << "sd_event_new";
+        return out;
+    }
+    serverConn->attachSdEventLoop(ev);
+    {
+        auto poster = std::make_shared<EventLoopPoster>(ev);
+        // Shared-owned: a worker that outlives this scope still counts into
+        // live memory.
+        auto opens = std::make_shared<std::atomic<int>>(0);
+
+        InsertionResolver resolver{servesCards};
+        ObjectRegistry registry;
+        PresenceModel model(registry, resolver);
+        auto prompter = std::make_shared<NopPrompter>();
+        auto serializer = std::make_shared<PromptSerializer>();
+        auto credCache = std::make_shared<CredentialCache>();
+        CardReadCache readCache;
+        const auto cfgDir = std::filesystem::temp_directory_path() / "ll-insertion-e2e";
+        Config::ConfigStore cfg(cfgDir / "agent.conf", cfgDir / "cache");
+        SigningEngineProvider signingEngine(cfg);
+        AllowAllAuthorizer authz;
+        RateLimiter rateLimiter;
+
+        OperationManager mgr(&resolver);
+        mgr.setSessionFactoryForTest(
+            [opens, failFirst](const std::string& r)
+                -> std::expected<std::shared_ptr<LibreSCRS::SmartCard::CardSession>, LibreSCRS::SmartCard::OpenError> {
+                if (opens->fetch_add(1) < failFirst) {
+                    return std::unexpected{LibreSCRS::SmartCard::OpenError{
+                        LibreSCRS::SmartCard::OpenError::Kind::ReaderUnavailable,
+                        LibreSCRS::Auth::ErrorKeys::genericComm(), std::string{"SCARD_E_SHARING_VIOLATION"}}};
+                }
+                return LibreSCRS::SmartCard::detail::makeDetachedCardSession(r);
+            });
+
+        BusExporter exporter(*serverConn, registry);
+        exporter.attachLoopPoster(poster);
+        auto cryptoCtx = std::make_shared<CryptoWorkerContext>(
+            CryptoWorkerContext{.prompter = prompter, .serializer = serializer, .credentials = credCache});
+        AgentFrontend frontend(exporter, serverConn, mgr, cryptoCtx, readCache, signingEngine, authz, rateLimiter, cfg,
+                               nullptr, "test");
+
+        model.onReaderAdded(kContactSlot);
+        model.onReaderAdded(kContactlessSlot);
+        model.onCardInserted(kContactSlot, {0x3B, 0x55});
+        ObjectId contactReader{};
+        for (const auto& r : registry.readers()) {
+            if (r.name == kContactSlot) {
+                contactReader = r.id;
+            }
+        }
+
+        std::atomic<bool> stopLoop{false};
+        std::jthread loopThread([ev, &stopLoop] {
+            while (!stopLoop.load(std::memory_order_acquire)) {
+                sd_event_run(ev, 50'000); // 50 ms tick
+            }
+        });
+
+        auto client = sdbus::createSessionBusConnection();
+        client->enterEventLoopAsync();
+        auto rootProxy =
+            sdbus::createProxy(*client, sdbus::ServiceName{kAgentServiceInsertion}, sdbus::ObjectPath{kRootPath});
+        const auto deadline = std::chrono::steady_clock::now() + 5s;
+        while (!out.exported && std::chrono::steady_clock::now() < deadline) {
+            ManagedObjects managed;
+            rootProxy->callMethod("GetManagedObjects")
+                .onInterface(sdbus::InterfaceName{"org.freedesktop.DBus.ObjectManager"})
+                .storeResultsTo(managed);
+            for (const auto& [path, ifaces] : managed) {
+                if (const auto card = ifaces.find(kCard1Iface); card != ifaces.end()) {
+                    out.caps = card->second.at("Capabilities").get<std::uint32_t>();
+                    out.exported = true;
+                }
+            }
+            if (!out.exported) {
+                std::this_thread::sleep_for(20ms);
+            }
+        }
+        // The card is exported last: every probe and retry has run by now, and
+        // the hold, if any, was set in the same loop step as the export.
+        out.opens = opens->load();
+        out.held = mgr.isReaderHeldForTest(contactReader);
+
+        client->leaveEventLoop();
+        stopLoop.store(true, std::memory_order_release);
+        loopThread.join();
+        serverConn->detachSdEventLoop();
+    }
+    sd_event_unref(ev);
+    return out;
+}
+
+} // namespace
+
+// A card no plugin serves is opened once: the probe's answer is definitive,
+// and every repeat would connect to a card that belongs to someone else, probe
+// it and let it go. Nor is it held on the contact slot: the probe has just let
+// it go, and a hold would take the reader straight back.
+TEST(CardOperationsIntegration, AnUnservedCardIsOpenedOnceAndNotHeld)
+{
+    const auto out = insertIntoContactSlot(/*servesCards=*/false, /*failFirst=*/0);
+    ASSERT_TRUE(out.exported) << "the card must be exported within 5 s";
+    EXPECT_EQ(out.caps, 0U);
+    EXPECT_EQ(out.opens, 1) << "an unserved card was opened again after the probe said no plugin serves it";
+    EXPECT_FALSE(out.held) << "the OMNIKEY contact slot holds a card no plugin serves";
+}
+
+// A served card on the contact slot takes the hold, and the probe's own
+// session becomes it: no second open.
+TEST(CardOperationsIntegration, AServedContactSlotCardIsHeld)
+{
+    const auto out = insertIntoContactSlot(/*servesCards=*/true, /*failFirst=*/0);
+    ASSERT_TRUE(out.exported) << "the card must be exported within 5 s";
+    EXPECT_EQ(out.caps, static_cast<std::uint32_t>(LibreSCRS::Plugin::CardCapabilities::PKI));
+    EXPECT_EQ(out.opens, 1);
+    EXPECT_TRUE(out.held) << "a served card on the OMNIKEY contact slot is held";
+}
+
+// A probe that could not open the card says nothing about it, so it is asked
+// again: two refused opens, then the open that served.
+TEST(CardOperationsIntegration, AProbeThatCouldNotOpenTheCardIsRetried)
+{
+    const auto out = insertIntoContactSlot(/*servesCards=*/true, /*failFirst=*/2);
+    ASSERT_TRUE(out.exported) << "the card must be exported within 5 s";
+    EXPECT_EQ(out.caps, static_cast<std::uint32_t>(LibreSCRS::Plugin::CardCapabilities::PKI));
+    EXPECT_EQ(out.opens, 3) << "two refused opens, then the one that served";
+}
