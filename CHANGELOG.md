@@ -7,6 +7,11 @@ Notable user-visible changes per release. Format follows
 
 ### Added
 
+- **`Pkcs11_1.LoginState`:** whether a PKCS#11 client's login on the card in a
+  reader still holds, asked without extending it. The PKCS#11 module asks it
+  (with a two-second deadline) so that Firefox sees a login the agent has ended
+  as one, and asks for the PIN again instead of failing the TLS handshake.
+
 - **Every release carries a source tarball this project built.** Not the
   archive GitHub generates for a tag, which omits every submodule tree and
   whose bytes are not ours to assert: the published tarball is a function of
