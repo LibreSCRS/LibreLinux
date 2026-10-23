@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
-cmake_minimum_required(VERSION 3.24)
+cmake_minimum_required(VERSION 3.28)
 
 # Derives PROJECT_VERSION + GIT_VERSION_* from git tags (0.0.1 default when untagged).
 # Must run before project() — see the module's own note.
@@ -129,9 +129,9 @@ if(BUILD_TESTING)
     # cmake_minimum_required to 3.29 or later -- the emulator stops being
     # consulted without cross-compiling, the wrapper silently falls off, and
     # these suites go to whatever session bus the runner is on. The guard is
-    # required because cmake_policy(SET CMP0158 ...) is an error on CMake 3.24
-    # through 3.28, which this project still declares as its minimum. The
-    # behaviour is asserted separately, because this line cannot fail.
+    # required because cmake_policy(SET CMP0158 ...) is an error on CMake 3.28,
+    # which this project still declares as its minimum. The behaviour is
+    # asserted separately, because this line cannot fail.
     if(POLICY CMP0158)
         cmake_policy(SET CMP0158 OLD)
     endif()

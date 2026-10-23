@@ -32,8 +32,9 @@ librelinux_private_session_bus(DBusAgentClientTest)
 # A wedged test under dbus-run-session must fail in minutes, not consume the
 # runner's whole wall: every dbus-run-session test here carries an explicit
 # timeout.
-gtest_discover_tests(DBusAgentClientTest PROPERTIES
-    ENVIRONMENT "${LIBRELINUX_PRIVATE_BUS_ENV}" TIMEOUT 120)
+libreagent_gtest_discover_tests(DBusAgentClientTest
+    ENVIRONMENT "${LIBRELINUX_PRIVATE_BUS_ENV}"
+    PROPERTIES TIMEOUT 120)
 
 # The same contract suite the agent's own tree instantiates over the socket
 # transport, instantiated here over the bus one. The claims are NOT copied: the
@@ -55,9 +56,9 @@ librelinux_private_session_bus(DBusAgentClientContractTest)
 # difference between two machines, not between two transports, so the search
 # path is emptied rather than inherited and absent means absent everywhere.
 file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/no-bus-services)
-gtest_discover_tests(DBusAgentClientContractTest PROPERTIES
-    TIMEOUT 120
-    ENVIRONMENT "XDG_DATA_HOME=${CMAKE_CURRENT_BINARY_DIR}/no-bus-services;XDG_DATA_DIRS=${CMAKE_CURRENT_BINARY_DIR}/no-bus-services;${LIBRELINUX_PRIVATE_BUS_ENV}")
+libreagent_gtest_discover_tests(DBusAgentClientContractTest
+    ENVIRONMENT "XDG_DATA_HOME=${CMAKE_CURRENT_BINARY_DIR}/no-bus-services;XDG_DATA_DIRS=${CMAKE_CURRENT_BINARY_DIR}/no-bus-services;${LIBRELINUX_PRIVATE_BUS_ENV}"
+    PROPERTIES TIMEOUT 120)
 
 # Pure-text assertions on the configured .module + deployment-(b) server unit
 # (no p11-kit, no D-Bus). The configured files are produced by the parent

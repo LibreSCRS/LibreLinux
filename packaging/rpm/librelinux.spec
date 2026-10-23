@@ -18,7 +18,7 @@ Source0:        %{name}-%{version}.tar.gz
 
 ExclusiveArch:  x86_64
 
-BuildRequires:  cmake >= 3.24
+BuildRequires:  cmake >= 3.28
 BuildRequires:  ninja-build
 BuildRequires:  gcc-c++
 BuildRequires:  make

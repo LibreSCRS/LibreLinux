@@ -38,7 +38,7 @@ target_link_libraries(InputWidgetValidationTest PRIVATE
     GTest::gtest_main)
 
 # QT_QPA_PLATFORM=offscreen — no display server required (CI canonical).
-gtest_discover_tests(InputWidgetValidationTest PROPERTIES
+libreagent_gtest_discover_tests(InputWidgetValidationTest
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # Exercises PrompterService::CancelCurrent — needs the full PrompterService
@@ -89,7 +89,7 @@ target_link_libraries(PrompterCancelTest PRIVATE
     GTest::gtest
     GTest::gtest_main)
 
-gtest_discover_tests(PrompterCancelTest PROPERTIES
+libreagent_gtest_discover_tests(PrompterCancelTest
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # Caller-identity trust gate (CallerAuthorizer). Pure /proc + env-override
@@ -216,9 +216,9 @@ librelinux_private_session_bus(PrompterAuthIntegrationTest)
 # case. The ctest ceiling has to sit ABOVE that internal ceiling so a wedge
 # still fails as a named assertion with a message ("never returned (test
 # wedged)"), rather than being cut short as a mute Timeout.
-gtest_discover_tests(PrompterAuthIntegrationTest PROPERTIES
+libreagent_gtest_discover_tests(PrompterAuthIntegrationTest
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;${LIBRELINUX_PRIVATE_BUS_ENV}"
-    TIMEOUT 180)
+    PROPERTIES TIMEOUT 180)
 
 # Pins the reject-from-outside contract for PromptDialog. No production
 # source change is required (QDialog::reject is already a slot); this test
@@ -253,7 +253,7 @@ target_link_libraries(PromptDialogRejectTest PRIVATE
     GTest::gtest
     GTest::gtest_main)
 
-gtest_discover_tests(PromptDialogRejectTest PROPERTIES
+libreagent_gtest_discover_tests(PromptDialogRejectTest
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # Pins the client-supplied chrome separation: requester/artifact framed
@@ -288,7 +288,7 @@ target_link_libraries(PromptDialogClientChromeTest PRIVATE
     GTest::gtest
     GTest::gtest_main)
 
-gtest_discover_tests(PromptDialogClientChromeTest PROPERTIES
+libreagent_gtest_discover_tests(PromptDialogClientChromeTest
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # Pins the retry-context inline error (opts.attempt/lastError -> a localized
@@ -324,7 +324,7 @@ target_link_libraries(PromptDialogRetryContextTest PRIVATE
     GTest::gtest
     GTest::gtest_main)
 
-gtest_discover_tests(PromptDialogRetryContextTest PROPERTIES
+libreagent_gtest_discover_tests(PromptDialogRetryContextTest
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # Pins the opt-in CAN -> MRZ switch affordance (Options::offerMrzSwitch): no
@@ -360,7 +360,7 @@ target_link_libraries(PromptDialogAltKindsTest PRIVATE
     GTest::gtest
     GTest::gtest_main)
 
-gtest_discover_tests(PromptDialogAltKindsTest PROPERTIES
+libreagent_gtest_discover_tests(PromptDialogAltKindsTest
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # Multi-field secret collection (change_pin): dialog-level cases (per-role
@@ -417,9 +417,9 @@ target_link_libraries(PrompterMultiFieldTest PRIVATE
 
 # Private session bus (dbus-run-session) + offscreen Qt (no display server).
 librelinux_private_session_bus(PrompterMultiFieldTest)
-gtest_discover_tests(PrompterMultiFieldTest PROPERTIES
+libreagent_gtest_discover_tests(PrompterMultiFieldTest
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;${LIBRELINUX_PRIVATE_BUS_ENV}"
-    TIMEOUT 120)
+    PROPERTIES TIMEOUT 120)
 
 # Serbian catalog RESOLUTION: proves the sr Cyrillic-primary
 # catalog actually resolves at runtime through ki18n — not merely that the .po
@@ -459,7 +459,7 @@ if(MSGFMT_EXECUTABLE)
     # ~/.local/share the test reads that catalog instead of the one just built —
     # and passes or fails on whatever was installed last. Found by adding a
     # string and watching the test resolve the old catalog without it.
-    gtest_discover_tests(PromptCatalogResolutionTest PROPERTIES
+    libreagent_gtest_discover_tests(PromptCatalogResolutionTest
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;LANGUAGE=sr;LANG=en_US.UTF-8;XDG_DATA_HOME=${_cat_locale_root}"
         ENVIRONMENT_MODIFICATION "XDG_DATA_DIRS=path_list_prepend:${_cat_locale_root}")
 else()
@@ -531,8 +531,9 @@ target_link_libraries(EnvPrompterServiceTest PRIVATE
 # Private session bus (dbus-run-session); no display server / Qt event loop
 # needed at all — every call in this prompter is synchronous.
 librelinux_private_session_bus(EnvPrompterServiceTest)
-gtest_discover_tests(EnvPrompterServiceTest PROPERTIES
-    ENVIRONMENT "${LIBRELINUX_PRIVATE_BUS_ENV}" TIMEOUT 120)
+libreagent_gtest_discover_tests(EnvPrompterServiceTest
+    ENVIRONMENT "${LIBRELINUX_PRIVATE_BUS_ENV}"
+    PROPERTIES TIMEOUT 120)
 
 # The credential-window registry: pure addressing rules, no bus and no display.
 add_executable(PromptRegistryTest
@@ -602,6 +603,6 @@ librelinux_private_session_bus(PrompterConcurrentWindowsTest)
 # The ctest timeout has to sit ABOVE that internal ceiling so a genuine
 # wedge still surfaces as a named pumpUntil failure with a message, rather than
 # being cut short as a mute Timeout that says nothing about what stalled.
-gtest_discover_tests(PrompterConcurrentWindowsTest PROPERTIES
+libreagent_gtest_discover_tests(PrompterConcurrentWindowsTest
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;${LIBRELINUX_PRIVATE_BUS_ENV}"
-    TIMEOUT 180)
+    PROPERTIES TIMEOUT 180)

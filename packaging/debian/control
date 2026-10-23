@@ -3,7 +3,7 @@ Section: utils
 Priority: optional
 Maintainer: LibreSCRS <librescrs@proton.me>
 Build-Depends: debhelper-compat (= 13),
-               cmake (>= 3.24),
+               cmake (>= 3.28),
                ninja-build,
                make,
                pkg-config,
