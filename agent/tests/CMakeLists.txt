@@ -73,8 +73,9 @@ target_link_libraries(AgentTransportTest PRIVATE
 librelinux_private_session_bus(AgentTransportTest)
 # A wedged test under dbus-run-session must fail in minutes, not consume the
 # runner's whole wall: every bus-backed test below carries an explicit timeout.
-gtest_discover_tests(AgentTransportTest PROPERTIES
-    ENVIRONMENT "${LIBRELINUX_PRIVATE_BUS_ENV}" TIMEOUT 120)
+libreagent_gtest_discover_tests(AgentTransportTest
+    ENVIRONMENT "${LIBRELINUX_PRIVATE_BUS_ENV}"
+    PROPERTIES TIMEOUT 120)
 
 # Static/source guard: the deferred-publish worker hop must marshal back through the
 # transport-handed-out post sink, never a concrete transport poster member. Reads the
@@ -134,8 +135,9 @@ target_link_libraries(TypedChannelWedgeDrainTest PRIVATE
     GTest::gtest
     GTest::gtest_main)
 librelinux_private_session_bus(TypedChannelWedgeDrainTest)
-gtest_discover_tests(TypedChannelWedgeDrainTest PROPERTIES
-    ENVIRONMENT "${LIBRELINUX_PRIVATE_BUS_ENV}" TIMEOUT 120)
+libreagent_gtest_discover_tests(TypedChannelWedgeDrainTest
+    ENVIRONMENT "${LIBRELINUX_PRIVATE_BUS_ENV}"
+    PROPERTIES TIMEOUT 120)
 
 # Cross-stack wire-contract drift guard: static_asserts tying the canonical
 # Card1.Capabilities + ErrorCode wire literals to the upstream LM symbol (links
@@ -254,8 +256,9 @@ target_link_libraries(Operation1AdaptorTest PRIVATE
     GTest::gtest_main)
 target_compile_definitions(Operation1AdaptorTest PRIVATE LIBRELINUX_TESTING)
 librelinux_private_session_bus(Operation1AdaptorTest)
-gtest_discover_tests(Operation1AdaptorTest PROPERTIES
-    ENVIRONMENT "${LIBRELINUX_PRIVATE_BUS_ENV}" TIMEOUT 120)
+libreagent_gtest_discover_tests(Operation1AdaptorTest
+    ENVIRONMENT "${LIBRELINUX_PRIVATE_BUS_ENV}"
+    PROPERTIES TIMEOUT 120)
 
 # Certificates1.Result wire-shape conformance (compile-only static_assert).
 add_executable(Certificates1XmlCodegenTest Certificates1XmlCodegenTest.cpp)
@@ -286,8 +289,9 @@ target_link_libraries(OperationManagerNameOwnerChangedTest PRIVATE
     GTest::gtest
     GTest::gtest_main)
 librelinux_private_session_bus(OperationManagerNameOwnerChangedTest)
-gtest_discover_tests(OperationManagerNameOwnerChangedTest PROPERTIES
-    ENVIRONMENT "${LIBRELINUX_PRIVATE_BUS_ENV}" TIMEOUT 120)
+libreagent_gtest_discover_tests(OperationManagerNameOwnerChangedTest
+    ENVIRONMENT "${LIBRELINUX_PRIVATE_BUS_ENV}"
+    PROPERTIES TIMEOUT 120)
 
 # D-Bus integration test — needs a private session bus + dbus-run-session.
 add_executable(ReaderRemoveDrainTest ReaderRemoveDrainTest.cpp)
@@ -296,8 +300,9 @@ target_link_libraries(ReaderRemoveDrainTest PRIVATE
     GTest::gtest
     GTest::gtest_main)
 librelinux_private_session_bus(ReaderRemoveDrainTest)
-gtest_discover_tests(ReaderRemoveDrainTest PROPERTIES
-    ENVIRONMENT "${LIBRELINUX_PRIVATE_BUS_ENV}" TIMEOUT 120)
+libreagent_gtest_discover_tests(ReaderRemoveDrainTest
+    ENVIRONMENT "${LIBRELINUX_PRIVATE_BUS_ENV}"
+    PROPERTIES TIMEOUT 120)
 
 # Reader map + ReaderObject-field concurrency guard: resolveReaderCard (loop
 # thread) hammered against reader/card churn (monitor thread). Needs a private
@@ -308,8 +313,9 @@ target_link_libraries(BusExporterReaderRaceTest PRIVATE
     GTest::gtest
     GTest::gtest_main)
 librelinux_private_session_bus(BusExporterReaderRaceTest)
-gtest_discover_tests(BusExporterReaderRaceTest PROPERTIES
-    ENVIRONMENT "${LIBRELINUX_PRIVATE_BUS_ENV}" TIMEOUT 120)
+libreagent_gtest_discover_tests(BusExporterReaderRaceTest
+    ENVIRONMENT "${LIBRELINUX_PRIVATE_BUS_ENV}"
+    PROPERTIES TIMEOUT 120)
 
 add_executable(DBusServiceTest DBusServiceTest.cpp)
 target_link_libraries(DBusServiceTest PRIVATE
@@ -317,8 +323,9 @@ target_link_libraries(DBusServiceTest PRIVATE
     GTest::gtest
     GTest::gtest_main)
 librelinux_private_session_bus(DBusServiceTest)
-gtest_discover_tests(DBusServiceTest PROPERTIES
-    ENVIRONMENT "${LIBRELINUX_PRIVATE_BUS_ENV}" TIMEOUT 120)
+libreagent_gtest_discover_tests(DBusServiceTest
+    ENVIRONMENT "${LIBRELINUX_PRIVATE_BUS_ENV}"
+    PROPERTIES TIMEOUT 120)
 
 # Config1 end-to-end (Get/SetValue/Reset/Changed + mutability + polkit gate).
 add_executable(Config1Test Config1Test.cpp)
@@ -327,8 +334,9 @@ target_link_libraries(Config1Test PRIVATE
     GTest::gtest
     GTest::gtest_main)
 librelinux_private_session_bus(Config1Test)
-gtest_discover_tests(Config1Test PROPERTIES
-    ENVIRONMENT "${LIBRELINUX_PRIVATE_BUS_ENV}" TIMEOUT 120)
+libreagent_gtest_discover_tests(Config1Test
+    ENVIRONMENT "${LIBRELINUX_PRIVATE_BUS_ENV}"
+    PROPERTIES TIMEOUT 120)
 
 # Real PolkitAuthorizer against a fake polkit authority: asserts the D-Bus
 # error name a client receives distinguishes a refusal from a silence.
@@ -338,8 +346,9 @@ target_link_libraries(PolkitAuthorizerOutcomeTest PRIVATE
     GTest::gtest
     GTest::gtest_main)
 librelinux_private_session_bus(PolkitAuthorizerOutcomeTest)
-gtest_discover_tests(PolkitAuthorizerOutcomeTest PROPERTIES
-    ENVIRONMENT "${LIBRELINUX_PRIVATE_BUS_ENV}" TIMEOUT 120)
+libreagent_gtest_discover_tests(PolkitAuthorizerOutcomeTest
+    ENVIRONMENT "${LIBRELINUX_PRIVATE_BUS_ENV}"
+    PROPERTIES TIMEOUT 120)
 
 # Card1.ReadIdentity / GetPhoto end-to-end — capability gate + enqueue path.
 add_executable(CardObjectOperationsTest CardObjectOperationsTest.cpp)
@@ -348,8 +357,9 @@ target_link_libraries(CardObjectOperationsTest PRIVATE
     GTest::gtest
     GTest::gtest_main)
 librelinux_private_session_bus(CardObjectOperationsTest)
-gtest_discover_tests(CardObjectOperationsTest PROPERTIES
-    ENVIRONMENT "${LIBRELINUX_PRIVATE_BUS_ENV}" TIMEOUT 120)
+libreagent_gtest_discover_tests(CardObjectOperationsTest
+    ENVIRONMENT "${LIBRELINUX_PRIVATE_BUS_ENV}"
+    PROPERTIES TIMEOUT 120)
 
 # PrompterClient end-to-end: drive the client against an in-process mock
 # Prompter1 adaptor (hosted on a separate connection to avoid sd-bus self-call
@@ -379,8 +389,9 @@ target_link_libraries(PrompterIntegrationTest PRIVATE
     GTest::gtest
     GTest::gtest_main)
 librelinux_private_session_bus(PrompterIntegrationTest)
-gtest_discover_tests(PrompterIntegrationTest PROPERTIES
-    ENVIRONMENT "${LIBRELINUX_PRIVATE_BUS_ENV}" TIMEOUT 120)
+libreagent_gtest_discover_tests(PrompterIntegrationTest
+    ENVIRONMENT "${LIBRELINUX_PRIVATE_BUS_ENV}"
+    PROPERTIES TIMEOUT 120)
 
 # SecretMemfdReader trust-root input-shape check: a correctly-sealed memfd is
 # accepted, an unsealed memfd (or a non-memfd fd) is rejected. Bus-free — it
@@ -408,8 +419,9 @@ target_link_libraries(CardOperationsIntegrationTest PRIVATE
     GTest::gtest
     GTest::gtest_main)
 librelinux_private_session_bus(CardOperationsIntegrationTest)
-gtest_discover_tests(CardOperationsIntegrationTest PROPERTIES
-    ENVIRONMENT "${LIBRELINUX_PRIVATE_BUS_ENV}" TIMEOUT 120)
+libreagent_gtest_discover_tests(CardOperationsIntegrationTest
+    ENVIRONMENT "${LIBRELINUX_PRIVATE_BUS_ENV}"
+    PROPERTIES TIMEOUT 120)
 
 # Late-subscriber recovery store for the inline typed results, and — since the
 # sign flow moved into the agent core — the sealing suite that could not go with
@@ -529,8 +541,9 @@ target_link_libraries(PrompterClientPinChangeTest PRIVATE
     GTest::gtest
     GTest::gtest_main)
 librelinux_private_session_bus(PrompterClientPinChangeTest)
-gtest_discover_tests(PrompterClientPinChangeTest PROPERTIES
-    ENVIRONMENT "${LIBRELINUX_PRIVATE_BUS_ENV}" TIMEOUT 120)
+libreagent_gtest_discover_tests(PrompterClientPinChangeTest
+    ENVIRONMENT "${LIBRELINUX_PRIVATE_BUS_ENV}"
+    PROPERTIES TIMEOUT 120)
 
 # Human-paced prompt budget: the mock prompter replies only AFTER the D-Bus
 # default method timeout has elapsed; the client must still receive the
@@ -551,8 +564,9 @@ librelinux_private_session_bus(PrompterClientInteractiveBudgetTest)
 # ~25 s default reply window (same class as the pkcs11 ModuleAbiTest sibling).
 # The previous 90 s left under 3x headroom, which a loaded runner can eat
 # without anything actually being wrong.
-gtest_discover_tests(PrompterClientInteractiveBudgetTest PROPERTIES
-    ENVIRONMENT "${LIBRELINUX_PRIVATE_BUS_ENV}" TIMEOUT 180)
+libreagent_gtest_discover_tests(PrompterClientInteractiveBudgetTest
+    ENVIRONMENT "${LIBRELINUX_PRIVATE_BUS_ENV}"
+    PROPERTIES TIMEOUT 180)
 
 # Credentials1 D-Bus surface end-to-end: CardObject (Card1 + Credentials1) + a fake
 # CredentialManager seam + FakePrompterService on a private session bus. Reuses the
@@ -568,8 +582,9 @@ target_link_libraries(CredentialsDbusTest PRIVATE
     GTest::gtest_main)
 target_compile_definitions(CredentialsDbusTest PRIVATE LIBRESCRS_INTERNAL_BUILD)
 librelinux_private_session_bus(CredentialsDbusTest)
-gtest_discover_tests(CredentialsDbusTest PROPERTIES
-    ENVIRONMENT "${LIBRELINUX_PRIVATE_BUS_ENV}" TIMEOUT 120)
+libreagent_gtest_discover_tests(CredentialsDbusTest
+    ENVIRONMENT "${LIBRELINUX_PRIVATE_BUS_ENV}"
+    PROPERTIES TIMEOUT 120)
 
 # --- country-signing anchor import ------------------------------------------
 #
@@ -595,5 +610,6 @@ target_link_libraries(CscaImportDbusTest PRIVATE
     GTest::gtest
     GTest::gtest_main)
 librelinux_private_session_bus(CscaImportDbusTest)
-gtest_discover_tests(CscaImportDbusTest PROPERTIES
-    ENVIRONMENT "${LIBRELINUX_PRIVATE_BUS_ENV}" TIMEOUT 120)
+libreagent_gtest_discover_tests(CscaImportDbusTest
+    ENVIRONMENT "${LIBRELINUX_PRIVATE_BUS_ENV}"
+    PROPERTIES TIMEOUT 120)
