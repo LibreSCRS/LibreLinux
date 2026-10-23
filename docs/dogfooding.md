@@ -196,36 +196,17 @@ the session bus ask systemd to start the corresponding unit on demand. The
 explicit `enable --now` above just keeps the agent resident so it can monitor
 readers continuously.
 
-### Signing module (nothing to set)
+### Signing (nothing to set)
 
-The native AdES signing path dlopens the LM PKCS#11 module
-`librescrs-pkcs11.so`. LM lives under its **own** prefix (`~/.local/librescrs`)
-that is not exe-relative to the agent, so relative probing alone cannot find it.
-The middleware resolves it from the absolute path its own build was configured
-with — the same value for a per-user prefix as for a distribution package — so
-neither the unit nor a drop-in carries a module path any more.
-
-The unit used to bake `Environment=LIBRESCRS_PKCS11_MODULE=…` for exactly this
-reason. That override is gone, and its absence is the point: while it was set,
-the resolver's real behaviour never ran on any machine anybody uses daily, so
-the path a packaged install depends on was the one nothing exercised. If you
-added a manual drop-in previously, delete it after reinstalling:
+The agent signs through the card plugin, on the session it already holds for
+the reader; it loads no PKCS#11 module, so neither the unit nor a drop-in
+carries a module path. `LIBRESCRS_PKCS11_MODULE` is read by nothing any more.
+If you added a drop-in for it earlier, delete it:
 
 ```sh
 rm -f ~/.config/systemd/user/librescrs-agent.service.d/20-pkcs11-module.conf
 systemctl --user daemon-reload && systemctl --user restart librescrs-agent.service
 ```
-
-**Verify signing can load its module** (gating check — needs no card or PIN):
-
-```sh
-./e2e/check-dogfood-sign-module.sh
-```
-
-It resolves the module exactly as the running agent would and confirms it
-`dlopen`s with a working `C_GetFunctionList`. Run it after every reinstall; a
-non-zero exit means `Card1.Sign` would fail with "cannot open shared object
-file" before you ever reach a card.
 
 ### Cache / egress reality note
 

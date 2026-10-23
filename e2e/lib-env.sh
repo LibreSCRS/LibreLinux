@@ -22,8 +22,9 @@ librescrs_resolve_lm_prefix() {
     return 1
 }
 
-# Export LIBRESCRS_PLUGIN_DIR and LIBRESCRS_PKCS11_MODULE from that prefix,
-# unless the caller already set them. Fails loudly and says what to set —
+# Export LIBRESCRS_PLUGIN_DIR from that prefix, unless the caller already set
+# it. The agent signs through the card plugin, so the plugin directory is the
+# only middleware path it needs. Fails loudly and says what to set —
 # a runner that silently proceeds without plugins reports every card as
 # unsupported, which is indistinguishable from a card we do not support.
 librescrs_export_lm_paths() {
@@ -35,18 +36,10 @@ librescrs_export_lm_paths() {
     fi
 
     export LIBRESCRS_PLUGIN_DIR="${LIBRESCRS_PLUGIN_DIR:-${prefix}/lib/librescrs/plugins}"
-    # libresign's native AdES path dlopens the LM PKCS#11 module by bare name;
-    # point it at the installed module so Card1.Sign (AdES) can load it.
-    export LIBRESCRS_PKCS11_MODULE="${LIBRESCRS_PKCS11_MODULE:-${prefix}/lib/pkcs11/librescrs-pkcs11.so}"
 
     if [[ ! -d "${LIBRESCRS_PLUGIN_DIR}" ]]; then
         echo "e2e: no plugin directory at ${LIBRESCRS_PLUGIN_DIR}" >&2
         echo "     Install LibreMiddleware, or set LIBRESCRS_PLUGIN_DIR." >&2
-        return 1
-    fi
-    if [[ ! -f "${LIBRESCRS_PKCS11_MODULE}" ]]; then
-        echo "e2e: no PKCS#11 module at ${LIBRESCRS_PKCS11_MODULE}" >&2
-        echo "     Set LIBRESCRS_PKCS11_MODULE to the installed librescrs-pkcs11.so." >&2
         return 1
     fi
     return 0

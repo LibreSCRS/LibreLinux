@@ -57,9 +57,9 @@ Notable user-visible changes per release. Format follows
   and an NSS profile entry you added yourself all survive uninstallation, on
   purpose.
 
-  **The agent and the direct PKCS#11 module exclude each other**, and switching
-  is one command: `apt install` replaces the other package, dnf needs
-  `--allowerasing` and zypper `--force-resolution`.
+  **The agent conflicts with the direct PKCS#11 module package**, which the
+  middleware no longer builds but a machine may still carry: `apt install`
+  removes it, dnf needs `--allowerasing` and zypper `--force-resolution`.
 
 
 First public release of the Linux host for the LibreSCRS smart-card
@@ -185,6 +185,12 @@ and its secure PIN/CAN entry prompter, plus a client PKCS#11 module.
   PKCS#11 login a signature after a longer pause no longer re-prompts before
   the login's own idle limit; that on-card state is visible to any other local
   shared PC/SC client while the card stays powered.
+
+- **The agent signs without a PKCS#11 module.** A signature goes through the
+  card plugin on the session the agent already holds for the reader, so the
+  agent loads no module and `LIBRESCRS_PKCS11_MODULE` is read by nothing. The
+  dogfood guard `e2e/check-dogfood-sign-module.sh` is gone with the module it
+  checked; a systemd drop-in that still sets the variable can be deleted.
 
 - **A card no plugin serves is opened once on insertion.** The probe that
   resolves a new card now tells a card it could not open from a card no

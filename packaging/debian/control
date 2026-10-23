@@ -48,9 +48,9 @@ Description: LibreSCRS smart-card session agent (D-Bus)
  the first PIN, because the interface it calls has no implementation.
  .
  The agent registers a PKCS#11 proxy with p11-kit, so it conflicts with
- librescrs-pkcs11-direct: one card must not have two providers and two security
- models. apt replaces the one with the other on install; dnf does so only with
- --allowerasing, and zypper with --force-resolution.
+ librescrs-pkcs11-direct, the direct module package the middleware no longer
+ builds but a machine may still carry: one card must not have two providers and
+ two security models. Installing the agent with apt removes that package.
 
 Package: librescrs-pinentry-kde
 Architecture: any
