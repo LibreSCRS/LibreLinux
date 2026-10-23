@@ -12,9 +12,6 @@
 // before any PIN is presented. Env vars:
 //   LIBRESCRS_HW=1                 enable (else every test SKIPs)
 //   LIBRESCRS_PLUGIN_DIR=<dir>     LM card plugins (…/lib/librescrs/plugins)
-//   LIBRESCRS_PKCS11_MODULE=<so>   the native signing backend's PKCS#11 module
-//                                  (…/lib/pkcs11/librescrs-pkcs11.so), unless on
-//                                  the loader path
 //   LIBRESCRS_CAN / LIBRESCRS_MRZ  PACE channel secret (low-secrecy, no lockout)
 //   LIBRESCRS_SIGN_READER=<substr> sign phase only: pick exactly one reader
 //   LIBRESCRS_SIGN_PIN=<pin>       sign phase only: that card's signing PIN
