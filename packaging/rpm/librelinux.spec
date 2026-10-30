@@ -86,10 +86,10 @@ format can deliver it. The prompter is a hard dependency: an agent without one
 enumerates a card and then fails on the first PIN.
 
 It registers a PKCS#11 proxy with p11-kit, so it conflicts with
-librescrs-pkcs11-direct, the direct module package the middleware no longer
-builds but a machine may still carry: one card must not have two providers.
+librescrs-pkcs11-direct, the direct module package that is no longer built
+but a machine may still carry: one card must not have two providers.
 Replacing that package needs the package manager's option to remove a
-conflicting one (dnf --allowerasing, zypper --force-resolution).
+conflicting one.
 
 %package -n librescrs-pinentry-kde
 Summary:        Secure PIN and CAN entry prompter for the LibreSCRS agent
