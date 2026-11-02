@@ -30,9 +30,7 @@ target_link_libraries(librescrs-pkcs11-agent PRIVATE SDBusCpp::sdbus-c++ libreli
 # instead would build, install and dlopen a module with no entry point in it.
 librescrs_pkcs11_module_link(librescrs-pkcs11-agent)
 
-if(LIBRELINUX_WERROR)
-    target_compile_options(librescrs-pkcs11-agent PRIVATE -Wall -Wextra -Werror)
-endif()
+librelinux_strict_warnings(librescrs-pkcs11-agent NO_CONVERSION)
 
 # Install to the p11-kit default module dir (resolved by the top-level CMake).
 install(TARGETS librescrs-pkcs11-agent LIBRARY DESTINATION ${LIBRESCRS_P11_MODULE_DIR})

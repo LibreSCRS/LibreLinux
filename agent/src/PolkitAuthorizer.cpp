@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 // SPDX-FileCopyrightText: 2026 hirashix0
 #include "PolkitAuthorizer.h"
-#include <LibreSCRS/Agent/backend/Logging.h>
+#include <LibreSCRS/Logging.h>
 #include "ProcPidPin.h" // librelinux-common pinned /proc readers
 
 #include <sdbus-c++/Error.h>
@@ -9,6 +9,7 @@
 #include <sdbus-c++/IProxy.h>
 #include <sdbus-c++/Types.h>
 #include <chrono>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <tuple>
@@ -50,6 +51,14 @@ constexpr std::chrono::seconds kAuthorizationBudget{90};
 } // namespace
 
 namespace PolkitDetail {
+
+sdbus::Variant uidDetail(std::uint32_t uid)
+{
+    // polkit reads "uid" as a signed 32-bit integer and ignores one of any
+    // other type -- and a pidfd subject without a uid is refused. The bus
+    // reports the uid unsigned; the cast keeps every bit of it.
+    return sdbus::Variant{static_cast<std::int32_t>(uid)};
+}
 
 std::optional<std::uint64_t> parseProcStartTime(const std::string& statContent)
 {
@@ -97,9 +106,41 @@ std::map<std::string, sdbus::Variant> buildUnixProcessDetails(std::uint32_t pid,
     details.emplace("pid", sdbus::Variant{pid});
     details.emplace("start-time", sdbus::Variant{startTime});
     if (uid.has_value()) {
-        details.emplace("uid", sdbus::Variant{*uid});
+        details.emplace("uid", uidDetail(*uid));
     }
     return details;
+}
+
+std::optional<std::map<std::string, sdbus::Variant>>
+unixProcessDetailsFrom(const std::map<std::string, sdbus::Variant>& credentials,
+                       const std::function<std::optional<std::uint64_t>(std::uint32_t)>& startTimeOf)
+{
+    try {
+        std::optional<std::uint32_t> uid;
+        if (const auto it = credentials.find("UnixUserID"); it != credentials.end()) {
+            uid = it->second.get<std::uint32_t>();
+        }
+        // polkit takes a pidfd only together with the uid; without one it
+        // rejects the subject outright, so a pidfd alone falls back to the pid.
+        if (const auto it = credentials.find("ProcessFD"); it != credentials.end() && uid.has_value()) {
+            std::map<std::string, sdbus::Variant> details;
+            details.emplace("pidfd", sdbus::Variant{it->second.get<sdbus::UnixFd>()});
+            details.emplace("uid", uidDetail(*uid));
+            return details;
+        }
+        const auto it = credentials.find("ProcessID");
+        if (it == credentials.end()) {
+            return std::nullopt;
+        }
+        const auto pid = it->second.get<std::uint32_t>();
+        const auto startTime = startTimeOf(pid);
+        if (!startTime.has_value()) {
+            return std::nullopt;
+        }
+        return buildUnixProcessDetails(pid, *startTime, uid);
+    } catch (const sdbus::Error&) {
+        return std::nullopt; // a member of an unexpected type
+    }
 }
 
 } // namespace PolkitDetail
@@ -116,57 +157,46 @@ public:
         m_polkitProxy =
             sdbus::createProxy(*m_systemBus, sdbus::ServiceName{kPolkitService}, sdbus::ObjectPath{kPolkitPath});
         m_dbusProxy = sdbus::createProxy(m_sessionBus, sdbus::ServiceName{kDBusService}, sdbus::ObjectPath{kDBusPath});
+        // The asynchronous CheckAuthorization's reply is read here, on this
+        // connection's own thread, never on the agent's dispatcher.
+        m_systemBus->enterEventLoopAsync();
+    }
+
+    ~Impl()
+    {
+        // Stop the reply thread before the proxies its handlers use go away. A
+        // CheckAuthorization still pending is dropped with its proxy; its
+        // completion never runs, and the deferred reply it held tells the
+        // caller that nothing was changed (authorizeThenReply).
+        m_systemBus->leaveEventLoop();
+        m_polkitProxy.reset();
+    }
+
+    Impl(const Impl&) = delete;
+    Impl& operator=(const Impl&) = delete;
+    Impl(Impl&&) = delete;
+    Impl& operator=(Impl&&) = delete;
+
+    void setPost(Post post)
+    {
+        m_post = std::move(post);
     }
 
     AuthorizationOutcome authorize(std::string_view actionId, const CallerToken& caller)
     {
-        // The transport-resolved caller token carries the Linux unique bus name;
-        // derive it once and reuse for pid/uid resolution and the warn logs.
-        const std::string busName{caller.str()};
-
-        // Empty bus name -> an internal/agent-originated mutation (no external
-        // D-Bus caller). We do NOT consult polkit (there is no subject to
-        // build) — nothing was decided, so this is Undecided like every other
-        // "could not even ask" case below, not a policy Denial.
-        if (busName.empty()) {
-            log::warn("PolkitAuthorizer: empty caller bus name; undecided (no polkit subject)");
+        auto subject = subjectFor(caller);
+        if (!subject) {
             return AuthorizationOutcome::Undecided;
         }
-
-        const auto pid = resolveCallerPid(busName);
-        if (!pid.has_value()) {
-            log::warnf("PolkitAuthorizer: could not resolve pid for {}; undecided", busName);
-            return AuthorizationOutcome::Undecided;
-        }
-
-        const auto startTime = readStartTime(*pid);
-        if (!startTime.has_value()) {
-            log::warnf("PolkitAuthorizer: could not read start-time for pid {}; undecided", *pid);
-            return AuthorizationOutcome::Undecided;
-        }
-
-        auto details = PolkitDetail::buildUnixProcessDetails(*pid, *startTime, readUid(busName));
-
         try {
-            // CheckAuthorization signature: (sa{sv}) s a{ss} u s -> (b b a{ss}).
-            // subject = ("unix-process", details); empty action-details; flags
-            // with AllowUserInteraction; empty cancellation id. Timeout widened
-            // to kAuthorizationBudget -- see its comment above.
-            sdbus::Struct<std::string, std::map<std::string, sdbus::Variant>> subject{std::string{"unix-process"},
-                                                                                      std::move(details)};
-            const std::map<std::string, std::string> emptyDetails;
-
-            sdbus::Struct<bool, bool, std::map<std::string, std::string>> reply;
+            CheckAuthorizationReply reply;
             m_polkitProxy->callMethod("CheckAuthorization")
                 .onInterface(sdbus::InterfaceName{kPolkitIface})
                 .withTimeout(kAuthorizationBudget)
-                .withArguments(subject, std::string{actionId}, emptyDetails, kAllowUserInteraction, std::string{})
+                .withArguments(*subject, std::string{actionId}, std::map<std::string, std::string>{},
+                               kAllowUserInteraction, std::string{})
                 .storeResultsTo(reply);
-
-            const bool isAuthorized = reply.get<0>();
-            const bool isChallenge = reply.get<1>();
-            return PolkitDetail::interpretReply(isAuthorized, isChallenge) ? AuthorizationOutcome::Granted
-                                                                           : AuthorizationOutcome::Denied;
+            return outcomeOf(reply);
         } catch (const sdbus::Error& e) {
             log::warnf("PolkitAuthorizer: CheckAuthorization failed: {}; undecided", e.getMessage());
             return AuthorizationOutcome::Undecided;
@@ -176,37 +206,91 @@ public:
         }
     }
 
-private:
-    std::optional<std::uint32_t> resolveCallerPid(const std::string& busName)
+    void authorizeAsync(std::string_view actionId, const CallerToken& caller, Completion done)
     {
+        auto subject = subjectFor(caller);
+        if (!subject) {
+            done(AuthorizationOutcome::Undecided);
+            return;
+        }
         try {
-            std::uint32_t pid = 0;
-            m_dbusProxy->callMethod("GetConnectionUnixProcessID")
-                .onInterface(sdbus::InterfaceName{kDBusIface})
-                .withArguments(busName)
-                .storeResultsTo(pid);
-            return pid;
-        } catch (const sdbus::Error& e) {
-            log::warnf("PolkitAuthorizer: GetConnectionUnixProcessID({}) failed: {}", busName, e.getMessage());
-            return std::nullopt;
-        } catch (const std::exception&) {
-            return std::nullopt;
+            m_polkitProxy->callMethodAsync("CheckAuthorization")
+                .onInterface(sdbus::InterfaceName{kPolkitIface})
+                .withTimeout(kAuthorizationBudget)
+                .withArguments(*subject, std::string{actionId}, std::map<std::string, std::string>{},
+                               kAllowUserInteraction, std::string{})
+                .uponReplyInvoke([this, done](std::optional<sdbus::Error> error, CheckAuthorizationReply reply) {
+                    AuthorizationOutcome outcome = AuthorizationOutcome::Undecided;
+                    if (error) {
+                        log::warnf("PolkitAuthorizer: CheckAuthorization failed: {}; undecided", error->getMessage());
+                    } else {
+                        outcome = outcomeOf(reply);
+                    }
+                    deliver(done, outcome);
+                });
+        } catch (const std::exception& e) {
+            log::warnf("PolkitAuthorizer: CheckAuthorization could not be sent: {}; undecided", e.what());
+            done(AuthorizationOutcome::Undecided);
         }
     }
 
-    std::optional<std::uint32_t> readUid(const std::string& busName)
+private:
+    using Subject = sdbus::Struct<std::string, std::map<std::string, sdbus::Variant>>;
+    using CheckAuthorizationReply = sdbus::Struct<bool, bool, std::map<std::string, std::string>>;
+
+    static AuthorizationOutcome outcomeOf(const CheckAuthorizationReply& reply)
     {
-        try {
-            std::uint32_t uid = 0;
-            m_dbusProxy->callMethod("GetConnectionUnixUser")
-                .onInterface(sdbus::InterfaceName{kDBusIface})
-                .withArguments(busName)
-                .storeResultsTo(uid);
-            return uid;
-        } catch (const std::exception&) {
-            // uid is optional in the subject; absence is not fatal.
+        return PolkitDetail::interpretReply(reply.get<0>(), reply.get<1>()) ? AuthorizationOutcome::Granted
+                                                                            : AuthorizationOutcome::Denied;
+    }
+
+    void deliver(const Completion& done, AuthorizationOutcome outcome) const
+    {
+        if (m_post) {
+            m_post([done, outcome] { done(outcome); });
+        } else {
+            done(outcome);
+        }
+    }
+
+    // The polkit subject for @p caller: ("unix-process", {pid, start-time,
+    // uid}). nullopt -- and a logged reason -- when there is nothing to ask
+    // polkit about; nothing was decided then.
+    std::optional<Subject> subjectFor(const CallerToken& caller)
+    {
+        // The transport-resolved caller token carries the Linux unique bus name;
+        // derive it once and reuse for the credentials lookup and the warn logs.
+        const std::string busName{caller.str()};
+
+        // Empty bus name -> an internal/agent-originated mutation (no external
+        // D-Bus caller). We do NOT consult polkit (there is no subject to
+        // build) — nothing was decided, so this is Undecided like every other
+        // "could not even ask" case below, not a policy Denial.
+        if (busName.empty()) {
+            log::warn("PolkitAuthorizer: empty caller bus name; undecided (no polkit subject)");
             return std::nullopt;
         }
+
+        std::map<std::string, sdbus::Variant> credentials;
+        try {
+            m_dbusProxy->callMethod("GetConnectionCredentials")
+                .onInterface(sdbus::InterfaceName{kDBusIface})
+                .withArguments(busName)
+                .storeResultsTo(credentials);
+        } catch (const std::exception& e) {
+            log::warnf("PolkitAuthorizer: GetConnectionCredentials({}) failed: {}; undecided", busName, e.what());
+            return std::nullopt;
+        }
+        auto details = PolkitDetail::unixProcessDetailsFrom(credentials, &readStartTime);
+        if (!details.has_value()) {
+            log::warnf("PolkitAuthorizer: no pidfd, or no pid and start time, for {}; undecided", busName);
+            return std::nullopt;
+        }
+        // CheckAuthorization signature: (sa{sv}) s a{ss} u s -> (b b a{ss}).
+        // subject = ("unix-process", details); empty action-details; flags
+        // with AllowUserInteraction; empty cancellation id. Timeout widened
+        // to kAuthorizationBudget -- see its comment above.
+        return Subject{std::string{"unix-process"}, std::move(*details)};
     }
 
     static std::optional<std::uint64_t> readStartTime(std::uint32_t pid)
@@ -227,6 +311,7 @@ private:
     std::unique_ptr<sdbus::IConnection> m_systemBus;
     std::unique_ptr<sdbus::IProxy> m_polkitProxy;
     std::unique_ptr<sdbus::IProxy> m_dbusProxy;
+    Post m_post;
 };
 
 PolkitAuthorizer::PolkitAuthorizer(sdbus::IConnection& sessionBus) : m_impl(std::make_unique<Impl>(sessionBus)) {}
@@ -236,6 +321,16 @@ PolkitAuthorizer::~PolkitAuthorizer() = default;
 AuthorizationOutcome PolkitAuthorizer::authorize(std::string_view actionId, const CallerToken& caller)
 {
     return m_impl->authorize(actionId, caller);
+}
+
+void PolkitAuthorizer::authorizeAsync(std::string_view actionId, const CallerToken& caller, Completion done)
+{
+    m_impl->authorizeAsync(actionId, caller, std::move(done));
+}
+
+void PolkitAuthorizer::deliverAnswersThrough(Post post)
+{
+    m_impl->setPost(std::move(post));
 }
 
 } // namespace LibreSCRS::Agent

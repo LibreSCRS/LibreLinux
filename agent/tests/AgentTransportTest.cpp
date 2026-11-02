@@ -16,6 +16,8 @@
 // attachLoopPoster. That case needs a private session bus (dbus-run-session).
 
 #include <LibreSCRS/Agent/backend/AgentTransport.h>
+#include "TestAgentCore.h"
+#include "AllowAllAuthorizer.h" // test support: grants every action
 #include <LibreSCRS/Agent/backend/Authorizer.h>
 #include "AgentFrontend.h"
 #include <LibreSCRS/Agent/CryptoWorkerContext.h>
@@ -316,26 +318,17 @@ TEST(AgentTransportBusExporter, PublishesPresenceTreeThroughInterface)
 
     ObjectRegistry registry;
     NopResolver resolver;
-    OperationManager mgr;
     auto prompter = std::make_shared<NopPrompter>();
-    auto serializer = std::make_shared<PromptSerializer>();
-    auto creds = std::make_shared<CredentialCache>();
-    CardReadCache readCache;
-    ConfigStore cfg(std::filesystem::temp_directory_path() / "librescrs-test-transport-tree" / "agent.conf",
-                    std::filesystem::temp_directory_path() / "librescrs-test-transport-tree" / "cache");
-    SigningEngineProvider signingEngine(cfg);
     AllowAllAuthorizer authz;
-    RateLimiter rateLimiter;
+    LibreSCRS::Agent::Testing::SilentTransport coreTransport;
+    LibreSCRS::Agent::AgentCore core = LibreSCRS::Agent::Testing::makeTestCore(
+        "librescrs-test-transport-tree", resolver, coreTransport, authz, prompter);
     // No loop poster -> the frontend exports the Card1 synchronously.
     BusExporter exporter(*serverConn, registry);
     // The frontend owns the exported objects + the root ManagerObject (which hosts
     // the ObjectManager adaptor on the root path so GetManagedObjects reports the
-    // reader/card children the frontend materialises). This suite drives only the
-    // presence tree, so the Pkcs11_1 broker is null.
-    auto cryptoCtx = std::make_shared<CryptoWorkerContext>(
-        CryptoWorkerContext{.prompter = prompter, .serializer = serializer, .credentials = creds});
-    AgentFrontend frontend(exporter, serverConn, mgr, cryptoCtx, readCache, signingEngine, authz, rateLimiter, cfg,
-                           nullptr, "test");
+    // reader/card children the frontend materialises).
+    AgentFrontend frontend(exporter, serverConn, core, "test");
 
     // Drive the presence surface through the interface reference (proves the
     // virtual dispatch onto BusExporter's overrides).
@@ -393,6 +386,99 @@ TEST(AgentTransportBusExporter, PublishesPresenceTreeThroughInterface)
         EXPECT_TRUE(managed.contains(sdbus::ObjectPath{kReaderPath})) << "reader/1 must survive card withdraw";
     }
 
+    clientConn->leaveEventLoop();
+    serverConn->leaveEventLoop();
+}
+
+// Reader1.Model / Reader1.Interface: the reader is published with the label the
+// agent library's registry decides over the whole roster, and a twin arriving
+// beside it relabels the reader already on the bus -- one PropertiesChanged
+// carrying both, and Get answering the new label. Driven through the registry
+// (the production source), so nothing here classifies a reader name.
+TEST(AgentTransportBusExporter, AReaderCarriesTheRostersLabelAndFollowsItsChanges)
+{
+    constexpr const char* kService = "org.librescrs.Agent.Test.ReaderLabel";
+    constexpr const char* kReader1Iface = "org.librescrs.Agent.Reader1";
+    constexpr const char* kContactSlot =
+        "HID Global OMNIKEY 5422 Smartcard Reader [OMNIKEY 5422 Smartcard Reader] (IM0O2C00NF10456904) 01 00";
+    constexpr const char* kContactlessSlot =
+        "HID Global OMNIKEY 5422 Smartcard Reader [OMNIKEY 5422CL Smartcard Reader] (IM0O2C00NF10456904) 00 00";
+
+    std::shared_ptr<sdbus::IConnection> serverConn = sdbus::createSessionBusConnection();
+    ASSERT_NE(serverConn, nullptr) << "run under dbus-run-session";
+    serverConn->requestName(sdbus::ServiceName{kService});
+
+    ObjectRegistry registry;
+    NopResolver resolver;
+    auto prompter = std::make_shared<NopPrompter>();
+    AllowAllAuthorizer authz;
+    LibreSCRS::Agent::Testing::SilentTransport coreTransport;
+    LibreSCRS::Agent::AgentCore core = LibreSCRS::Agent::Testing::makeTestCore(
+        "librescrs-test-transport-label", resolver, coreTransport, authz, prompter);
+    BusExporter exporter(*serverConn, registry);
+    AgentFrontend frontend(exporter, serverConn, core, "test");
+
+    registry.addReader(ReaderState{.id = ObjectId{1}, .name = kContactSlot});
+
+    serverConn->enterEventLoopAsync();
+    auto clientConn = sdbus::createSessionBusConnection();
+    clientConn->enterEventLoopAsync();
+    auto first = sdbus::createProxy(*clientConn, sdbus::ServiceName{kService},
+                                    sdbus::ObjectPath{"/org/librescrs/Agent/reader/1"});
+    const auto property = [&](sdbus::IProxy& proxy, const char* name) {
+        sdbus::Variant value;
+        proxy.callMethod("Get")
+            .onInterface(sdbus::InterfaceName{"org.freedesktop.DBus.Properties"})
+            .withArguments(std::string{kReader1Iface}, std::string{name})
+            .storeResultsTo(value);
+        return value.get<std::string>();
+    };
+
+    // Alone on the roster, a contact slot cannot be told from a single-interface
+    // reader: the agent says "unknown", never a guessed "contact".
+    EXPECT_EQ(property(*first, "Model"), "OMNIKEY 5422");
+    EXPECT_EQ(property(*first, "Interface"), "unknown");
+
+    std::mutex mtx;
+    std::vector<std::map<std::string, sdbus::Variant>> changes;
+    first->uponSignal(sdbus::SignalName{"PropertiesChanged"})
+        .onInterface(sdbus::InterfaceName{"org.freedesktop.DBus.Properties"})
+        .call([&](const std::string& iface, const std::map<std::string, sdbus::Variant>& changed,
+                  const std::vector<std::string>& /*invalidated*/) {
+            if (iface == kReader1Iface) {
+                const std::lock_guard guard(mtx);
+                changes.push_back(changed);
+            }
+        });
+
+    registry.addReader(ReaderState{.id = ObjectId{2}, .name = kContactlessSlot});
+
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+    for (;;) {
+        {
+            const std::lock_guard guard(mtx);
+            if (!changes.empty() || std::chrono::steady_clock::now() >= deadline) {
+                break;
+            }
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds{10});
+    }
+    {
+        const std::lock_guard guard(mtx);
+        ASSERT_EQ(changes.size(), 1U) << "the twin's arrival must relabel the reader beside it, once";
+        ASSERT_TRUE(changes[0].contains("Model"));
+        ASSERT_TRUE(changes[0].contains("Interface"));
+        EXPECT_EQ(changes[0].at("Model").get<std::string>(), "OMNIKEY 5422");
+        EXPECT_EQ(changes[0].at("Interface").get<std::string>(), "contact");
+    }
+    EXPECT_EQ(property(*first, "Interface"), "contact");
+    auto second = sdbus::createProxy(*clientConn, sdbus::ServiceName{kService},
+                                     sdbus::ObjectPath{"/org/librescrs/Agent/reader/2"});
+    EXPECT_EQ(property(*second, "Model"), "OMNIKEY 5422");
+    EXPECT_EQ(property(*second, "Interface"), "contactless");
+
+    first.reset();
+    second.reset();
     clientConn->leaveEventLoop();
     serverConn->leaveEventLoop();
 }

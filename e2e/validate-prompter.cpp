@@ -21,6 +21,7 @@
 //   env LIBRESCRS_PROMPTER_GATE selects the gate file the validator toggles
 //   (must match the auto-prompter's gate; default /tmp/librescrs-e2e/prompt.gate).
 
+#include "PrompterWire.h"
 #include "org.librescrs.Prompter1_proxy.h" // generated (build/agent/generated)
 
 #include <sdbus-c++/IConnection.h>
@@ -45,8 +46,8 @@ constexpr const char* kServiceName = "org.librescrs.Prompter1";
 constexpr const char* kObjectPath = "/org/librescrs/Prompter1";
 constexpr const char* kDefaultGate = "/tmp/librescrs-e2e/prompt.gate";
 
-// Mirrors SecretMemfdReader::kMaxSecretBytes (agent/src/SecretMemfdReader.h).
-constexpr std::size_t kMaxSecretBytes = 8 * 1024;
+// The cap the agent's reader enforces (the agent library's).
+using LibreSCRS::PrompterWire::kMaxSecretBytes;
 // Contract seal set (common/SealedMemfdCreator.h): SHRINK|GROW|WRITE, no SEAL.
 constexpr unsigned kExpectedSeals = F_SEAL_SHRINK | F_SEAL_GROW | F_SEAL_WRITE;
 

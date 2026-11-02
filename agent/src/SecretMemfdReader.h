@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 // SPDX-FileCopyrightText: 2026 hirashix0
 #pragma once
+#include "PrompterWire.h"
 #include <LibreSCRS/Secure/String.h>
 #include <sdbus-c++/Types.h>
 #include <cstddef>
@@ -23,9 +24,8 @@ namespace LibreSCRS::Agent {
 //     the Secure::String is explicitly zeroed before being released.
 struct SecretMemfdReader
 {
-    // 8 KiB is well above any realistic PIN / CAN / MRZ payload and still
-    // small enough that a malicious prompter cannot wedge us with a giant fd.
-    static constexpr std::size_t kMaxSecretBytes = 8 * 1024;
+    // The cap every agent host enforces on a prompter (the agent library's).
+    static constexpr std::size_t kMaxSecretBytes = LibreSCRS::PrompterWire::kMaxSecretBytes;
 
     [[nodiscard]] static std::optional<LibreSCRS::Secure::String> read(sdbus::UnixFd fd,
                                                                        std::string* errorMessage = nullptr);

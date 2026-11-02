@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 // SPDX-FileCopyrightText: 2026 hirashix0
 #include "PrompterClient.h"
-#include <LibreSCRS/Agent/backend/Logging.h>
+#include <LibreSCRS/Logging.h>
 #include "PrompterCapability.h" // the version guard in front of every prompt
 #include "PrompterWire.h"       // shared Prompter1 kind / option-key / status vocabulary
 #include "SecretMemfdReader.h"
 #include "org.librescrs.Prompter1_proxy.h"
+#include <LibreSCRS/Agent/backend/PromptTypes.h> // promptStatusFor
+#include <LibreSCRS/Agent/wire/ReaderInterface.h>
 #include <LibreSCRS/Auth/PaceSecretKind.h>
 #include <sdbus-c++/Error.h>
 #include <sdbus-c++/IProxy.h>
@@ -23,55 +25,25 @@ namespace LibreSCRS::Agent {
 
 namespace {
 
-// Kind / option-key / status names live in common/PrompterWire.h (shared with
-// the prompter producer so the two binaries cannot drift).
+// Kind / option-key names live in common/PrompterWire.h (shared with the
+// prompter producer so the two binaries cannot drift); the kind words and the
+// reply status are the agent library's.
 using LibreLinux::PrompterWire::kKindCan;
 using LibreLinux::PrompterWire::kKindMrz;
-using LibreLinux::PrompterWire::kStatusCancelled;
-using LibreLinux::PrompterWire::kStatusOk;
-using LibreLinux::PrompterWire::kStatusOkMrz;
-using LibreLinux::PrompterWire::kStatusTimeout;
-using LibreLinux::PrompterWire::kStatusUnauthorized;
+using LibreLinux::PrompterWire::PromptReplyStatus;
 
-PromptStatus parseStatus(std::string_view raw)
+// A reply word this build does not know is the prompter failing, never a
+// success: "unauthorized" and anything unrecognised land on Error alike.
+PromptReplyStatus replyStatusOf(std::string_view raw)
 {
-    if (raw == kStatusOk) {
-        return PromptStatus::Ok;
-    }
-    if (raw == kStatusCancelled) {
-        return PromptStatus::Cancelled;
-    }
-    // The window closed itself on its own deadline. Never folded into
-    // Cancelled: the holder dismissed nothing.
-    if (raw == kStatusTimeout) {
-        return PromptStatus::Timeout;
-    }
-    // "unauthorized" is the prompter's fail-closed rejection of a NON-agent
-    // caller. The agent is the only authorized caller, so it never legitimately
-    // receives this; were its peer-creds somehow unrecognised, collapsing to
-    // Error is the correct fail-closed outcome. Matched explicitly (not left to
-    // the fall-through) so the wire value is acknowledged, not silently unknown.
-    if (raw == kStatusUnauthorized) {
-        return PromptStatus::Error;
-    }
-    return PromptStatus::Error;
+    return LibreLinux::PrompterWire::replyStatusFromToken(raw).value_or(PromptReplyStatus::Error);
 }
 
-// The reader's interface qualifier as its wire token. EXHAUSTIVE switch with no
-// default: an enumerator appended upstream must be a -Wswitch diagnostic here,
-// not a silent fall to "unknown" that would make a dual-interface reader's two
-// slots indistinguishable again.
-const char* readerInterfaceToken(LibreSCRS::Agent::ReaderInterface iface)
+// A reply to a request that offered no alternative kind: the MRZ success word
+// is unexpected there and fails closed like any unknown one.
+PromptStatus parseStatus(std::string_view raw)
 {
-    switch (iface) {
-    case LibreSCRS::Agent::ReaderInterface::Contact:
-        return LibreLinux::PrompterWire::kReaderInterfaceContact;
-    case LibreSCRS::Agent::ReaderInterface::Contactless:
-        return LibreLinux::PrompterWire::kReaderInterfaceContactless;
-    case LibreSCRS::Agent::ReaderInterface::Unknown:
-        return LibreLinux::PrompterWire::kReaderInterfaceUnknown;
-    }
-    return LibreLinux::PrompterWire::kReaderInterfaceUnknown;
+    return promptStatusFor(replyStatusOf(raw), /*mrzAlternativeOffered=*/false);
 }
 
 // Marshal the reader's identity. Each key is omitted when empty, like every
@@ -84,7 +56,7 @@ void emplaceReaderIdentity(std::map<std::string, sdbus::Variant>& dict, const Pr
     }
     if (options.reader.iface != LibreSCRS::Agent::ReaderInterface::Unknown) {
         dict.emplace(LibreLinux::PrompterWire::kOptReaderInterface,
-                     sdbus::Variant{std::string{readerInterfaceToken(options.reader.iface)}});
+                     sdbus::Variant{std::string{LibreSCRS::Agent::Wire::readerInterfaceToken(options.reader.iface)}});
     }
     if (!options.reader.full.empty()) {
         dict.emplace(LibreLinux::PrompterWire::kOptReaderFull, sdbus::Variant{options.reader.full});
@@ -112,17 +84,17 @@ struct ParsedStatus
 };
 
 // The RequestSecret status parse, aware of what this very request asked for.
-// Exactly one status is sent-options-dependent: the distinct success token is
-// meaningful only to a caller that opted in, and is otherwise unexpected
-// vocabulary. Deliberately NOT recognised in parseStatus above — a status the
-// caller never invited must take the same fail-closed route as any unknown one,
-// which is precisely what the delegation below does.
+// Exactly one status is sent-options-dependent: the MRZ success word is
+// meaningful only to a caller that opted in (promptStatusFor reads it as an
+// error otherwise), and it names WHICH credential the secret is.
 ParsedStatus parseRequestSecretStatus(std::string_view raw, bool mrzAlternativeOffered)
 {
-    if (mrzAlternativeOffered && raw == kStatusOkMrz) {
-        return ParsedStatus{PromptStatus::Ok, LibreSCRS::Auth::PaceSecretKind::Mrz};
+    const PromptReplyStatus reply = replyStatusOf(raw);
+    const PromptStatus status = promptStatusFor(reply, mrzAlternativeOffered);
+    if (status == PromptStatus::Ok && reply == PromptReplyStatus::OkMrz) {
+        return ParsedStatus{status, LibreSCRS::Auth::PaceSecretKind::Mrz};
     }
-    return ParsedStatus{parseStatus(raw), std::nullopt};
+    return ParsedStatus{status, std::nullopt};
 }
 
 std::map<std::string, sdbus::Variant> buildOptionsDict(const PromptOptions& options)
@@ -333,30 +305,61 @@ void PrompterClient::resetPrompter() noexcept
     }
 }
 
-bool PrompterClient::prompterIsUsable()
+PrompterClient::Usability PrompterClient::prompterUsability()
 {
     const std::lock_guard lock{m_capabilityMutex};
     if (m_capability.has_value()) {
-        return *m_capability;
+        return *m_capability ? Usability::Usable : Usability::TooOld;
     }
     std::optional<std::uint32_t> reported;
     try {
         auto connection = sdbus::createSessionBusConnection();
         Impl probe(*connection, m_serviceName, m_objectPath);
         reported = probe.ProtocolVersion();
+    } catch (const sdbus::Error& e) {
+        // An older helper publishes no such property: the bus answers that the
+        // property does not exist (sd-bus says UnknownProperty, Qt InvalidArgs).
+        // That is an answer about the helper, and it is remembered. Anything
+        // else -- the helper not running yet, in its restart limit, slow to
+        // activate -- says nothing about which helper it is, so the next prompt
+        // asks again.
+        const std::string name = e.getName();
+        if (name != "org.freedesktop.DBus.Error.UnknownProperty" && name != "org.freedesktop.DBus.Error.InvalidArgs") {
+            log::warnf("PrompterClient: the prompter could not be reached: {}", e.getMessage());
+            return Usability::Unreachable;
+        }
+        log::warnf("PrompterClient: the prompter publishes no protocol version: {}", e.getMessage());
     } catch (const std::exception& e) {
-        // An older helper publishes no such property, so the read throws. That
-        // is exactly the case being caught, not an unexpected error.
-        log::warnf("PrompterClient: cannot read the prompter's protocol version: {}", e.what());
-    } catch (...) {
-        log::warn("PrompterClient: cannot read the prompter's protocol version");
+        log::warnf("PrompterClient: the prompter could not be reached: {}", e.what());
+        return Usability::Unreachable;
     }
     m_capability = PrompterCapability::usable(reported);
     if (!*m_capability) {
         log::warn("PrompterClient: the credential window helper is out of date; refusing to raise a prompt it "
                   "could not dismiss");
     }
-    return *m_capability;
+    return *m_capability ? Usability::Usable : Usability::TooOld;
+}
+
+template <typename Result>
+bool PrompterClient::refuseUnlessUsable(Result& result)
+{
+    switch (prompterUsability()) {
+    case Usability::Usable:
+        return false;
+    case Usability::TooOld:
+        // Not a failure of the helper: it is running and serving, it simply
+        // predates the addressed cancel, so a prompt raised now could never be
+        // dismissed. A capability gap, and one the holder can clear.
+        result.status = PromptStatus::HelperTooOld;
+        result.userMessage = "the credential window helper is out of date";
+        return true;
+    case Usability::Unreachable:
+        result.status = PromptStatus::Error;
+        result.userMessage = "the credential window helper could not be reached";
+        return true;
+    }
+    return true;
 }
 
 PromptResult PrompterClient::request(std::string_view kind, const PromptOptions& options)
@@ -366,12 +369,7 @@ PromptResult PrompterClient::request(std::string_view kind, const PromptOptions&
     // Refuse BEFORE any window is raised. A helper that cannot be told to
     // dismiss a prompt would leave it standing with nobody able to close it --
     // the defect this design removes, returning through a mismatched pair.
-    if (!prompterIsUsable()) {
-        // Not a failure of the helper: it is running and serving, it simply
-        // predates the addressed cancel, so a prompt raised now could never be
-        // dismissed. A capability gap, and one the holder can clear.
-        result.status = PromptStatus::HelperTooOld;
-        result.userMessage = "the credential window helper is out of date";
+    if (refuseUnlessUsable(result)) {
         return result;
     }
 
@@ -444,12 +442,7 @@ PinChangePromptResult PrompterClient::requestPinChange(const PromptOptions& opti
     PinChangePromptResult result;
 
     // Same refusal as the single-secret path, for the same reason.
-    if (!prompterIsUsable()) {
-        // Not a failure of the helper: it is running and serving, it simply
-        // predates the addressed cancel, so a prompt raised now could never be
-        // dismissed. A capability gap, and one the holder can clear.
-        result.status = PromptStatus::HelperTooOld;
-        result.userMessage = "the credential window helper is out of date";
+    if (refuseUnlessUsable(result)) {
         return result;
     }
 

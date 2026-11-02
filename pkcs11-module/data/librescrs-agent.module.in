@@ -22,9 +22,9 @@ module: @LIBRESCRS_P11_MODULE_REF@
 # Never abort other modules if this one fails to load (e.g. agent not running).
 critical: no
 
-# Below the vendor middleware's own declaration, which claims 10 as well: this
-# module replaces it rather than outranking it, and a missing priority would
-# have claimed the higher default.
+# Sorted ahead of modules that declare no priority (pkcs11.conf(5): higher
+# numbers first, default zero), so a search for keys and certificates finds
+# the card through the agent before any generic module that might also see it.
 priority: 10
 
 # ---------------------------------------------------------------------------

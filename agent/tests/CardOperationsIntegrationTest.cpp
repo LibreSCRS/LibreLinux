@@ -18,6 +18,8 @@
 // NOT call OperationManager::recordSenderForTest -- the real wiring is
 // the contract under test.
 
+#include "AllowAllAuthorizer.h" // test support: grants every action
+#include "TestAgentCore.h"
 #include <LibreSCRS/Agent/backend/Authorizer.h>
 #include "AgentFrontend.h"
 #include <LibreSCRS/Agent/CryptoWorkerContext.h>
@@ -48,6 +50,7 @@
 #include <LibreSCRS/Plugin/CardPlugin.h>
 #include <LibreSCRS/Plugin/PluginTypes.h>
 #include <LibreSCRS/SmartCard/CardSession.h>
+#include <LibreSCRS/SmartCard/testing/CardSessionTesting.h>
 
 #include <systemd/sd-event.h>
 
@@ -96,6 +99,10 @@ constexpr const char* kAgentServiceGroupStream = "org.librescrs.Agent.Test.E2E.G
 constexpr const char* kPrompterServiceHappy = "org.librescrs.Prompter1.Test.E2E.Happy";
 constexpr const char* kPrompterServiceCancel = "org.librescrs.Prompter1.Test.E2E.Cancel";
 constexpr const char* kPrompterServiceGroupStream = "org.librescrs.Prompter1.Test.E2E.GroupStream";
+constexpr const char* kAgentServiceClientCancel = "org.librescrs.Agent.Test.E2E.ClientCancel";
+constexpr const char* kPrompterServiceClientCancel = "org.librescrs.Prompter1.Test.E2E.ClientCancel";
+constexpr const char* kAgentServiceForeignCancel = "org.librescrs.Agent.Test.E2E.ForeignCancel";
+constexpr const char* kPrompterServiceForeignCancel = "org.librescrs.Prompter1.Test.E2E.ForeignCancel";
 constexpr const char* kPrompterObject = "/org/librescrs/Prompter1";
 constexpr const char* kReaderPath = "/org/librescrs/Agent/reader/0";
 // The single global opaque counter mints the first reader ("R0") as id 1 and its
@@ -198,7 +205,7 @@ inline LibreSCRS::Agent::Operations::SessionFactory fakeSessionFactory()
 {
     return [](const std::string& r)
                -> std::expected<std::shared_ptr<LibreSCRS::SmartCard::CardSession>, LibreSCRS::SmartCard::OpenError> {
-        return LibreSCRS::SmartCard::detail::makeDetachedCardSession(r);
+        return LibreSCRS::SmartCard::Testing::makeDetachedCardSession(r);
     };
 }
 
@@ -323,17 +330,37 @@ public:
     }
 };
 
-// Build the non-owning seam handle bundle for a CardObject — mirrors
-// CardObjectOperationsTest's makeDeps() so the field names stay in sync.
-CardOperationDeps makeDeps(CardReader& reader, PrompterClientBase& prompter, PromptSerializer& serializer,
-                           CredentialCache& credentials, CardReadCache& readCache)
+// The agent core over @p prompter and a launcher whose identity reader is
+// @p reader (every other seam fails its call); the card sessions are detached
+// fakes. The scratch configuration is named after the running test.
+struct ReadHost
+{
+    ReadHost(std::shared_ptr<PrompterClientBase> prompter, std::shared_ptr<CardReader> reader)
+        : core(Testing::makeTestCore(std::string{"integration-"} +
+                                         ::testing::UnitTest::GetInstance()->current_test_info()->name(),
+                                     resolver, transport, authorizer, std::move(prompter))),
+          launcher(core, seamsReadingWith(std::move(reader)))
+    {
+        core.operationManager().setSessionFactoryForTest(fakeSessionFactory());
+    }
+
+    static OperationSeams seamsReadingWith(std::shared_ptr<CardReader> reader)
+    {
+        auto seams = Testing::unusedSeams();
+        seams.reader = std::move(reader);
+        return seams;
+    }
+
+    Testing::NoCandidates resolver;
+    Testing::SilentTransport transport;
+    AllowAllAuthorizer authorizer;
+    AgentCore core;
+    OperationLauncher launcher;
+};
+
+CardOperationDeps cardDeps()
 {
     CardOperationDeps deps;
-    deps.reader = &reader;
-    deps.prompter = &prompter;
-    deps.serializer = &serializer;
-    deps.credentials = &credentials;
-    deps.readCache = &readCache;
     deps.cardKey = kCardPath;
     deps.readerName = "FakeReader";
     return deps;
@@ -360,23 +387,17 @@ TEST(CardOperationsIntegration, ReadIdentityHappyPathEmitsResultThenFinishedOk)
     prompterBus->enterEventLoopAsync();
 
     // Agent-side state.
-    OkReader reader;
-    PrompterClient prompterClient(kPrompterServiceHappy, kPrompterObject);
-    CredentialCache credCache;
-    CardReadCache readCache;
-    PromptSerializer serializer;
-    OperationManager mgr(nullptr); // production (cleanup-grace) mode; no resolver
-    mgr.setSessionFactoryForTest(fakeSessionFactory());
+    auto prompterClient = std::make_shared<PrompterClient>(kPrompterServiceHappy, kPrompterObject);
+    auto reader = std::make_shared<OkReader>();
+    ReadHost host{prompterClient, reader};
     // Happy path: the client stays connected through every assertion, so no
     // client-disconnect watch is needed here (that path is exercised by
     // ClientDisconnectCancelsInflightOp below).
 
-    auto deps = makeDeps(reader, prompterClient, serializer, credCache, readCache);
-
     constexpr std::uint32_t kIdentityBit =
         static_cast<std::uint32_t>(LibreSCRS::Plugin::CardCapabilities::IdentityData);
-    CardObject card(*agentBus, sdbus::ObjectPath{kCardPath}, kIdentityBit, sdbus::ObjectPath{kReaderPath}, mgr,
-                    std::move(deps));
+    CardObject card(*agentBus, sdbus::ObjectPath{kCardPath}, kIdentityBit, sdbus::ObjectPath{kReaderPath}, host.core,
+                    host.launcher, cardDeps());
 
     // Client connection.
     auto client = sdbus::createSessionBusConnection();
@@ -490,20 +511,14 @@ TEST(CardOperationsIntegration, GroupSignalsStreamInOrderBeforeResult)
     agentBus->enterEventLoopAsync();
     prompterBus->enterEventLoopAsync();
 
-    TwoGroupStreamingReader reader;
-    PrompterClient prompterClient(kPrompterServiceGroupStream, kPrompterObject);
-    CredentialCache credCache;
-    CardReadCache readCache;
-    PromptSerializer serializer;
-    OperationManager mgr(nullptr); // production (cleanup-grace) mode; no resolver
-    mgr.setSessionFactoryForTest(fakeSessionFactory());
-
-    auto deps = makeDeps(reader, prompterClient, serializer, credCache, readCache);
+    auto prompterClient = std::make_shared<PrompterClient>(kPrompterServiceGroupStream, kPrompterObject);
+    auto reader = std::make_shared<TwoGroupStreamingReader>();
+    ReadHost host{prompterClient, reader};
 
     constexpr std::uint32_t kIdentityBit =
         static_cast<std::uint32_t>(LibreSCRS::Plugin::CardCapabilities::IdentityData);
-    CardObject card(*agentBus, sdbus::ObjectPath{kCardPath}, kIdentityBit, sdbus::ObjectPath{kReaderPath}, mgr,
-                    std::move(deps));
+    CardObject card(*agentBus, sdbus::ObjectPath{kCardPath}, kIdentityBit, sdbus::ObjectPath{kReaderPath}, host.core,
+                    host.launcher, cardDeps());
 
     auto client = sdbus::createSessionBusConnection();
     ASSERT_NE(client, nullptr);
@@ -571,6 +586,64 @@ TEST(CardOperationsIntegration, GroupSignalsStreamInOrderBeforeResult)
     agentBus->leaveEventLoop();
 }
 
+namespace {
+
+// Phase and Status of the operation at @p opPath, read through @p bus.
+std::pair<std::uint32_t, std::uint32_t> phaseAndStatus(sdbus::IConnection& bus, const char* service,
+                                                       const sdbus::ObjectPath& opPath)
+{
+    auto proxy = sdbus::createProxy(bus, sdbus::ServiceName{service}, opPath);
+    sdbus::Variant phase;
+    sdbus::Variant status;
+    proxy->callMethod("Get")
+        .onInterface(sdbus::InterfaceName{"org.freedesktop.DBus.Properties"})
+        .withArguments(std::string{kOperation1Iface}, std::string{"Phase"})
+        .storeResultsTo(phase);
+    proxy->callMethod("Get")
+        .onInterface(sdbus::InterfaceName{"org.freedesktop.DBus.Properties"})
+        .withArguments(std::string{kOperation1Iface}, std::string{"Status"})
+        .storeResultsTo(status);
+    return {phase.get<std::uint32_t>(), status.get<std::uint32_t>()};
+}
+
+// Polls until the operation is Done or @p budget runs out; returns the last reading.
+std::pair<std::uint32_t, std::uint32_t> waitForDone(sdbus::IConnection& bus, const char* service,
+                                                    const sdbus::ObjectPath& opPath, std::chrono::milliseconds budget)
+{
+    const auto deadline = std::chrono::steady_clock::now() + budget;
+    auto reading = phaseAndStatus(bus, service, opPath);
+    while (reading.first != static_cast<std::uint32_t>(OperationPhase::Done) &&
+           std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(20ms);
+        reading = phaseAndStatus(bus, service, opPath);
+    }
+    return reading;
+}
+
+void callCancel(sdbus::IConnection& bus, const char* service, const sdbus::ObjectPath& opPath)
+{
+    auto proxy = sdbus::createProxy(bus, sdbus::ServiceName{service}, opPath);
+    proxy->callMethod("Cancel").onInterface(sdbus::InterfaceName{kOperation1Iface});
+}
+
+// Polls until the operation reaches @p phase or @p budget runs out; true once it
+// has. Used to time a cancel against a read that is already on the card instead
+// of guessing how long the worker takes to get there.
+bool waitForPhase(sdbus::IConnection& bus, const char* service, const sdbus::ObjectPath& opPath, OperationPhase phase,
+                  std::chrono::milliseconds budget)
+{
+    const auto deadline = std::chrono::steady_clock::now() + budget;
+    while (phaseAndStatus(bus, service, opPath).first != static_cast<std::uint32_t>(phase)) {
+        if (std::chrono::steady_clock::now() >= deadline) {
+            return false;
+        }
+        std::this_thread::sleep_for(5ms);
+    }
+    return true;
+}
+
+} // namespace
+
 TEST(CardOperationsIntegration, ClientDisconnectCancelsInflightOp)
 {
     std::shared_ptr<sdbus::IConnection> agentBus = sdbus::createSessionBusConnection();
@@ -585,13 +658,9 @@ TEST(CardOperationsIntegration, ClientDisconnectCancelsInflightOp)
     agentBus->enterEventLoopAsync();
     prompterBus->enterEventLoopAsync();
 
-    CancellableReader reader; // blocks on the token, honours cancel
-    PrompterClient prompterClient(kPrompterServiceCancel, kPrompterObject);
-    CredentialCache credCache;
-    CardReadCache readCache;
-    PromptSerializer serializer;
-    OperationManager mgr(nullptr); // production (cleanup-grace) mode; no resolver
-    mgr.setSessionFactoryForTest(fakeSessionFactory());
+    auto prompterClient = std::make_shared<PrompterClient>(kPrompterServiceCancel, kPrompterObject);
+    auto reader = std::make_shared<CancellableReader>(); // blocks on the token, honours cancel
+    ReadHost host{prompterClient, reader};
 
     // The client-disconnect watch now lives in the BusExporter (AgentTransport):
     // its ctor installs the org.freedesktop.DBus NameOwnerChanged proxy on the
@@ -602,14 +671,13 @@ TEST(CardOperationsIntegration, ClientDisconnectCancelsInflightOp)
     // NameOwnerChanged watch) is needed here; the CardObject is built directly.
     ObjectRegistry registry;
     BusExporter exporter(*agentBus, registry);
-    exporter.onClientDisconnect([&mgr](CallerToken caller) { mgr.dispatchClientDisconnect(caller); });
-
-    auto deps = makeDeps(reader, prompterClient, serializer, credCache, readCache);
+    exporter.onClientDisconnect(
+        [&host](CallerToken caller) { host.core.operationManager().dispatchClientDisconnect(caller); });
 
     constexpr std::uint32_t kIdentityBit =
         static_cast<std::uint32_t>(LibreSCRS::Plugin::CardCapabilities::IdentityData);
-    CardObject card(*agentBus, sdbus::ObjectPath{kCardPath}, kIdentityBit, sdbus::ObjectPath{kReaderPath}, mgr,
-                    std::move(deps));
+    CardObject card(*agentBus, sdbus::ObjectPath{kCardPath}, kIdentityBit, sdbus::ObjectPath{kReaderPath}, host.core,
+                    host.launcher, cardDeps());
 
     auto client = sdbus::createSessionBusConnection();
     ASSERT_NE(client, nullptr);
@@ -625,9 +693,9 @@ TEST(CardOperationsIntegration, ClientDisconnectCancelsInflightOp)
     // captured automatically via getCurrentlyProcessedMessage(). No
     // test-side simulation here; that is the contract under test.
 
-    // Give the worker a moment to begin the read loop so the cancel hits
-    // it mid-flight rather than as a pre-flight bypass.
-    std::this_thread::sleep_for(80ms);
+    // Wait until the read is on the card, so the cancel hits it mid-flight
+    // rather than as a pre-flight bypass.
+    ASSERT_TRUE(waitForPhase(*client, kAgentServiceCancel, opPath, OperationPhase::Reading, 1500ms));
 
     // Drop the client connection -- bus dispatches NameOwnerChanged on
     // agentBus with empty new-owner for the client's unique name. The
@@ -661,6 +729,103 @@ TEST(CardOperationsIntegration, ClientDisconnectCancelsInflightOp)
     agentBus->leaveEventLoop();
 }
 
+// Operation1.Cancel from the client that launched a read ends it: the read's
+// cancel token trips, so the operation finishes Cancelled well inside the 5 s
+// the reader would otherwise wait for the card.
+TEST(CardOperationsIntegration, CancelFromTheLaunchingClientEndsInflightOp)
+{
+    std::shared_ptr<sdbus::IConnection> agentBus = sdbus::createSessionBusConnection();
+    ASSERT_NE(agentBus, nullptr);
+    agentBus->requestName(sdbus::ServiceName{kAgentServiceClientCancel});
+    auto prompterBus = sdbus::createSessionBusConnection();
+    ASSERT_NE(prompterBus, nullptr);
+    prompterBus->requestName(sdbus::ServiceName{kPrompterServiceClientCancel});
+    FakePrompterService prompterHost(*prompterBus, sdbus::ObjectPath{kPrompterObject});
+    agentBus->enterEventLoopAsync();
+    prompterBus->enterEventLoopAsync();
+
+    auto prompterClient = std::make_shared<PrompterClient>(kPrompterServiceClientCancel, kPrompterObject);
+    ReadHost host{prompterClient, std::make_shared<CancellableReader>()};
+    constexpr std::uint32_t kIdentityBit =
+        static_cast<std::uint32_t>(LibreSCRS::Plugin::CardCapabilities::IdentityData);
+    CardObject card(*agentBus, sdbus::ObjectPath{kCardPath}, kIdentityBit, sdbus::ObjectPath{kReaderPath}, host.core,
+                    host.launcher, cardDeps());
+
+    auto client = sdbus::createSessionBusConnection();
+    ASSERT_NE(client, nullptr);
+    client->enterEventLoopAsync();
+    auto cardProxy =
+        sdbus::createProxy(*client, sdbus::ServiceName{kAgentServiceClientCancel}, sdbus::ObjectPath{kCardPath});
+    sdbus::ObjectPath opPath;
+    cardProxy->callMethod("ReadIdentity").onInterface(sdbus::InterfaceName{kCard1Iface}).storeResultsTo(opPath);
+    ASSERT_FALSE(std::string{opPath}.empty());
+
+    ASSERT_TRUE(waitForPhase(*client, kAgentServiceClientCancel, opPath, OperationPhase::Reading, 1500ms));
+    callCancel(*client, kAgentServiceClientCancel, opPath);
+
+    const auto [phase, status] = waitForDone(*client, kAgentServiceClientCancel, opPath, 1500ms);
+    EXPECT_EQ(phase, static_cast<std::uint32_t>(OperationPhase::Done))
+        << "Operation1.Cancel from the launching client did not end the read";
+    EXPECT_EQ(status, static_cast<std::uint32_t>(OperationStatus::Cancelled));
+
+    client->leaveEventLoop();
+    prompterBus->leaveEventLoop();
+    agentBus->leaveEventLoop();
+}
+
+// Operation paths are sequential, so any client can name another's operation.
+// A Cancel from a client that did not launch the read leaves it running; the
+// launching client can still end it.
+TEST(CardOperationsIntegration, CancelFromAnotherClientLeavesTheOpRunning)
+{
+    std::shared_ptr<sdbus::IConnection> agentBus = sdbus::createSessionBusConnection();
+    ASSERT_NE(agentBus, nullptr);
+    agentBus->requestName(sdbus::ServiceName{kAgentServiceForeignCancel});
+    auto prompterBus = sdbus::createSessionBusConnection();
+    ASSERT_NE(prompterBus, nullptr);
+    prompterBus->requestName(sdbus::ServiceName{kPrompterServiceForeignCancel});
+    FakePrompterService prompterHost(*prompterBus, sdbus::ObjectPath{kPrompterObject});
+    agentBus->enterEventLoopAsync();
+    prompterBus->enterEventLoopAsync();
+
+    auto prompterClient = std::make_shared<PrompterClient>(kPrompterServiceForeignCancel, kPrompterObject);
+    ReadHost host{prompterClient, std::make_shared<CancellableReader>()};
+    constexpr std::uint32_t kIdentityBit =
+        static_cast<std::uint32_t>(LibreSCRS::Plugin::CardCapabilities::IdentityData);
+    CardObject card(*agentBus, sdbus::ObjectPath{kCardPath}, kIdentityBit, sdbus::ObjectPath{kReaderPath}, host.core,
+                    host.launcher, cardDeps());
+
+    auto owner = sdbus::createSessionBusConnection();
+    ASSERT_NE(owner, nullptr);
+    owner->enterEventLoopAsync();
+    auto other = sdbus::createSessionBusConnection();
+    ASSERT_NE(other, nullptr);
+    other->enterEventLoopAsync();
+    auto cardProxy =
+        sdbus::createProxy(*owner, sdbus::ServiceName{kAgentServiceForeignCancel}, sdbus::ObjectPath{kCardPath});
+    sdbus::ObjectPath opPath;
+    cardProxy->callMethod("ReadIdentity").onInterface(sdbus::InterfaceName{kCard1Iface}).storeResultsTo(opPath);
+    ASSERT_FALSE(std::string{opPath}.empty());
+
+    ASSERT_TRUE(waitForPhase(*owner, kAgentServiceForeignCancel, opPath, OperationPhase::Reading, 1500ms));
+    callCancel(*other, kAgentServiceForeignCancel, opPath); // answered like any Cancel, and ignored
+
+    std::this_thread::sleep_for(500ms);
+    EXPECT_NE(phaseAndStatus(*other, kAgentServiceForeignCancel, opPath).first,
+              static_cast<std::uint32_t>(OperationPhase::Done))
+        << "a client that did not launch the read cancelled it";
+
+    callCancel(*owner, kAgentServiceForeignCancel, opPath);
+    const auto [phase, status] = waitForDone(*owner, kAgentServiceForeignCancel, opPath, 1500ms);
+    EXPECT_EQ(phase, static_cast<std::uint32_t>(OperationPhase::Done));
+    EXPECT_EQ(status, static_cast<std::uint32_t>(OperationStatus::Cancelled));
+
+    other->leaveEventLoop();
+    owner->leaveEventLoop();
+    prompterBus->leaveEventLoop();
+    agentBus->leaveEventLoop();
+}
+
 // ---------------------------------------------------------------------------
 // The deferred-async PKCS#11 worker hop (OperationManager::enqueueOnReaderWorker
 // — used by Login/SignRaw/Decrypt/CertDer/PublicKey) MUST thread the real PC/SC
@@ -689,7 +854,7 @@ TEST(CardOperationsIntegration, EnqueueOnReaderWorkerBuildsHolderWithRealReaderN
         [recorded](const std::string& r)
             -> std::expected<std::shared_ptr<LibreSCRS::SmartCard::CardSession>, LibreSCRS::SmartCard::OpenError> {
             *recorded = r;
-            return LibreSCRS::SmartCard::detail::makeDetachedCardSession(r);
+            return LibreSCRS::SmartCard::Testing::makeDetachedCardSession(r);
         });
 
     // Drive the worker hop as the FIRST op on this reader, so workerFor CREATES
@@ -771,21 +936,16 @@ TEST(CardOperationsIntegration, SustainedReadLoadKeepsDispatchThreadResponsive)
     agentBus->enterEventLoopAsync();
     prompterBus->enterEventLoopAsync();
 
-    InstantReader reader;
-    PrompterClient prompterClient(kPrompterServiceLoad, kPrompterObject);
-    CredentialCache credCache;
-    CardReadCache readCache;
-    PromptSerializer serializer;
-    OperationManager mgr(nullptr); // production (cleanup-grace) mode; no resolver
-    mgr.setSessionFactoryForTest(fakeSessionFactory());
+    auto prompterClient = std::make_shared<PrompterClient>(kPrompterServiceLoad, kPrompterObject);
+    auto reader = std::make_shared<InstantReader>();
+    ReadHost host{prompterClient, reader};
     // This test asserts dispatch-thread responsiveness under sustained load, not
     // disconnect-cancel, so no client-disconnect watch is wired.
 
-    auto deps = makeDeps(reader, prompterClient, serializer, credCache, readCache);
     constexpr std::uint32_t kIdentityBit =
         static_cast<std::uint32_t>(LibreSCRS::Plugin::CardCapabilities::IdentityData);
-    CardObject card(*agentBus, sdbus::ObjectPath{kCardPath}, kIdentityBit, sdbus::ObjectPath{kReaderPath}, mgr,
-                    std::move(deps));
+    CardObject card(*agentBus, sdbus::ObjectPath{kCardPath}, kIdentityBit, sdbus::ObjectPath{kReaderPath}, host.core,
+                    host.launcher, cardDeps());
 
     auto client = sdbus::createSessionBusConnection();
     ASSERT_NE(client, nullptr);
@@ -906,7 +1066,8 @@ public:
         }
         if (pending.has_value()) {
             m_standing.store(false, std::memory_order_release);
-            pending->returnResults(std::string{LibreLinux::PrompterWire::kStatusCancelled},
+            pending->returnResults(std::string{LibreLinux::PrompterWire::replyStatusToken(
+                                       LibreLinux::PrompterWire::PromptReplyStatus::Cancelled)},
                                    sdbus::UnixFd{makeSealedMemfd(""), sdbus::adopt_fd}, std::string{});
         }
     }
@@ -923,7 +1084,8 @@ private:
     void RequestSecrets(sdbus::Result<std::string, sdbus::UnixFd, sdbus::UnixFd, std::string>&& result,
                         std::string /*kind*/, std::map<std::string, sdbus::Variant> /*options*/) override
     {
-        result.returnResults(std::string{LibreLinux::PrompterWire::kStatusCancelled},
+        result.returnResults(std::string{LibreLinux::PrompterWire::replyStatusToken(
+                                 LibreLinux::PrompterWire::PromptReplyStatus::Cancelled)},
                              sdbus::UnixFd{makeSealedMemfd(""), sdbus::adopt_fd},
                              sdbus::UnixFd{makeSealedMemfd(""), sdbus::adopt_fd}, std::string{});
     }
@@ -981,19 +1143,14 @@ TEST(CardOperationsIntegration, CredentialPromptDoesNotStallDispatchThread)
     agentBus->enterEventLoopAsync();
     prompterBus->enterEventLoopAsync();
 
-    PrompterClient prompterClient(kPrompterServicePrompted, kPrompterObject);
-    PromptingReader reader(prompterClient);
-    CredentialCache credCache;
-    CardReadCache readCache;
-    PromptSerializer serializer;
-    OperationManager mgr(nullptr); // production (cleanup-grace) mode; no resolver
-    mgr.setSessionFactoryForTest(fakeSessionFactory());
+    auto prompterClient = std::make_shared<PrompterClient>(kPrompterServicePrompted, kPrompterObject);
+    auto reader = std::make_shared<PromptingReader>(*prompterClient);
+    ReadHost host{prompterClient, reader};
 
-    auto deps = makeDeps(reader, prompterClient, serializer, credCache, readCache);
     constexpr std::uint32_t kIdentityBit =
         static_cast<std::uint32_t>(LibreSCRS::Plugin::CardCapabilities::IdentityData);
-    CardObject card(*agentBus, sdbus::ObjectPath{kCardPath}, kIdentityBit, sdbus::ObjectPath{kReaderPath}, mgr,
-                    std::move(deps));
+    CardObject card(*agentBus, sdbus::ObjectPath{kCardPath}, kIdentityBit, sdbus::ObjectPath{kReaderPath}, host.core,
+                    host.launcher, cardDeps());
 
     auto client = sdbus::createSessionBusConnection();
     ASSERT_NE(client, nullptr);
@@ -1102,7 +1259,7 @@ class CanStubPlugin final : public LibreSCRS::Plugin::CardPlugin
 public:
     CanStubPlugin()
     {
-        setIdentity("can-stub", "stub", 0);
+        setIdentity("can-stub", 0);
     }
     LibreSCRS::Plugin::CardCapabilities capabilities() const override
     {
@@ -1190,29 +1347,19 @@ TEST(CardOperationsIntegration, PreReadAuthResolvedOnWorkerAndPublishedOnLoop)
         ObjectRegistry registry;
         PresenceModel model(registry, resolver);
         auto prompter = std::make_shared<NopPrompter>();
-        auto serializer = std::make_shared<PromptSerializer>();
-        auto credCache = std::make_shared<CredentialCache>();
-        CardReadCache readCache;
-        const auto cfgDir = std::filesystem::temp_directory_path() / "ll-prereadauth-e2e";
-        Config::ConfigStore cfg(cfgDir / "agent.conf", cfgDir / "cache");
-        SigningEngineProvider signingEngine(cfg);
         AllowAllAuthorizer authz;
-        RateLimiter rateLimiter;
+        Testing::SilentTransport coreTransport;
+        AgentCore core = Testing::makeTestCore("prereadauth-e2e", resolver, coreTransport, authz, prompter);
 
         // Production ctor + the resolver so the per-reader holder resolves the
         // Can candidate; the detached fake session stands in for PC/SC.
-        OperationManager mgr(&resolver);
-        mgr.setSessionFactoryForTest(fakeSessionFactory());
+        core.operationManager().setSessionFactoryForTest(fakeSessionFactory());
 
         BusExporter exporter(*serverConn, registry);
         exporter.attachLoopPoster(poster);
         // The frontend records the pending card + enqueues the worker resolve, then
-        // creates the Card1 on the loop thread when the resolve lands. This suite
-        // exercises the deferred-publish path, not Pkcs11_1, so the broker is null.
-        auto cryptoCtx = std::make_shared<CryptoWorkerContext>(
-            CryptoWorkerContext{.prompter = prompter, .serializer = serializer, .credentials = credCache});
-        AgentFrontend frontend(exporter, serverConn, mgr, cryptoCtx, readCache, signingEngine, authz, rateLimiter, cfg,
-                               nullptr, "test");
+        // creates the Card1 on the loop thread when the resolve lands.
+        AgentFrontend frontend(exporter, serverConn, core, "test");
 
         // onCardInserted fires materialization synchronously: it records the card
         // pending AND enqueues the worker pre-read-auth resolve.
@@ -1268,7 +1415,7 @@ TEST(CardOperationsIntegration, PreReadAuthResolvedOnWorkerAndPublishedOnLoop)
         loopThread.join();
         serverConn->detachSdEventLoop();
         // Inner-scope locals destruct here (reverse decl order): frontend, then
-        // exporter, then mgr (joins its workers), then ... then poster.
+        // exporter, then core (joins its workers), then ... then poster.
     }
     sd_event_unref(ev);
 }
@@ -1304,7 +1451,7 @@ class AidProbeCapablePlugin final : public LibreSCRS::Plugin::CardPlugin
 public:
     AidProbeCapablePlugin()
     {
-        setIdentity("aid-probe-stub", "stub", 0);
+        setIdentity("aid-probe-stub", 0);
     }
     LibreSCRS::Plugin::CardCapabilities capabilities() const override
     {
@@ -1365,29 +1512,19 @@ TEST(CardOperationsIntegration, CapabilitiesResolvedFromHeldSessionForAidProbeOn
         ObjectRegistry registry;
         PresenceModel model(registry, resolver);
         auto prompter = std::make_shared<NopPrompter>();
-        auto serializer = std::make_shared<PromptSerializer>();
-        auto credCache = std::make_shared<CredentialCache>();
-        CardReadCache readCache;
-        const auto cfgDir = std::filesystem::temp_directory_path() / "ll-aidprobe-e2e";
-        Config::ConfigStore cfg(cfgDir / "agent.conf", cfgDir / "cache");
-        SigningEngineProvider signingEngine(cfg);
         AllowAllAuthorizer authz;
-        RateLimiter rateLimiter;
+        Testing::SilentTransport coreTransport;
+        AgentCore core = Testing::makeTestCore("aidprobe-e2e", resolver, coreTransport, authz, prompter);
 
-        OperationManager mgr(&resolver);
-        mgr.setSessionFactoryForTest(fakeSessionFactory());
+        core.operationManager().setSessionFactoryForTest(fakeSessionFactory());
 
         BusExporter exporter(*serverConn, registry);
         exporter.attachLoopPoster(poster);
 
         // The frontend owns the exported objects + the root ManagerObject (which
         // hosts the ObjectManager so the client can call GetManagedObjects — the
-        // snapshot the first-party PKCS#11 client reads). This suite reads the
-        // presence snapshot, not Pkcs11_1, so the broker is null.
-        auto cryptoCtx = std::make_shared<CryptoWorkerContext>(
-            CryptoWorkerContext{.prompter = prompter, .serializer = serializer, .credentials = credCache});
-        AgentFrontend frontend(exporter, serverConn, mgr, cryptoCtx, readCache, signingEngine, authz, rateLimiter, cfg,
-                               nullptr, "test");
+        // snapshot the first-party PKCS#11 client reads).
+        AgentFrontend frontend(exporter, serverConn, core, "test");
 
         // onCardInserted fires materialization synchronously: the card is recorded PENDING and
         // a worker hop resolves caps + pre-read auth on the held session — the Card1
@@ -1481,7 +1618,7 @@ class CardTypeStubPlugin final : public LibreSCRS::Plugin::CardPlugin
 public:
     explicit CardTypeStubPlugin(const char* id = kCardTypeAtInsertion, int priority = 100)
     {
-        setIdentity(id, "stub", priority);
+        setIdentity(id, priority);
     }
     LibreSCRS::Plugin::CardCapabilities capabilities() const override
     {
@@ -1553,25 +1690,16 @@ TEST(CardOperationsIntegration, CardTypeAndAtrResolvedAtInsertionThenAuthoritati
         ObjectRegistry registry;
         PresenceModel model(registry, resolver);
         auto prompter = std::make_shared<NopPrompter>();
-        auto serializer = std::make_shared<PromptSerializer>();
-        auto credCache = std::make_shared<CredentialCache>();
-        CardReadCache readCache;
-        const auto cfgDir = std::filesystem::temp_directory_path() / "ll-cardtype-e2e";
-        Config::ConfigStore cfg(cfgDir / "agent.conf", cfgDir / "cache");
-        SigningEngineProvider signingEngine(cfg);
         AllowAllAuthorizer authz;
-        RateLimiter rateLimiter;
+        Testing::SilentTransport coreTransport;
+        AgentCore core = Testing::makeTestCore("cardtype-e2e", resolver, coreTransport, authz, prompter);
 
-        OperationManager mgr(&resolver);
-        mgr.setSessionFactoryForTest(fakeSessionFactory());
+        core.operationManager().setSessionFactoryForTest(fakeSessionFactory());
 
         BusExporter exporter(*serverConn, registry);
         exporter.attachLoopPoster(poster);
 
-        auto cryptoCtx = std::make_shared<CryptoWorkerContext>(
-            CryptoWorkerContext{.prompter = prompter, .serializer = serializer, .credentials = credCache});
-        AgentFrontend frontend(exporter, serverConn, mgr, cryptoCtx, readCache, signingEngine, authz, rateLimiter, cfg,
-                               nullptr, "test");
+        AgentFrontend frontend(exporter, serverConn, core, "test");
 
         const std::vector<std::uint8_t> atr{0x3B, 0x7F, 0x96, 0x00};
         model.onReaderAdded("R0");
@@ -1697,7 +1825,7 @@ class LatchedReadPlugin final : public LibreSCRS::Plugin::CardPlugin
 public:
     explicit LatchedReadPlugin(ReadGate* gate) : m_gate(gate)
     {
-        setIdentity(kWithdrawRaceInsertionType, "stub", 0);
+        setIdentity(kWithdrawRaceInsertionType, 0);
     }
     LibreSCRS::Plugin::CardCapabilities capabilities() const override
     {
@@ -1767,25 +1895,16 @@ TEST(CardOperationsIntegration, CardTypeUpdateForWithdrawnCardIsDroppedWithoutCr
         ObjectRegistry registry;
         PresenceModel model(registry, resolver);
         auto prompter = std::make_shared<NopPrompter>();
-        auto serializer = std::make_shared<PromptSerializer>();
-        auto credCache = std::make_shared<CredentialCache>();
-        CardReadCache readCache;
-        const auto cfgDir = std::filesystem::temp_directory_path() / "ll-withdrawrace-e2e";
-        Config::ConfigStore cfg(cfgDir / "agent.conf", cfgDir / "cache");
-        SigningEngineProvider signingEngine(cfg);
         AllowAllAuthorizer authz;
-        RateLimiter rateLimiter;
+        Testing::SilentTransport coreTransport;
+        AgentCore core = Testing::makeTestCore("withdrawrace-e2e", resolver, coreTransport, authz, prompter);
 
-        OperationManager mgr(&resolver);
-        mgr.setSessionFactoryForTest(fakeSessionFactory());
+        core.operationManager().setSessionFactoryForTest(fakeSessionFactory());
 
         BusExporter exporter(*serverConn, registry);
         exporter.attachLoopPoster(poster);
 
-        auto cryptoCtx = std::make_shared<CryptoWorkerContext>(
-            CryptoWorkerContext{.prompter = prompter, .serializer = serializer, .credentials = credCache});
-        AgentFrontend frontend(exporter, serverConn, mgr, cryptoCtx, readCache, signingEngine, authz, rateLimiter, cfg,
-                               nullptr, "test");
+        AgentFrontend frontend(exporter, serverConn, core, "test");
 
         model.onReaderAdded("R0");
         model.onCardInserted("R0", {0x3B, 0x10});
@@ -1904,12 +2023,13 @@ TEST(CardOperationsIntegration, CardTypeUpdateForWithdrawnCardIsDroppedWithoutCr
 }
 
 // ---------------------------------------------------------------------------
-// The insertion probe's verdict, as the frontend acts on it: a card no plugin
-// serves is opened once and exported with no capabilities, a probe that could
-// not open the card is asked again, and only a served card on the contact slot
-// of a dual-interface unit takes the power hold. Same harness as above: the
-// production presence path (PresenceModel -> BusExporter -> AgentFrontend ->
-// per-reader worker -> loop), a counting session factory in place of PC/SC.
+// The insertion probe's verdict, as the frontend acts on it. What the verdict
+// is (ask again only for a probe that could not open the card; hold only a
+// served card on the contact slot of a dual-interface unit) is the agent
+// library's resolution policy and is tested there; this proves the host acts
+// on it. Same harness as above: the production presence path (PresenceModel ->
+// BusExporter -> AgentFrontend -> per-reader worker -> loop), a counting
+// session factory in place of PC/SC.
 // ---------------------------------------------------------------------------
 namespace {
 
@@ -1926,7 +2046,7 @@ class ServingPlugin final : public LibreSCRS::Plugin::CardPlugin
 public:
     ServingPlugin()
     {
-        setIdentity("serving-stub", "stub", 0);
+        setIdentity("serving-stub", 0);
     }
     LibreSCRS::Plugin::CardCapabilities capabilities() const override
     {
@@ -1945,21 +2065,16 @@ protected:
     }
 };
 
-// Serves every card when @c serves, none otherwise; resolvePlugin finds none,
-// so the ATR alone never decides.
+// Serves every card it is asked about; resolvePlugin finds none, so the ATR
+// alone never decides.
 class InsertionResolver final : public CapabilityResolver
 {
 public:
-    explicit InsertionResolver(bool servesCards) : serves(servesCards) {}
     std::vector<std::shared_ptr<const LibreSCRS::Plugin::CardPlugin>>
     resolveCandidates(std::span<const std::uint8_t>, LibreSCRS::SmartCard::CardSession&) override
     {
-        if (serves) {
-            return {std::make_shared<ServingPlugin>()};
-        }
-        return {};
+        return {std::make_shared<ServingPlugin>()};
     }
-    bool serves;
 };
 
 struct InsertionOutcome
@@ -1973,7 +2088,7 @@ struct InsertionOutcome
 // Insert one card into the OMNIKEY's contact slot (its CL twin present, empty)
 // and wait for the card to be exported. @p failFirst opens are refused, the
 // way a card another process holds exclusively refuses them.
-InsertionOutcome insertIntoContactSlot(bool servesCards, int failFirst)
+InsertionOutcome insertIntoContactSlot(int failFirst)
 {
     InsertionOutcome out;
     std::shared_ptr<sdbus::IConnection> serverConn = sdbus::createSessionBusConnection();
@@ -1994,37 +2109,28 @@ InsertionOutcome insertIntoContactSlot(bool servesCards, int failFirst)
         // live memory.
         auto opens = std::make_shared<std::atomic<int>>(0);
 
-        InsertionResolver resolver{servesCards};
+        InsertionResolver resolver;
         ObjectRegistry registry;
         PresenceModel model(registry, resolver);
         auto prompter = std::make_shared<NopPrompter>();
-        auto serializer = std::make_shared<PromptSerializer>();
-        auto credCache = std::make_shared<CredentialCache>();
-        CardReadCache readCache;
-        const auto cfgDir = std::filesystem::temp_directory_path() / "ll-insertion-e2e";
-        Config::ConfigStore cfg(cfgDir / "agent.conf", cfgDir / "cache");
-        SigningEngineProvider signingEngine(cfg);
         AllowAllAuthorizer authz;
-        RateLimiter rateLimiter;
+        Testing::SilentTransport coreTransport;
+        AgentCore core = Testing::makeTestCore("insertion-e2e", resolver, coreTransport, authz, prompter);
 
-        OperationManager mgr(&resolver);
-        mgr.setSessionFactoryForTest(
+        core.operationManager().setSessionFactoryForTest(
             [opens, failFirst](const std::string& r)
                 -> std::expected<std::shared_ptr<LibreSCRS::SmartCard::CardSession>, LibreSCRS::SmartCard::OpenError> {
                 if (opens->fetch_add(1) < failFirst) {
                     return std::unexpected{LibreSCRS::SmartCard::OpenError{
-                        LibreSCRS::SmartCard::OpenError::Kind::ReaderUnavailable,
+                        LibreSCRS::SmartCard::OpenError::Kind::SessionRefused,
                         LibreSCRS::Auth::ErrorKeys::genericComm(), std::string{"SCARD_E_SHARING_VIOLATION"}}};
                 }
-                return LibreSCRS::SmartCard::detail::makeDetachedCardSession(r);
+                return LibreSCRS::SmartCard::Testing::makeDetachedCardSession(r);
             });
 
         BusExporter exporter(*serverConn, registry);
         exporter.attachLoopPoster(poster);
-        auto cryptoCtx = std::make_shared<CryptoWorkerContext>(
-            CryptoWorkerContext{.prompter = prompter, .serializer = serializer, .credentials = credCache});
-        AgentFrontend frontend(exporter, serverConn, mgr, cryptoCtx, readCache, signingEngine, authz, rateLimiter, cfg,
-                               nullptr, "test");
+        AgentFrontend frontend(exporter, serverConn, core, "test");
 
         model.onReaderAdded(kContactSlot);
         model.onReaderAdded(kContactlessSlot);
@@ -2066,7 +2172,7 @@ InsertionOutcome insertIntoContactSlot(bool servesCards, int failFirst)
         // The card is exported last: every probe and retry has run by now, and
         // the hold, if any, was set in the same loop step as the export.
         out.opens = opens->load();
-        out.held = mgr.isReaderHeldForTest(contactReader);
+        out.held = core.operationManager().isReaderHeldForTest(contactReader);
 
         client->leaveEventLoop();
         stopLoop.store(true, std::memory_order_release);
@@ -2079,36 +2185,14 @@ InsertionOutcome insertIntoContactSlot(bool servesCards, int failFirst)
 
 } // namespace
 
-// A card no plugin serves is opened once: the probe's answer is definitive,
-// and every repeat would connect to a card that belongs to someone else, probe
-// it and let it go. Nor is it held on the contact slot: the probe has just let
-// it go, and a hold would take the reader straight back.
-TEST(CardOperationsIntegration, AnUnservedCardIsOpenedOnceAndNotHeld)
+// A probe that could not open the card is asked again on the loop -- two
+// refused opens, then the open that served -- and the served card on the
+// OMNIKEY contact slot is then published and takes the reader's hold.
+TEST(CardOperationsIntegration, AProbeThatCouldNotOpenTheCardIsRetriedThenHeld)
 {
-    const auto out = insertIntoContactSlot(/*servesCards=*/false, /*failFirst=*/0);
-    ASSERT_TRUE(out.exported) << "the card must be exported within 5 s";
-    EXPECT_EQ(out.caps, 0U);
-    EXPECT_EQ(out.opens, 1) << "an unserved card was opened again after the probe said no plugin serves it";
-    EXPECT_FALSE(out.held) << "the OMNIKEY contact slot holds a card no plugin serves";
-}
-
-// A served card on the contact slot takes the hold, and the probe's own
-// session becomes it: no second open.
-TEST(CardOperationsIntegration, AServedContactSlotCardIsHeld)
-{
-    const auto out = insertIntoContactSlot(/*servesCards=*/true, /*failFirst=*/0);
-    ASSERT_TRUE(out.exported) << "the card must be exported within 5 s";
-    EXPECT_EQ(out.caps, static_cast<std::uint32_t>(LibreSCRS::Plugin::CardCapabilities::PKI));
-    EXPECT_EQ(out.opens, 1);
-    EXPECT_TRUE(out.held) << "a served card on the OMNIKEY contact slot is held";
-}
-
-// A probe that could not open the card says nothing about it, so it is asked
-// again: two refused opens, then the open that served.
-TEST(CardOperationsIntegration, AProbeThatCouldNotOpenTheCardIsRetried)
-{
-    const auto out = insertIntoContactSlot(/*servesCards=*/true, /*failFirst=*/2);
+    const auto out = insertIntoContactSlot(/*failFirst=*/2);
     ASSERT_TRUE(out.exported) << "the card must be exported within 5 s";
     EXPECT_EQ(out.caps, static_cast<std::uint32_t>(LibreSCRS::Plugin::CardCapabilities::PKI));
     EXPECT_EQ(out.opens, 3) << "two refused opens, then the one that served";
+    EXPECT_TRUE(out.held) << "a served card on the OMNIKEY contact slot is held";
 }

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 // SPDX-FileCopyrightText: 2026 hirashix0
 #pragma once
+#include "dbus/GrantGate.h"
+#include <LibreSCRS/Agent/wire/QuiesceReason.h>
 #include "org.librescrs.Agent.Config1_adaptor.h"
 #include "org.librescrs.Agent.Manager1_adaptor.h"
 #include "org.librescrs.Agent.Pkcs11_1_adaptor.h"
@@ -56,6 +58,10 @@ public:
     // failure is logged, never propagated to the worker that triggered it.
     void emitConfigChanged(const std::string& key) noexcept;
 
+    // Manager1.Quiesced: card access was quiesced for @p reason. noexcept for the
+    // same reason as emitConfigChanged.
+    void announceQuiesced(QuiesceReason reason) noexcept;
+
 private:
     // Manager1
     std::string Version() override;
@@ -90,14 +96,25 @@ private:
     std::string DefaultReason() override;
     std::string DefaultLocation() override;
     std::string PluginDir() override;
-    // Config1 — mutation (throws sdbus::Error on rejection)
-    void SetValue(const std::string& key, const sdbus::Variant& value) override;
-    void Reset(const std::string& key) override;
+    // Config1 — mutation. Each one is authorised before it acts, and the
+    // authority may take as long as a person needs to answer a password dialog,
+    // so these are ASYNC methods: the reply is deferred until the authority
+    // answers, and the dispatcher serves everyone else meanwhile
+    // (authorizeThenReply). The *Granted halves run only after a grant and keep
+    // the synchronous shape: return the results, throw the refusal.
+    void SetValue(sdbus::Result<>&& result, std::string key, sdbus::Variant value) override;
+    void Reset(sdbus::Result<>&& result, std::string key) override;
     // Config1 — install country-signing anchors from a signed ICAO master list.
     // Authorise, then rate-limit, THEN read the descriptor: a refused caller
     // must not be able to make the agent read anything.
-    std::map<std::string, sdbus::Variant> ImportCscaMasterList(const sdbus::UnixFd& masterList) override;
-    std::tuple<uint64_t, bool> ForgetCscaAnchors() override;
+    void ImportCscaMasterList(sdbus::Result<std::map<std::string, sdbus::Variant>>&& result,
+                              sdbus::UnixFd masterList) override;
+    void ForgetCscaAnchors(sdbus::Result<std::uint64_t, bool>&& result) override;
+    void setValueGranted(const std::string& key, const sdbus::Variant& value);
+    void resetGranted(const std::string& key);
+    std::map<std::string, sdbus::Variant> importCscaMasterListGranted(const sdbus::UnixFd& masterList,
+                                                                      const std::string& sender);
+    std::tuple<std::uint64_t, bool> forgetCscaAnchorsGranted();
 
     // Pkcs11_1 — low-level PKCS#11 broker. The card-touching methods are sdbus-c++
     // ASYNC methods (org.freedesktop.DBus.Method.Async): each resolves the caller
@@ -141,5 +158,8 @@ private:
     Authorizer& m_authorizer;
     Operations::RateLimiter& m_rateLimiter;
     Pkcs11Broker* m_pkcs11;
+    // What a grant that answers after an asynchronous authorization runs
+    // under; closed first thing in the destructor (authorizeThenReply).
+    std::shared_ptr<GrantGate> m_grantGate = std::make_shared<GrantGate>();
 };
 } // namespace LibreSCRS::Agent

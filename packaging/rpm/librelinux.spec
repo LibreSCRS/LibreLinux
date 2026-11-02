@@ -1,7 +1,6 @@
 # Link-time optimisation off, explicitly. Fedora's default %%optflags carry
-# -flto=auto -ffat-lto-objects, and that conflicts with the vendored static
-# LibreAgent::Core archive (the librescrs-agent-core package) exactly as this
-# project's own Arch recipe has recorded (options=('!lto')). Debian does not
+# -flto=auto -ffat-lto-objects, and this package links the static
+# LibreAgent::Core archive (the librescrs-agent-core package). Debian does not
 # enable LTO by default, which is why this line has no counterpart there and
 # why one recipe mechanically translated into the other would have been
 # wrong.
@@ -42,10 +41,6 @@ BuildRequires:  p11-kit-devel
 BuildRequires:  qt6-qtbase-devel
 BuildRequires:  kf6-kcoreaddons-devel
 BuildRequires:  kf6-ki18n-devel
-# Configure-time, not check-time: the agent test tree is added unconditionally
-# and calls find_package(GTest REQUIRED) and find_program(dbus-run-session).
-BuildRequires:  gtest-devel
-BuildRequires:  dbus-daemon
 BuildRequires:  librescrs-middleware-devel >= 5.0
 BuildRequires:  librescrs-agent-core-devel >= 5.0
 %{?systemd_requires}
@@ -73,9 +68,8 @@ Requires:       librescrs-middleware%{?_isa} >= 5.0
 Requires:       librescrs-card-plugins%{?_isa} >= 5.0
 Requires:       librescrs-pinentry-kde%{?_isa} = %{version}-%{release}
 Requires:       p11-kit
+Requires:       polkit
 Recommends:     pcsc-lite
-Recommends:     polkit
-Conflicts:      librescrs-pkcs11-direct
 
 %description -n librescrs-agent
 A per-user, headless, Qt-free D-Bus session service that is the sole owner of
@@ -84,12 +78,6 @@ smart-card access for the LibreSCRS stack. It works on any desktop.
 Five of its files land in root-owned system directories, which is why no bundle
 format can deliver it. The prompter is a hard dependency: an agent without one
 enumerates a card and then fails on the first PIN.
-
-It registers a PKCS#11 proxy with p11-kit, so it conflicts with
-librescrs-pkcs11-direct, the direct module package that is no longer built
-but a machine may still carry: one card must not have two providers.
-Replacing that package needs the package manager's option to remove a
-conflicting one.
 
 %package -n librescrs-pinentry-kde
 Summary:        Secure PIN and CAN entry prompter for the LibreSCRS agent
@@ -106,8 +94,7 @@ libraries with it (internationalization and core additions).
 %build
 %cmake -GNinja \
     -DBUILD_TESTING=OFF \
-    -DINSTALL_GTEST=OFF \
-    -DLIBRELINUX_USE_INSTALLED_AGENT_CORE=ON
+    -DLIBRESCRS_AGENT_FROM_SOURCE=OFF
 %cmake_build
 
 %install

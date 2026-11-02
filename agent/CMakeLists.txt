@@ -1,8 +1,10 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 
 # --- sdbus-c++ adaptor codegen from interface XML --------------------------
+# The XML is the agent library's (LIBREAGENT_DBUS_XML_DIR, checked at the
+# project root), the one contract its clients are tested against.
 find_program(SDBUS_CPP_XML2CPP sdbus-c++-xml2cpp REQUIRED)
-set(_xml_dir ${CMAKE_CURRENT_SOURCE_DIR}/dbus)
+set(_xml_dir ${LIBREAGENT_DBUS_XML_DIR})
 set(_gen_dir ${CMAKE_CURRENT_BINARY_DIR}/generated)
 file(MAKE_DIRECTORY ${_gen_dir})
 
@@ -80,6 +82,8 @@ add_library(LibreLinuxAgentCore STATIC
     src/PolkitAuthorizer.cpp
     src/PrompterClient.h
     src/PrompterClient.cpp
+    src/SessionLifecycleWatch.h
+    src/SessionLifecycleWatch.cpp
     src/SecretMemfdReader.h
     src/SecretMemfdReader.cpp
     src/SealedMemfd.h
@@ -89,12 +93,14 @@ add_library(LibreLinuxAgentCore STATIC
     src/PluginDirectory.h
     src/PluginDirectory.cpp
     src/AuthMethodName.h
+    src/operations/CancelRoute.h
     src/operations/Operation1Adaptor.h
     src/operations/Operation1Adaptor.cpp
+    src/dbus/AuthorizedReply.h
+    src/dbus/GrantGate.h
     src/dbus/ManagerObject.h
     src/dbus/ManagerObject.cpp
-    src/dbus/Pkcs11OutcomeNames.h
-    src/dbus/Pkcs11OutcomeNames.cpp
+    src/dbus/SyncErrorBusName.h
     src/dbus/CredentialOutcomeNames.h
     src/dbus/CredentialOutcomeNames.cpp
     src/dbus/ReaderObject.h
@@ -122,19 +128,11 @@ target_link_libraries(LibreLinuxAgentCore
         # -- the target builds and links without it.
         LibreSCRS::Trust
     PRIVATE
+        LibreAgent::Wire # syncErrorName: the agent wire's refusal names, spelled on this bus
         PkgConfig::Systemd) # sd_notify / sd-event in EventLoopPoster + AgentService
 set_target_properties(LibreLinuxAgentCore PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
-# Strict warnings by default; treat as errors in CI builds.
-option(LIBRELINUX_WERROR "Treat compiler warnings as errors" OFF)
-target_compile_options(LibreLinuxAgentCore PRIVATE
-    -Wall -Wextra -Wpedantic
-    -Wshadow -Wnon-virtual-dtor -Wold-style-cast -Wcast-align
-    -Woverloaded-virtual -Wconversion -Wsign-conversion -Wnull-dereference
-    -Wdouble-promotion -Wformat=2)
-if(LIBRELINUX_WERROR)
-    target_compile_options(LibreLinuxAgentCore PRIVATE -Werror)
-endif()
+librelinux_strict_warnings(LibreLinuxAgentCore)
 # Generated sdbus-c++ adaptor headers have unavoidable -Wsign-conversion noise;
 # suppress only for the generated TU surface (we include them but they're
 # header-only). No need to disable for our own code.
@@ -174,21 +172,11 @@ install(FILES ${CMAKE_CURRENT_BINARY_DIR}/org.librescrs.Agent.service
     DESTINATION ${DBUS_SESSION_SERVICE_DIR})
 
 # --- D-Bus introspection contracts ----------------------------------------
-install(FILES
-    dbus/org.librescrs.Agent.Manager1.xml
-    dbus/org.librescrs.Agent.Reader1.xml
-    dbus/org.librescrs.Agent.Card1.xml
-    dbus/org.librescrs.Agent.Credentials1.xml
-    dbus/org.librescrs.Agent.Config1.xml
-    dbus/org.librescrs.Agent.Operation1.xml
-    dbus/org.librescrs.Agent.Operation.Identity1.xml
-    dbus/org.librescrs.Agent.Operation.Photo1.xml
-    dbus/org.librescrs.Agent.Operation.Certificates1.xml
-    dbus/org.librescrs.Agent.Operation.Sign1.xml
-    dbus/org.librescrs.Agent.Operation.SignBatch1.xml
-    dbus/org.librescrs.Agent.Operation.Credentials1.xml
-    dbus/org.librescrs.Agent.Pkcs11_1.xml
-    dbus/org.librescrs.Prompter1.xml
+# The interfaces this agent serves (and the prompter interface it calls), from
+# the agent library's copy: the same two lists the code is generated from, not
+# the whole directory, so an interface the library adds for another host does
+# not ship in this package.
+install(FILES ${LL_DBUS_ADAPTOR_XMLS} ${LL_DBUS_PROXY_XMLS}
     DESTINATION ${CMAKE_INSTALL_DATADIR}/dbus-1/interfaces)
 
 # --- D-Bus session-bus policy (defense-in-depth) + polkit actions ----------

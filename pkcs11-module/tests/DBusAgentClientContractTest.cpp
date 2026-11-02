@@ -186,6 +186,21 @@ struct BusContractTraits
         });
     }
 
+    // RFC 5280 KeyUsage ordinals, bit n = ordinal n.
+    static constexpr std::uint32_t kDigitalSignature = 1U << 0;
+    static constexpr std::uint32_t kKeyEncipherment = 1U << 2;
+
+    static std::unique_ptr<Harness> servingSigningOnlyRsaCert()
+    {
+        return make([](F::FakeAgent& fake) { fake.setKeyUsageBits(kDigitalSignature); });
+    }
+
+    // A card that asks for its CAN before reading hashes on the card.
+    static std::unique_ptr<Harness> servingHashOnCardRsaCert()
+    {
+        return make([](F::FakeAgent& fake) { fake.setKeyUsageBits(kKeyEncipherment); }, "Can");
+    }
+
     static std::unique_ptr<Harness> refusingDerive(Refusal r)
     {
         const std::string name = errorNameFor(r);
@@ -207,10 +222,11 @@ struct BusContractTraits
     }
 
 private:
-    static std::unique_ptr<Harness> make(const std::function<void(F::FakeAgent&)>& script)
+    static std::unique_ptr<Harness> make(const std::function<void(F::FakeAgent&)>& script,
+                                         const std::string& preReadAuth = "None")
     {
         auto h = std::make_unique<Harness>();
-        h->bus = std::make_unique<F::BusFixture>(/*hasCard=*/true, "None", [script](F::FakeAgent& fake) {
+        h->bus = std::make_unique<F::BusFixture>(/*hasCard=*/true, preReadAuth, [script](F::FakeAgent& fake) {
             fake.setSubjectCn(holderName());
             if (script)
                 script(fake);

@@ -29,7 +29,7 @@ using Adaptor = org::librescrs::Agent::Operation::Certificates1_adaptor;
 static_assert(std::is_invocable_v<decltype(&Adaptor::emitResult), Adaptor&, const std::vector<CertTuple>&>,
               "Certificates1.Result wire shape frozen as a(sba{sa{s(ssv)}}uasasubaysub); if this fails the generated "
               "emitResult signature drifted from the struct order/types declared in "
-              "dbus/org.librescrs.Agent.Operation.Certificates1.xml");
+              "org.librescrs.Agent.Operation.Certificates1.xml");
 
 // GetResult() -> a(sba{sa{s(ssv)}}uasasubaysub) is a private pure-virtual per
 // sdbus-c++ convention (the late-subscriber recovery pull, same shape as the
@@ -45,7 +45,7 @@ private:
 };
 static_assert(!std::is_abstract_v<Certificates1Probe>,
               "Certificates1 adaptor must expose GetResult() -> a(sba{sa{s(ssv)}}uasasubaysub) as declared in "
-              "dbus/org.librescrs.Agent.Operation.Certificates1.xml");
+              "org.librescrs.Agent.Operation.Certificates1.xml");
 } // namespace
 
 TEST(Certificates1Xml, ResultAndGetResultWireShapesFrozen)

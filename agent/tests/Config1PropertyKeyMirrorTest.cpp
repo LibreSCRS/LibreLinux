@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 hirashix0
 //
 // Drift guard: the <property> elements published in
-// dbus/org.librescrs.Agent.Config1.xml against the key set ConfigStore owns.
+// org.librescrs.Agent.Config1.xml against the key set ConfigStore owns.
 //
 // The agent's configuration lives in two artefacts that have to agree, and
 // nothing checked that they do. ConfigStore decides which keys exist and how

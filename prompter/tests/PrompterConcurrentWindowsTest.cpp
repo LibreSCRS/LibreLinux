@@ -244,7 +244,7 @@ TEST_F(PrompterConcurrentWindowsTest, ADismissalClosesOnlyTheWindowItNames)
 
     ASSERT_TRUE(pumpUntil([&] { return can.answered.load(std::memory_order_acquire); }, std::chrono::seconds{5}))
         << "the named window never closed";
-    EXPECT_EQ(std::get<0>(can.reply), wire::kStatusCancelled);
+    EXPECT_EQ(std::get<0>(can.reply), std::string{wire::replyStatusToken(wire::PromptReplyStatus::Cancelled)});
     EXPECT_FALSE(pin.answered.load(std::memory_order_acquire)) << "the dismissal closed another reader's window";
     EXPECT_FALSE(mrz.answered.load(std::memory_order_acquire)) << "the dismissal closed another reader's window";
     EXPECT_EQ(PrompterService::registryForTest().size(), 2u);
@@ -345,7 +345,8 @@ TEST_F(PrompterConcurrentWindowsTest, ExpiryClosesOnlyTheWindowWhoseTimeRanOut)
 
     ASSERT_TRUE(pumpUntil([&] { return quick.answered.load(std::memory_order_acquire); }, std::chrono::seconds{5}))
         << "the window never closed on its own deadline";
-    EXPECT_EQ(std::get<0>(quick.reply), wire::kStatusTimeout) << "expiry must not be reported as the holder cancelling";
+    EXPECT_EQ(std::get<0>(quick.reply), std::string{wire::replyStatusToken(wire::PromptReplyStatus::Timeout)})
+        << "expiry must not be reported as the holder cancelling";
     EXPECT_FALSE(slow.answered.load(std::memory_order_acquire)) << "expiry closed a window whose time had not run out";
     EXPECT_EQ(PrompterService::registryForTest().size(), 1u);
 
@@ -364,7 +365,7 @@ TEST_F(PrompterConcurrentWindowsTest, ADismissedWindowIsStillReportedAsCancelled
 
     m_cancelClient->Cancel("nonce:pin");
     ASSERT_TRUE(pumpUntil([&] { return pin.answered.load(std::memory_order_acquire); }, std::chrono::seconds{5}));
-    EXPECT_EQ(std::get<0>(pin.reply), wire::kStatusCancelled);
+    EXPECT_EQ(std::get<0>(pin.reply), std::string{wire::replyStatusToken(wire::PromptReplyStatus::Cancelled)});
     pin.join();
 }
 
@@ -443,8 +444,8 @@ TEST_F(PrompterConcurrentWindowsTest, TheSweepClosesEveryStandingWindow)
         std::chrono::seconds{5}))
         << "a window survived the sweep";
     EXPECT_TRUE(PrompterService::registryForTest().empty());
-    EXPECT_EQ(std::get<0>(pin.reply), wire::kStatusCancelled);
-    EXPECT_EQ(std::get<0>(can.reply), wire::kStatusCancelled);
+    EXPECT_EQ(std::get<0>(pin.reply), std::string{wire::replyStatusToken(wire::PromptReplyStatus::Cancelled)});
+    EXPECT_EQ(std::get<0>(can.reply), std::string{wire::replyStatusToken(wire::PromptReplyStatus::Cancelled)});
     pin.join();
     can.join();
 }

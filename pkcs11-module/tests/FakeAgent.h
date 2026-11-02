@@ -6,7 +6,9 @@
 //   - org.librescrs.Agent.Pkcs11_1 (CertDer/PublicKey/EcPublicKey/Login/Logout/
 //     SignRaw/Decrypt/Derive)
 //   - a Reader1 child + (when hasCard) a Card1 child with ReadCertificates that
-//     emits Certificates1.Result then Operation1.Finished(Ok)
+//     emits Certificates1.Result then Operation1.Finished(Ok) BEFORE it replies
+//     -- what the agent does for a read it answers from its cache -- and keeps
+//     the outcome on the op's Completed/Status/ErrorCode and GetResult
 // Used by DBusAgentClientContractTest (the shared AgentClient contract over the
 // bus transport) and FakeAgentMain (Pkcs11ToolRpcTest: pkcs11-tool against the
 // built module).
@@ -23,6 +25,7 @@
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <tuple>
@@ -186,11 +189,26 @@ public:
         }
 
         m_op = sdbus::createObject(conn, sdbus::ObjectPath{kOp0});
-        m_op->addVTable(sdbus::registerSignal("Result").withParameters<std::vector<CertResultEntry>>("certificates"))
+        m_op->addVTable(sdbus::registerSignal("Result").withParameters<std::vector<CertResultEntry>>("certificates"),
+                        sdbus::registerMethod("GetResult")
+                            .implementedAs([this]() -> std::vector<CertResultEntry> {
+                                const std::lock_guard lk(m_resultMtx);
+                                if (!m_completed)
+                                    throw sdbus::Error{sdbus::Error::Name{"org.librescrs.Agent.Error.NoResult"},
+                                                       "no result"};
+                                return m_lastResult;
+                            })
+                            .withOutputParamNames("certificates"))
             .forInterface(sdbus::InterfaceName{kCertificatesIface});
         m_op->addVTable(sdbus::registerSignal("Finished")
                             .withParameters<std::uint32_t, std::uint32_t, std::string, std::string>(
-                                "status", "errorCode", "msgKey", "msgFallback"))
+                                "status", "errorCode", "msgKey", "msgFallback"),
+                        sdbus::registerProperty("Completed").withGetter([this] {
+                            const std::lock_guard lk(m_resultMtx);
+                            return m_completed;
+                        }),
+                        sdbus::registerProperty("Status").withGetter([] { return std::uint32_t{0}; }),
+                        sdbus::registerProperty("ErrorCode").withGetter([] { return std::uint32_t{0}; }))
             .forInterface(sdbus::InterfaceName{kOperation1Iface});
     }
 
@@ -259,6 +277,11 @@ public:
         m_signingCapable = false;
         m_keyUsageBits = 1U << 4; // keyAgreement
     }
+    // The served certificate's RFC 5280 KeyUsage, bit n = ordinal n.
+    void setKeyUsageBits(std::uint32_t bits)
+    {
+        m_keyUsageBits = bits;
+    }
     void setSignError(const std::string& name)
     {
         m_signError = name;
@@ -310,40 +333,44 @@ public:
     }
 
 private:
+    // The agent's order: the result is kept and the op marked complete, then
+    // Result and Finished go out -- here before the reply, as for a read the
+    // agent answers from its cache, so a client learns of the op only after
+    // both signals have passed.
     sdbus::ObjectPath readCertificates()
     {
-        std::thread([this, cn = m_subjectCn, none = m_noCertificate, aa = m_alwaysAuthenticate,
-                     signingCapable = m_signingCapable, keyUsage = m_keyUsageBits, keyId = m_keyId, keyType = m_keyType,
-                     keyBits = m_keyBits, canDerive = m_canDerive] {
-            std::this_thread::sleep_for(std::chrono::milliseconds(80));
-            CertFieldGroups fields;
-            if (!cn.empty()) {
-                // fields["subject"]["cn"] = (labelKey, fallback, Variant{cn})
-                fields["subject"]["cn"] =
-                    sdbus::Struct{std::string{"label.subject.cn"}, std::string{"CN"}, sdbus::Variant{cn}};
-            }
-            CertResultEntry e{std::string{kCertId},
-                              signingCapable,
-                              fields,
-                              keyUsage,
-                              std::vector<std::string>{},
-                              std::vector<std::string>{},
-                              std::uint32_t{255},
-                              aa,
-                              keyId,
-                              keyType,
-                              keyBits,
-                              canDerive};
-            std::vector<CertResultEntry> certs;
-            if (!none)
-                certs.push_back(e);
-            m_op->emitSignal(sdbus::SignalName{"Result"})
-                .onInterface(sdbus::InterfaceName{kCertificatesIface})
-                .withArguments(certs);
-            m_op->emitSignal(sdbus::SignalName{"Finished"})
-                .onInterface(sdbus::InterfaceName{kOperation1Iface})
-                .withArguments(std::uint32_t{0}, std::uint32_t{0}, std::string{}, std::string{});
-        }).detach();
+        CertFieldGroups fields;
+        if (!m_subjectCn.empty()) {
+            // fields["subject"]["cn"] = (labelKey, fallback, Variant{cn})
+            fields["subject"]["cn"] =
+                sdbus::Struct{std::string{"label.subject.cn"}, std::string{"CN"}, sdbus::Variant{m_subjectCn}};
+        }
+        CertResultEntry e{std::string{kCertId},
+                          m_signingCapable,
+                          fields,
+                          m_keyUsageBits,
+                          std::vector<std::string>{},
+                          std::vector<std::string>{},
+                          std::uint32_t{255},
+                          m_alwaysAuthenticate,
+                          m_keyId,
+                          m_keyType,
+                          m_keyBits,
+                          m_canDerive};
+        std::vector<CertResultEntry> certs;
+        if (!m_noCertificate)
+            certs.push_back(e);
+        {
+            const std::lock_guard lk(m_resultMtx);
+            m_lastResult = certs;
+            m_completed = true;
+        }
+        m_op->emitSignal(sdbus::SignalName{"Result"})
+            .onInterface(sdbus::InterfaceName{kCertificatesIface})
+            .withArguments(certs);
+        m_op->emitSignal(sdbus::SignalName{"Finished"})
+            .onInterface(sdbus::InterfaceName{kOperation1Iface})
+            .withArguments(std::uint32_t{0}, std::uint32_t{0}, std::string{}, std::string{});
         return sdbus::ObjectPath{kOp0};
     }
 
@@ -373,6 +400,9 @@ private:
     std::atomic<bool> m_withoutLoginState{false};
     std::vector<std::uint8_t> m_lastSignInput;
     std::string m_lastSignMechanism;
+    std::mutex m_resultMtx;
+    bool m_completed = false;
+    std::vector<CertResultEntry> m_lastResult;
 };
 
 // Stand up the fake on a private session bus and claim the agent's well-known

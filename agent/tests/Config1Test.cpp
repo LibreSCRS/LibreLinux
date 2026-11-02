@@ -6,6 +6,7 @@
 // rejections (UnknownConfigKey / ReadOnlyConfig / InvalidConfigValue /
 // NotAuthorized), the a(sbb) TslSources and a(sb) CscaSources round-trips, and
 // the Changed signal.
+#include "AllowAllAuthorizer.h" // test support: grants every action
 #include <LibreSCRS/Agent/backend/Authorizer.h>
 #include <LibreSCRS/Agent/config/ConfigStore.h>
 #include <LibreSCRS/Agent/operations/RateLimiter.h>

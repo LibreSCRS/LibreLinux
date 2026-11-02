@@ -26,13 +26,13 @@ using Adaptor = org::librescrs::Agent::Operation::Identity1_adaptor;
 // Result(a{sa{s(sssv)}} fields).
 static_assert(std::is_invocable_v<decltype(&Adaptor::emitResult), Adaptor&, const FieldsMap&>,
               "Identity1.Result wire shape frozen as a{sa{s(sssv)}}; the generated emitResult signature drifted from "
-              "the shape declared in dbus/org.librescrs.Agent.Operation.Identity1.xml");
+              "the shape declared in org.librescrs.Agent.Operation.Identity1.xml");
 
 // Group(s groupKey, a{s(sssv)} fields) -- progressive per-group delivery,
 // strictly ahead of Result above for the SAME op.
 static_assert(std::is_invocable_v<decltype(&Adaptor::emitGroup), Adaptor&, const std::string&, const GroupFieldsMap&>,
               "Identity1.Group wire shape frozen as (s groupKey, a{s(sssv)} fields); the generated emitGroup signature "
-              "drifted from the shape declared in dbus/org.librescrs.Agent.Operation.Identity1.xml");
+              "drifted from the shape declared in org.librescrs.Agent.Operation.Identity1.xml");
 
 // GetResult() -> a{sa{s(sssv)}} is a private pure-virtual per sdbus-c++
 // convention; verify it exists with the documented return shape by overriding it.
@@ -46,7 +46,7 @@ private:
 };
 static_assert(!std::is_abstract_v<Identity1Probe>,
               "Identity1 adaptor must expose GetResult() -> a{sa{s(sssv)}} as declared in "
-              "dbus/org.librescrs.Agent.Operation.Identity1.xml");
+              "org.librescrs.Agent.Operation.Identity1.xml");
 } // namespace
 
 TEST(Identity1Xml, ResultGroupAndGetResultWireShapesFrozen)

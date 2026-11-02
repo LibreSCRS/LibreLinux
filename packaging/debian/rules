@@ -8,8 +8,8 @@ export DEB_CPPFLAGS_MAINT_APPEND = -DNDEBUG
 
 # The agent core comes from a package, not from a fetch or a sibling checkout.
 override_dh_auto_configure:
-	dh_auto_configure -- -DBUILD_TESTING=OFF -DINSTALL_GTEST=OFF \
-	                     -DLIBRELINUX_USE_INSTALLED_AGENT_CORE=ON
+	dh_auto_configure -- -DBUILD_TESTING=OFF \
+	                     -DLIBRESCRS_AGENT_FROM_SOURCE=OFF
 
 override_dh_auto_test:
 

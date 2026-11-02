@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 // SPDX-FileCopyrightText: 2026 hirashix0
 #include "dbus/ManagerObject.h"
+#include "dbus/AuthorizedReply.h"
 #include <LibreSCRS/Agent/backend/Authorizer.h>
 #include <LibreSCRS/Agent/FeatureTokens.h>
 #include "AgentErrorNames.h" // shared wire error-name table (kErrInvalidRequest)
 #include "CallerIdentity.h"
-#include <LibreSCRS/Agent/backend/Logging.h>
+#include <LibreSCRS/Logging.h>
 #include <LibreSCRS/Agent/config/ConfigStore.h>
 #include <LibreSCRS/Agent/crypto/Mechanism.h>
-#include "dbus/Pkcs11OutcomeNames.h"
+#include "dbus/SyncErrorBusName.h"
 #include <LibreSCRS/Agent/operations/LmSeams.h> // Operations::layoutVisualSignature/appearanceFontBytes
 #include <LibreSCRS/Agent/operations/RateLimiter.h>
 #include <LibreSCRS/Agent/operations/RsaPublicKey.h>    // Operations::RsaPublicKey / EcPublicKey
@@ -17,6 +18,8 @@
 #include <LibreSCRS/Agent/Reply.h>
 #include "SealedMemfdCreator.h" // shared sealed-memfd creator (matches the producer)
 #include <LibreSCRS/Agent/trust/CscaAnchorImport.h>
+#include <LibreSCRS/Agent/value/SyncErrorTaxonomy.h> // toSyncError
+#include <LibreSCRS/Agent/wire/BoundedFdRead.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #include <array>
@@ -67,50 +70,6 @@ constexpr const char* kErrBadMasterListSignature = "org.librescrs.Agent.Error.Ba
 constexpr const char* kErrMasterListSignerChanged = "org.librescrs.Agent.Error.MasterListSignerChanged";
 constexpr const char* kErrMasterListReplayed = "org.librescrs.Agent.Error.MasterListReplayed";
 constexpr const char* kErrAnchorCacheNotWritable = "org.librescrs.Agent.Error.AnchorCacheNotWritable";
-
-enum class ReadStatus : std::uint8_t { Ok, TooLarge, Error, NotRegular };
-struct ReadInput
-{
-    ReadStatus status{ReadStatus::Error};
-    std::vector<std::uint8_t> bytes;
-};
-
-// Read the whole input off @p fd, capping at @p cap bytes. The fd MUST be a
-// regular file or memfd: a pipe/socket/char fd would let a client stall a
-// blocking ::read() indefinitely on the single bus thread (whole-agent DoS), so
-// non-regular fds are rejected up-front via fstat. Same shape and same reason as
-// the document read behind Card1.Sign.
-ReadInput readInput(int fd, std::size_t cap)
-{
-    if (fd < 0) {
-        return {ReadStatus::Error, {}};
-    }
-    struct stat st{};
-    if (::fstat(fd, &st) != 0) {
-        return {ReadStatus::Error, {}};
-    }
-    if (!S_ISREG(st.st_mode)) {
-        return {ReadStatus::NotRegular, {}};
-    }
-    std::vector<std::uint8_t> out;
-    std::array<std::uint8_t, 64 * 1024> buf{};
-    for (;;) {
-        const ssize_t n = ::read(fd, buf.data(), buf.size());
-        if (n < 0) {
-            if (errno == EINTR) {
-                continue;
-            }
-            return {ReadStatus::Error, {}};
-        }
-        if (n == 0) {
-            return {ReadStatus::Ok, std::move(out)};
-        }
-        if (out.size() + static_cast<std::size_t>(n) > cap) {
-            return {ReadStatus::TooLarge, {}};
-        }
-        out.insert(out.end(), buf.data(), buf.data() + n);
-    }
-}
 
 // What an accepted import leaves in the agent's own configuration.
 //
@@ -284,6 +243,9 @@ ManagerObject::ManagerObject(sdbus::IConnection& connection, sdbus::ObjectPath p
 
 ManagerObject::~ManagerObject()
 {
+    // A grant running on the thread an authorization answered on finishes
+    // before anything here is torn down; one arriving later runs nothing.
+    m_grantGate->close();
     unregisterAdaptor();
 }
 
@@ -439,7 +401,7 @@ Pkcs11Broker::Caller resolveCaller(const std::string& busName, const std::string
 // guarantees exactly-once dispatch, and its fail-closed destructor replies with
 // @p fallback if the worker op is torn down unfulfilled. This is the ONLY place
 // the neutral broker Outcome is bound to an org.librescrs.Agent.Error.* wire
-// name (via errorNameFor) — the broker names no wire string.
+// name (via the agent library's toSyncError) — the broker names no wire string.
 template <typename Outcome, typename... Results>
 Reply<Outcome, Results...> deferReply(sdbus::Result<Results...>&& result, Outcome fallback)
 {
@@ -453,7 +415,8 @@ Reply<Outcome, Results...> deferReply(sdbus::Result<Results...>&& result, Outcom
     return Reply<Outcome, Results...>{
         [shared](const Results&... values) { shared->returnResults(values...); },
         [shared](Outcome oc) {
-            shared->returnError(sdbus::Error{sdbus::Error::Name{errorNameFor(oc)}, "pkcs11 operation failed"});
+            shared->returnError(
+                sdbus::Error{sdbus::Error::Name{syncErrorBusName(toSyncError(oc))}, "pkcs11 operation failed"});
         },
         fallback};
 }
@@ -469,13 +432,14 @@ Reply<Pkcs11Broker::CryptoOutcome, Value> deferConvertedReply(sdbus::Result<Resu
     return Reply<Pkcs11Broker::CryptoOutcome, Value>{
         [shared, convert](const Value& value) {
             if (!convert(value, *shared)) {
-                shared->returnError(
-                    sdbus::Error{sdbus::Error::Name{errorNameFor(Pkcs11Broker::CryptoOutcome::NotSupported)},
-                                 "key of another kind"});
+                shared->returnError(sdbus::Error{
+                    sdbus::Error::Name{syncErrorBusName(toSyncError(Pkcs11Broker::CryptoOutcome::NotSupported))},
+                    "key of another kind"});
             }
         },
         [shared](Pkcs11Broker::CryptoOutcome oc) {
-            shared->returnError(sdbus::Error{sdbus::Error::Name{errorNameFor(oc)}, "pkcs11 operation failed"});
+            shared->returnError(
+                sdbus::Error{sdbus::Error::Name{syncErrorBusName(toSyncError(oc))}, "pkcs11 operation failed"});
         },
         Pkcs11Broker::CryptoOutcome::CardError};
 }
@@ -619,27 +583,24 @@ void ManagerObject::Derive(sdbus::Result<std::vector<std::uint8_t>>&& result, sd
                      deferReply(std::move(result), Pkcs11Broker::CryptoOutcome::CardError));
 }
 
-void ManagerObject::SetValue(const std::string& key, const sdbus::Variant& value)
+void ManagerObject::SetValue(sdbus::Result<>&& result, std::string key, sdbus::Variant value)
 {
     const auto m = Config::ConfigStore::mutability(key);
     if (!m) {
-        throw sdbus::Error{sdbus::Error::Name{kErrUnknownKey}, "Unknown config key: " + key};
+        result.returnError(sdbus::Error{sdbus::Error::Name{kErrUnknownKey}, "Unknown config key: " + key});
+        return;
     }
     if (*m == Config::Mutability::FileOnly || *m == Config::Mutability::ReadOnly) {
-        throw sdbus::Error{sdbus::Error::Name{kErrReadOnly}, "Config key not settable over D-Bus: " + key};
+        result.returnError(
+            sdbus::Error{sdbus::Error::Name{kErrReadOnly}, "Config key not settable over D-Bus: " + key});
+        return;
     }
-    switch (m_authorizer.authorize(actionFor(*m), CallerToken{callerBusName()})) {
-    case AuthorizationOutcome::Granted:
-        break;
-    case AuthorizationOutcome::Denied:
-        throw sdbus::Error{sdbus::Error::Name{kErrNotAuthorized}, "Not authorized to set " + key};
-    case AuthorizationOutcome::Undecided:
-        // Nothing was decided and nothing was changed. Saying "not authorized"
-        // here tells a person who authenticated correctly that they were
-        // refused -- a claim about a security decision nobody made.
-        throw sdbus::Error{sdbus::Error::Name{LibreLinux::AgentWire::kErrCommunication},
-                           "The authorization service did not answer; nothing was changed"};
-    }
+    authorizeThenReply(m_authorizer, actionFor(*m), callerBusName(), std::move(result), "Not authorized to set " + key,
+                       m_grantGate, [this, key, value] { setValueGranted(key, value); });
+}
+
+void ManagerObject::setValueGranted(const std::string& key, const sdbus::Variant& value)
+{
     Config::ConfigStore::SetResult r{false, kErrUnknownKey, "No setter for config key: " + key};
     try {
         if (key == "DefaultLevel") {
@@ -676,31 +637,32 @@ void ManagerObject::SetValue(const std::string& key, const sdbus::Variant& value
     }
 }
 
-void ManagerObject::Reset(const std::string& key)
+void ManagerObject::Reset(sdbus::Result<>&& result, std::string key)
 {
     const auto m = Config::ConfigStore::mutability(key);
     if (!m) {
-        throw sdbus::Error{sdbus::Error::Name{kErrUnknownKey}, "Unknown config key: " + key};
+        result.returnError(sdbus::Error{sdbus::Error::Name{kErrUnknownKey}, "Unknown config key: " + key});
+        return;
     }
     if (*m == Config::Mutability::FileOnly || *m == Config::Mutability::ReadOnly) {
-        throw sdbus::Error{sdbus::Error::Name{kErrReadOnly}, "Config key not settable over D-Bus: " + key};
+        result.returnError(
+            sdbus::Error{sdbus::Error::Name{kErrReadOnly}, "Config key not settable over D-Bus: " + key});
+        return;
     }
-    switch (m_authorizer.authorize(actionFor(*m), CallerToken{callerBusName()})) {
-    case AuthorizationOutcome::Granted:
-        break;
-    case AuthorizationOutcome::Denied:
-        throw sdbus::Error{sdbus::Error::Name{kErrNotAuthorized}, "Not authorized to reset " + key};
-    case AuthorizationOutcome::Undecided:
-        throw sdbus::Error{sdbus::Error::Name{LibreLinux::AgentWire::kErrCommunication},
-                           "The authorization service did not answer; nothing was changed"};
-    }
+    authorizeThenReply(m_authorizer, actionFor(*m), callerBusName(), std::move(result),
+                       "Not authorized to reset " + key, m_grantGate, [this, key] { resetGranted(key); });
+}
+
+void ManagerObject::resetGranted(const std::string& key)
+{
     const auto r = m_config.resetKey(key, /*fromDbus=*/true);
     if (!r.ok) {
         throw sdbus::Error{sdbus::Error::Name{r.errorName}, r.message};
     }
 }
 
-std::map<std::string, sdbus::Variant> ManagerObject::ImportCscaMasterList(const sdbus::UnixFd& masterList)
+void ManagerObject::ImportCscaMasterList(sdbus::Result<std::map<std::string, sdbus::Variant>>&& result,
+                                         sdbus::UnixFd masterList)
 {
     // ORDER, and it is the whole point of this preamble: AUTHORISE the client,
     // then apply the per-caller flood bound, and only THEN touch the
@@ -713,18 +675,14 @@ std::map<std::string, sdbus::Variant> ManagerObject::ImportCscaMasterList(const 
     // The polkit action is the trust one, shared with CscaSources: an import is
     // a larger trust change than naming a source, not a smaller one.
     const std::string sender = callerBusName();
-    switch (m_authorizer.authorize(kActionConfigureTrust, CallerToken{sender})) {
-    case AuthorizationOutcome::Granted:
-        break;
-    case AuthorizationOutcome::Denied:
-        throw sdbus::Error{sdbus::Error::Name{kErrNotAuthorized}, "Not authorized to import country signing anchors"};
-    case AuthorizationOutcome::Undecided:
-        // Nothing was decided and nothing was changed. Saying "not authorized"
-        // here tells a person who authenticated correctly that they were
-        // refused -- a claim about a security decision nobody made.
-        throw sdbus::Error{sdbus::Error::Name{LibreLinux::AgentWire::kErrCommunication},
-                           "The authorization service did not answer; nothing was changed"};
-    }
+    authorizeThenReply(m_authorizer, kActionConfigureTrust, sender, std::move(result),
+                       "Not authorized to import country signing anchors", m_grantGate,
+                       [this, masterList, sender] { return importCscaMasterListGranted(masterList, sender); });
+}
+
+std::map<std::string, sdbus::Variant> ManagerObject::importCscaMasterListGranted(const sdbus::UnixFd& masterList,
+                                                                                 const std::string& sender)
+{
     if (!m_rateLimiter.allow(CallerToken{sender})) {
         throw sdbus::Error{sdbus::Error::Name{kErrRateLimited}, "Too many anchor imports; try again shortly"};
     }
@@ -733,15 +691,15 @@ std::map<std::string, sdbus::Variant> ManagerObject::ImportCscaMasterList(const 
     // sealed memfd this agent uses elsewhere is its vocabulary for secrets.
     // Reading it here on the bus thread is bounded by the fstat regular-file
     // rejection and by the cap, exactly as the sign path is.
-    auto input = readInput(masterList.get(), Trust::kMaxMasterListBytes);
-    if (input.status == ReadStatus::NotRegular) {
+    auto input = Wire::readBoundedRegularFd(masterList.get(), Trust::kMaxMasterListBytes);
+    if (input.status == Wire::ReadStatus::NotRegular) {
         throw sdbus::Error{sdbus::Error::Name{kErrInvalidRequest},
                            "The master list must be a regular file or memfd (no pipes/sockets)"};
     }
-    if (input.status == ReadStatus::TooLarge) {
+    if (input.status == Wire::ReadStatus::TooLarge) {
         throw sdbus::Error{sdbus::Error::Name{kErrInputTooLarge}, "The master list exceeds the size limit"};
     }
-    if (input.status == ReadStatus::Error) {
+    if (input.status == Wire::ReadStatus::Error) {
         throw sdbus::Error{sdbus::Error::Name{kErrInvalidRequest}, "The master list could not be read"};
     }
 
@@ -781,7 +739,7 @@ std::map<std::string, sdbus::Variant> ManagerObject::ImportCscaMasterList(const 
     return anchorStateDict(recorded);
 }
 
-std::tuple<uint64_t, bool> ManagerObject::ForgetCscaAnchors()
+void ManagerObject::ForgetCscaAnchors(sdbus::Result<std::uint64_t, bool>&& result)
 {
     // Authorise FIRST and touch nothing before that answer. The action is the
     // trust one for the stronger version of the import's reason — this does not
@@ -796,17 +754,13 @@ std::tuple<uint64_t, bool> ManagerObject::ForgetCscaAnchors()
     // would also mean a client that forgot could then be refused an IMPORT for
     // an unrelated reason. Shape is handleSetConfig's trust tier: authorise,
     // then act. Agreed with the socket host so both answer alike.
-    const std::string sender = callerBusName();
-    switch (m_authorizer.authorize(kActionConfigureTrust, CallerToken{sender})) {
-    case AuthorizationOutcome::Granted:
-        break;
-    case AuthorizationOutcome::Denied:
-        throw sdbus::Error{sdbus::Error::Name{kErrNotAuthorized}, "Not authorized to forget country signing anchors"};
-    case AuthorizationOutcome::Undecided:
-        throw sdbus::Error{sdbus::Error::Name{LibreLinux::AgentWire::kErrCommunication},
-                           "The authorization service did not answer; nothing was changed"};
-    }
+    authorizeThenReply(m_authorizer, kActionConfigureTrust, callerBusName(), std::move(result),
+                       "Not authorized to forget country signing anchors", m_grantGate,
+                       [this] { return forgetCscaAnchorsGranted(); });
+}
 
+std::tuple<std::uint64_t, bool> ManagerObject::forgetCscaAnchorsGranted()
+{
     // The library decides WHAT a forget is and in which order the two halves
     // go; this host decides only that it may happen. Nothing about the order is
     // spelled again here, deliberately: a second spelling of it is how the two
@@ -836,6 +790,17 @@ void ManagerObject::emitConfigChanged(const std::string& key) noexcept
         log::warnf("config: failed to emit Changed({}): {}", key, e.what());
     } catch (...) {
         log::warn("config: failed to emit Changed (unknown error)");
+    }
+}
+
+void ManagerObject::announceQuiesced(QuiesceReason reason) noexcept
+{
+    try {
+        emitQuiesced(static_cast<std::uint32_t>(reason));
+    } catch (const std::exception& e) {
+        log::warnf("failed to emit Quiesced({}): {}", static_cast<unsigned>(reason), e.what());
+    } catch (...) {
+        log::warn("failed to emit Quiesced (unknown error)");
     }
 }
 

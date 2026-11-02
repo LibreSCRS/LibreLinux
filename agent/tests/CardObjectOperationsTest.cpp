@@ -4,12 +4,14 @@
 // End-to-end: client -> Card1.ReadIdentity / GetPhoto.
 //
 // Covers the capability gate (UnsupportedOnThisCard when the IdentityData
-// bit is clear) and the enqueue path (a valid Operation path is returned
-// when the bit is set and seam deps are wired). The Operation that the
+// bit is clear) and the launch path (a valid Operation path is returned
+// when the bit is set). The Operation that the
 // enqueue path constructs is not exercised here -- the per-Operation flow
 // has dedicated tests (ReadIdentityOperationTest, GetPhotoOperationTest)
 // and CardOperationsIntegrationTest covers the run-through.
 
+#include "AllowAllAuthorizer.h" // test support: grants every action
+#include "TestAgentCore.h"
 #include <LibreSCRS/Agent/backend/Authorizer.h>
 #include "BusExporter.h"
 #include <LibreSCRS/Agent/presence/CapabilityResolver.h>
@@ -27,6 +29,7 @@
 
 #include <LibreSCRS/Plugin/PluginTypes.h>
 #include <LibreSCRS/SmartCard/CardSession.h>
+#include <LibreSCRS/SmartCard/testing/CardSessionTesting.h>
 
 #include <sdbus-c++/sdbus-c++.h>
 #include <gtest/gtest.h>
@@ -53,11 +56,11 @@ using namespace std::chrono_literals;
 namespace {
 
 // Trivially-failing seams: the capability-gate test never reaches them; the
-// enqueue test only needs them to be non-null for the dep-completeness check.
-// The Operation that runs against these will finish in error, but that path
+// launch test only needs an operation to queue. The Operation that runs
+// against these will finish in error, but that path
 // is exercised in ReadIdentityOperationTest / GetPhotoOperationTest. Here we
 // only assert that ReadIdentity / GetPhoto return a valid path -- meaning
-// the capability gate passed and enqueueIdentity / enqueuePhoto returned.
+// the capability gate passed and the launch returned.
 
 class FailingReader final : public CardReader
 {
@@ -97,43 +100,6 @@ constexpr const char* kReaderPath = "/org/librescrs/Agent/reader/0";
 constexpr const char* kCardPath = "/org/librescrs/Agent/card/0";
 constexpr const char* kCard1Iface = "org.librescrs.Agent.Card1";
 
-CardOperationDeps makeDeps(CardReader& reader, PrompterClientBase& prompter, PromptSerializer& serializer,
-                           CredentialCache& credentials, CardReadCache& readCache)
-{
-    CardOperationDeps deps;
-    deps.reader = &reader;
-    deps.prompter = &prompter;
-    deps.serializer = &serializer;
-    deps.credentials = &credentials;
-    deps.readCache = &readCache;
-    deps.cardKey = kCardPath;
-    deps.readerName = "R0";
-    return deps;
-}
-
-// A Signer that records nothing and never runs: the Sign tests here exercise
-// only the Card1.Sign method-entry resolution + scope gate, which reject (or
-// accept-then-enqueue) BEFORE any signer call on the worker. It only needs to
-// be non-null so hasSignSeams() passes.
-class StubSigner final : public Signer
-{
-public:
-    SignOutcome sign(const std::shared_ptr<LibreSCRS::SmartCard::CardSession>&, const SignParams& params,
-                     const CandidateList&, LibreSCRS::Auth::CredentialProvider, LibreSCRS::CancelToken) override
-    {
-        captured = params;
-        SignOutcome o;
-        o.status = SignOutcome::Status::CommunicationError;
-        return o;
-    }
-
-    // Captures the effective SignParams (incl. tsaUrl/visual) that
-    // reached the Signer seam, so a test asserting Card1.Sign's method-entry
-    // parsing built the right values does not need to touch LmSigner/LM at
-    // all — mirrors SignFlowTest.cpp's own FakeSigner::captured.
-    std::optional<SignParams> captured;
-};
-
 // Build a memfd holding @p bytes, rewound to offset 0 — a regular (seekable) fd
 // the Sign method accepts (pipes/sockets are rejected as NotRegular).
 int makeInputMemfd(std::string_view bytes)
@@ -155,20 +121,41 @@ int makeInputMemfd(std::string_view bytes)
     return fd;
 }
 
-// Full sign-seam bundle: the shared read plumbing plus the sign-only deps
-// (signer + authorizer + rate-limiter + config SSOT). hasSignSeams() requires
-// every one of these non-null.
-CardOperationDeps makeSignDeps(CardReader& reader, PrompterClientBase& prompter, PromptSerializer& serializer,
-                               CredentialCache& credentials, CardReadCache& readCache, Signer& signer,
-                               Authorizer& authorizer, RateLimiter& rateLimiter, Config::ConfigStore& config)
+// A card object's collaborators: a real agent core over a prompter that answers
+// nothing, the permissive authorizer and an empty-TSA configuration (so b-b is
+// the default and b-t is opt-in per request), and a launcher over seams that
+// fail every call -- the card-facing ones never run before a method's own
+// checks, which is what this suite pins. The scratch configuration is named
+// after the running test.
+struct CardHost
 {
-    auto deps = makeDeps(reader, prompter, serializer, credentials, readCache);
-    deps.signer = &signer;
-    deps.authorizer = &authorizer;
-    deps.rateLimiter = &rateLimiter;
-    deps.config = &config;
-    return deps;
-}
+    CardHost()
+        : core(Testing::makeTestCore(std::string{"cardops-"} +
+                                         ::testing::UnitTest::GetInstance()->current_test_info()->name(),
+                                     resolver, transport, authorizer, std::make_shared<NopPrompter>())),
+          launcher(core, seams())
+    {}
+
+    static OperationSeams seams()
+    {
+        auto seams = Testing::unusedSeams();
+        seams.reader = std::make_shared<FailingReader>();
+        return seams;
+    }
+    static CardOperationDeps cardDeps()
+    {
+        CardOperationDeps deps;
+        deps.cardKey = kCardPath;
+        deps.readerName = "R0";
+        return deps;
+    }
+
+    Testing::NoCandidates resolver;
+    Testing::SilentTransport transport;
+    AllowAllAuthorizer authorizer;
+    AgentCore core;
+    OperationLauncher launcher;
+};
 
 } // namespace
 
@@ -178,17 +165,11 @@ TEST(CardObjectOperations, ReadIdentityWithoutCapabilityThrowsUnsupported)
     ASSERT_NE(serverConn, nullptr) << "run under dbus-run-session";
     serverConn->requestName(sdbus::ServiceName{"org.librescrs.Agent.Test.NoCapa"});
 
-    OperationManager mgr(nullptr); // production (cleanup-grace) mode; no resolver
-    FailingReader reader;
-    NopPrompter prompter;
-    CredentialCache credentials;
-    CardReadCache readCache;
-    PromptSerializer serializer;
-    auto deps = makeDeps(reader, prompter, serializer, credentials, readCache);
+    CardHost host;
 
     // capabilities == 0 -> IdentityData bit is clear -> gate must fire.
-    CardObject card(*serverConn, sdbus::ObjectPath{kCardPath}, 0u, sdbus::ObjectPath{kReaderPath}, mgr,
-                    std::move(deps));
+    CardObject card(*serverConn, sdbus::ObjectPath{kCardPath}, 0u, sdbus::ObjectPath{kReaderPath}, host.core,
+                    host.launcher, CardHost::cardDeps());
 
     serverConn->enterEventLoopAsync();
 
@@ -214,16 +195,10 @@ TEST(CardObjectOperations, GetPhotoWithoutCapabilityThrowsUnsupported)
     ASSERT_NE(serverConn, nullptr);
     serverConn->requestName(sdbus::ServiceName{"org.librescrs.Agent.Test.NoCapa.Photo"});
 
-    OperationManager mgr(nullptr); // production (cleanup-grace) mode; no resolver
-    FailingReader reader;
-    NopPrompter prompter;
-    CredentialCache credentials;
-    CardReadCache readCache;
-    PromptSerializer serializer;
-    auto deps = makeDeps(reader, prompter, serializer, credentials, readCache);
+    CardHost host;
 
-    CardObject card(*serverConn, sdbus::ObjectPath{kCardPath}, 0u, sdbus::ObjectPath{kReaderPath}, mgr,
-                    std::move(deps));
+    CardObject card(*serverConn, sdbus::ObjectPath{kCardPath}, 0u, sdbus::ObjectPath{kReaderPath}, host.core,
+                    host.launcher, CardHost::cardDeps());
 
     serverConn->enterEventLoopAsync();
     auto clientConn = sdbus::createSessionBusConnection();
@@ -248,19 +223,13 @@ TEST(CardObjectOperations, ReadIdentityWithCapabilityReturnsOperationPath)
     ASSERT_NE(serverConn, nullptr);
     serverConn->requestName(sdbus::ServiceName{"org.librescrs.Agent.Test.WithCapa"});
 
-    OperationManager mgr(nullptr); // production (cleanup-grace) mode; no resolver
-    FailingReader reader;
-    NopPrompter prompter;
-    CredentialCache credentials;
-    CardReadCache readCache;
-    PromptSerializer serializer;
-    auto deps = makeDeps(reader, prompter, serializer, credentials, readCache);
+    CardHost host;
 
     // capabilities == IdentityData (bit 1) -> gate passes -> enqueue runs.
     constexpr std::uint32_t kIdentityBit =
         static_cast<std::uint32_t>(LibreSCRS::Plugin::CardCapabilities::IdentityData);
-    CardObject card(*serverConn, sdbus::ObjectPath{kCardPath}, kIdentityBit, sdbus::ObjectPath{kReaderPath}, mgr,
-                    std::move(deps));
+    CardObject card(*serverConn, sdbus::ObjectPath{kCardPath}, kIdentityBit, sdbus::ObjectPath{kReaderPath}, host.core,
+                    host.launcher, CardHost::cardDeps());
 
     serverConn->enterEventLoopAsync();
     auto clientConn = sdbus::createSessionBusConnection();
@@ -294,17 +263,11 @@ TEST(CardObjectOperations, ReadTokenInfoWithoutPkiCapabilityThrowsUnsupported)
     ASSERT_NE(serverConn, nullptr) << "run under dbus-run-session";
     serverConn->requestName(sdbus::ServiceName{"org.librescrs.Agent.Test.NoCapa.TokenInfo"});
 
-    OperationManager mgr(nullptr); // production (cleanup-grace) mode; no resolver
-    FailingReader reader;
-    NopPrompter prompter;
-    CredentialCache credentials;
-    CardReadCache readCache;
-    PromptSerializer serializer;
-    auto deps = makeDeps(reader, prompter, serializer, credentials, readCache);
+    CardHost host;
 
     // capabilities == 0 -> PKI bit is clear -> gate must fire.
-    CardObject card(*serverConn, sdbus::ObjectPath{kCardPath}, 0u, sdbus::ObjectPath{kReaderPath}, mgr,
-                    std::move(deps));
+    CardObject card(*serverConn, sdbus::ObjectPath{kCardPath}, 0u, sdbus::ObjectPath{kReaderPath}, host.core,
+                    host.launcher, CardHost::cardDeps());
 
     serverConn->enterEventLoopAsync();
     auto clientConn = sdbus::createSessionBusConnection();
@@ -329,18 +292,12 @@ TEST(CardObjectOperations, ReadTokenInfoWithPkiCapabilityReturnsOperationPath)
     ASSERT_NE(serverConn, nullptr);
     serverConn->requestName(sdbus::ServiceName{"org.librescrs.Agent.Test.WithCapa.TokenInfo"});
 
-    OperationManager mgr(nullptr); // production (cleanup-grace) mode; no resolver
-    FailingReader reader;
-    NopPrompter prompter;
-    CredentialCache credentials;
-    CardReadCache readCache;
-    PromptSerializer serializer;
-    auto deps = makeDeps(reader, prompter, serializer, credentials, readCache);
+    CardHost host;
 
     // capabilities == PKI (bit 0) -> gate passes -> enqueue runs.
     constexpr std::uint32_t kPkiBit = static_cast<std::uint32_t>(LibreSCRS::Plugin::CardCapabilities::PKI);
-    CardObject card(*serverConn, sdbus::ObjectPath{kCardPath}, kPkiBit, sdbus::ObjectPath{kReaderPath}, mgr,
-                    std::move(deps));
+    CardObject card(*serverConn, sdbus::ObjectPath{kCardPath}, kPkiBit, sdbus::ObjectPath{kReaderPath}, host.core,
+                    host.launcher, CardHost::cardDeps());
 
     serverConn->enterEventLoopAsync();
     auto clientConn = sdbus::createSessionBusConnection();
@@ -363,7 +320,7 @@ TEST(CardObjectOperations, ReadTokenInfoWithPkiCapabilityReturnsOperationPath)
 }
 
 // The per-reader backlog cap now lives in the core as the neutral QueueFull
-// exception (OperationManager::publish); the Linux backend (CardObject) maps it
+// refusal (the launcher answers RateLimited); the Linux backend (CardObject) names it
 // onto the RateLimited wire error. Flooding one reader past the cap must surface
 // that wire error to the client — the behaviour-preserving replacement for the
 // old typed-enqueue path that threw sdbus::Error{RateLimited} directly.
@@ -373,7 +330,7 @@ TEST(CardObjectOperations, ReadIdentityFloodTripsBacklogCapAsRateLimited)
     ASSERT_NE(serverConn, nullptr) << "run under dbus-run-session";
     serverConn->requestName(sdbus::ServiceName{"org.librescrs.Agent.Test.Backlog"});
 
-    OperationManager mgr(nullptr); // production (cleanup-grace) mode; no resolver
+    CardHost host;
 
     // Wedge the per-reader worker on its first op so the queue can only grow: a
     // blocking SessionFactory parks the worker inside doWork()'s acquire() until
@@ -387,25 +344,18 @@ TEST(CardObjectOperations, ReadIdentityFloodTripsBacklogCapAsRateLimited)
         bool released{false};
     };
     auto gate = std::make_shared<Gate>();
-    mgr.setSessionFactoryForTest(
+    host.core.operationManager().setSessionFactoryForTest(
         [gate](const std::string& r)
             -> std::expected<std::shared_ptr<LibreSCRS::SmartCard::CardSession>, LibreSCRS::SmartCard::OpenError> {
             std::unique_lock lk(gate->m);
             gate->cv.wait(lk, [&] { return gate->released; });
-            return LibreSCRS::SmartCard::detail::makeDetachedCardSession(r);
+            return LibreSCRS::SmartCard::Testing::makeDetachedCardSession(r);
         });
-
-    FailingReader reader;
-    NopPrompter prompter;
-    CredentialCache credentials;
-    CardReadCache readCache;
-    PromptSerializer serializer;
-    auto deps = makeDeps(reader, prompter, serializer, credentials, readCache);
 
     constexpr std::uint32_t kIdentityBit =
         static_cast<std::uint32_t>(LibreSCRS::Plugin::CardCapabilities::IdentityData);
-    CardObject card(*serverConn, sdbus::ObjectPath{kCardPath}, kIdentityBit, sdbus::ObjectPath{kReaderPath}, mgr,
-                    std::move(deps));
+    CardObject card(*serverConn, sdbus::ObjectPath{kCardPath}, kIdentityBit, sdbus::ObjectPath{kReaderPath}, host.core,
+                    host.launcher, CardHost::cardDeps());
 
     serverConn->enterEventLoopAsync();
     auto clientConn = sdbus::createSessionBusConnection();
@@ -430,7 +380,7 @@ TEST(CardObjectOperations, ReadIdentityFloodTripsBacklogCapAsRateLimited)
     EXPECT_TRUE(sawRateLimited) << "flooding past the per-reader backlog cap must surface RateLimited";
 
     // Release the wedged worker so it drains the queued ops (each fails fast
-    // against the failing reader) and can be JOINED cleanly at mgr teardown.
+    // against the failing reader) and can be JOINED cleanly at core teardown.
     {
         std::lock_guard lk(gate->m);
         gate->released = true;
@@ -452,33 +402,6 @@ TEST(CardObjectOperations, ReadIdentityFloodTripsBacklogCapAsRateLimited)
 // method composing them.
 
 namespace {
-
-// A PKI-capable CardObject with the full sign-seam bundle, an empty-TSA config
-// (so b-b is the default and b-t is opt-in per request), and a permissive
-// authorizer + a fresh rate-limiter. The temp config dir is unique per @p tag.
-struct SignFixture
-{
-    FailingReader reader;
-    NopPrompter prompter;
-    CredentialCache credentials;
-    CardReadCache readCache;
-    PromptSerializer serializer;
-    StubSigner signer;
-    AllowAllAuthorizer authorizer;
-    RateLimiter rateLimiter;
-    Config::ConfigStore config;
-
-    explicit SignFixture(const char* tag)
-        : config(std::filesystem::temp_directory_path() / (std::string{"ll-cardsign-"} + tag) / "agent.conf",
-                 std::filesystem::temp_directory_path() / (std::string{"ll-cardsign-"} + tag) / "cache")
-    {}
-
-    CardOperationDeps deps()
-    {
-        return makeSignDeps(reader, prompter, serializer, credentials, readCache, signer, authorizer, rateLimiter,
-                            config);
-    }
-};
 
 constexpr std::uint32_t kPkiBit = static_cast<std::uint32_t>(LibreSCRS::Plugin::CardCapabilities::PKI);
 
@@ -503,10 +426,9 @@ TEST(CardObjectOperations, SignAdmitsLongTermLevelsAtTheScopeGate)
     ASSERT_NE(serverConn, nullptr) << "run under dbus-run-session";
     serverConn->requestName(sdbus::ServiceName{"org.librescrs.Agent.Test.SignGate"});
 
-    OperationManager mgr(nullptr); // production (cleanup-grace) mode; no resolver
-    SignFixture fix{"longterm"};
-    CardObject card(*serverConn, sdbus::ObjectPath{kCardPath}, kPkiBit, sdbus::ObjectPath{kReaderPath}, mgr,
-                    fix.deps());
+    CardHost host;
+    CardObject card(*serverConn, sdbus::ObjectPath{kCardPath}, kPkiBit, sdbus::ObjectPath{kReaderPath}, host.core,
+                    host.launcher, CardHost::cardDeps());
     serverConn->enterEventLoopAsync();
 
     auto clientConn = sdbus::createSessionBusConnection();
@@ -537,10 +459,9 @@ TEST(CardObjectOperations, SignRejectsNonStringLevelVariant)
     ASSERT_NE(serverConn, nullptr);
     serverConn->requestName(sdbus::ServiceName{"org.librescrs.Agent.Test.SignBadLevel"});
 
-    OperationManager mgr(nullptr); // production (cleanup-grace) mode; no resolver
-    SignFixture fix{"badlevel"};
-    CardObject card(*serverConn, sdbus::ObjectPath{kCardPath}, kPkiBit, sdbus::ObjectPath{kReaderPath}, mgr,
-                    fix.deps());
+    CardHost host;
+    CardObject card(*serverConn, sdbus::ObjectPath{kCardPath}, kPkiBit, sdbus::ObjectPath{kReaderPath}, host.core,
+                    host.launcher, CardHost::cardDeps());
     serverConn->enterEventLoopAsync();
 
     auto clientConn = sdbus::createSessionBusConnection();
@@ -570,10 +491,9 @@ TEST(CardObjectOperations, SignAcceptsBtAndReturnsOperationPath)
     ASSERT_NE(serverConn, nullptr);
     serverConn->requestName(sdbus::ServiceName{"org.librescrs.Agent.Test.SignBt"});
 
-    OperationManager mgr(nullptr); // production (cleanup-grace) mode; no resolver
-    SignFixture fix{"bt"};
-    CardObject card(*serverConn, sdbus::ObjectPath{kCardPath}, kPkiBit, sdbus::ObjectPath{kReaderPath}, mgr,
-                    fix.deps());
+    CardHost host;
+    CardObject card(*serverConn, sdbus::ObjectPath{kCardPath}, kPkiBit, sdbus::ObjectPath{kReaderPath}, host.core,
+                    host.launcher, CardHost::cardDeps());
     serverConn->enterEventLoopAsync();
 
     auto clientConn = sdbus::createSessionBusConnection();
@@ -602,10 +522,9 @@ TEST(CardObjectOperations, SignAcceptsTsaUrlOverrideAtTheTimestampedLevel)
     ASSERT_NE(serverConn, nullptr);
     serverConn->requestName(sdbus::ServiceName{"org.librescrs.Agent.Test.SignTsaUrl"});
 
-    OperationManager mgr(nullptr);
-    SignFixture fix{"tsaurl"};
-    CardObject card(*serverConn, sdbus::ObjectPath{kCardPath}, kPkiBit, sdbus::ObjectPath{kReaderPath}, mgr,
-                    fix.deps());
+    CardHost host;
+    CardObject card(*serverConn, sdbus::ObjectPath{kCardPath}, kPkiBit, sdbus::ObjectPath{kReaderPath}, host.core,
+                    host.launcher, CardHost::cardDeps());
     serverConn->enterEventLoopAsync();
 
     auto clientConn = sdbus::createSessionBusConnection();
@@ -638,10 +557,9 @@ TEST(CardObjectOperations, SignRejectsANonHttpsTsaUrl)
     ASSERT_NE(serverConn, nullptr);
     serverConn->requestName(sdbus::ServiceName{"org.librescrs.Agent.Test.SignTsaUrlHttp"});
 
-    OperationManager mgr(nullptr);
-    SignFixture fix{"tsaurlhttp"};
-    CardObject card(*serverConn, sdbus::ObjectPath{kCardPath}, kPkiBit, sdbus::ObjectPath{kReaderPath}, mgr,
-                    fix.deps());
+    CardHost host;
+    CardObject card(*serverConn, sdbus::ObjectPath{kCardPath}, kPkiBit, sdbus::ObjectPath{kReaderPath}, host.core,
+                    host.launcher, CardHost::cardDeps());
     serverConn->enterEventLoopAsync();
 
     auto clientConn = sdbus::createSessionBusConnection();
@@ -671,15 +589,14 @@ TEST(CardObjectOperations, SignRejectsTsaUrlPairedWithAnExplicitBaselineLevel)
     ASSERT_NE(serverConn, nullptr);
     serverConn->requestName(sdbus::ServiceName{"org.librescrs.Agent.Test.SignTsaUrlBb"});
 
-    OperationManager mgr(nullptr);
     // An EXPLICIT b-b is the only way to land here now: a caller who names the
     // baseline and supplies a timestamp authority has asked for two things that
     // contradict each other, and gets told so. A request that DEFERS the level
     // no longer reaches this rejection -- see the case below, which is what the
     // per-request URL was always meant to do.
-    SignFixture fix{"tsaurlbb"};
-    CardObject card(*serverConn, sdbus::ObjectPath{kCardPath}, kPkiBit, sdbus::ObjectPath{kReaderPath}, mgr,
-                    fix.deps());
+    CardHost host;
+    CardObject card(*serverConn, sdbus::ObjectPath{kCardPath}, kPkiBit, sdbus::ObjectPath{kReaderPath}, host.core,
+                    host.launcher, CardHost::cardDeps());
     serverConn->enterEventLoopAsync();
 
     auto clientConn = sdbus::createSessionBusConnection();
@@ -710,10 +627,9 @@ TEST(CardObjectOperations, SignAcceptsTheAgentDecidesLevelSentinel)
     ASSERT_NE(serverConn, nullptr);
     serverConn->requestName(sdbus::ServiceName{"org.librescrs.Agent.Test.SignLevelAuto"});
 
-    OperationManager mgr(nullptr);
-    SignFixture fix{"levelauto"};
-    CardObject card(*serverConn, sdbus::ObjectPath{kCardPath}, kPkiBit, sdbus::ObjectPath{kReaderPath}, mgr,
-                    fix.deps());
+    CardHost host;
+    CardObject card(*serverConn, sdbus::ObjectPath{kCardPath}, kPkiBit, sdbus::ObjectPath{kReaderPath}, host.core,
+                    host.launcher, CardHost::cardDeps());
     serverConn->enterEventLoopAsync();
 
     auto clientConn = sdbus::createSessionBusConnection();
@@ -740,15 +656,14 @@ TEST(CardObjectOperations, SignAcceptsATsaUrlAlongsideTheAgentDecidesSentinel)
     ASSERT_NE(serverConn, nullptr);
     serverConn->requestName(sdbus::ServiceName{"org.librescrs.Agent.Test.SignAutoTsa"});
 
-    OperationManager mgr(nullptr);
     // No TsaUrls configured, so before this the defaulted level resolved to b-b
     // and the request was refused for carrying a tsaUrl at that level -- the
     // per-request override could never be used on its own. The supplied URL now
     // counts toward "a timestamp authority is available", so the defaulted
     // baseline lifts to b-t and the request stands.
-    SignFixture fix{"autotsa"};
-    CardObject card(*serverConn, sdbus::ObjectPath{kCardPath}, kPkiBit, sdbus::ObjectPath{kReaderPath}, mgr,
-                    fix.deps());
+    CardHost host;
+    CardObject card(*serverConn, sdbus::ObjectPath{kCardPath}, kPkiBit, sdbus::ObjectPath{kReaderPath}, host.core,
+                    host.launcher, CardHost::cardDeps());
     serverConn->enterEventLoopAsync();
 
     auto clientConn = sdbus::createSessionBusConnection();
@@ -777,10 +692,9 @@ TEST(CardObjectOperations, SignRejectsAMalformedTsaUrlEvenWhenTheLevelIsDeferred
     ASSERT_NE(serverConn, nullptr);
     serverConn->requestName(sdbus::ServiceName{"org.librescrs.Agent.Test.SignAutoBadTsa"});
 
-    OperationManager mgr(nullptr);
-    SignFixture fix{"autobadtsa"};
-    CardObject card(*serverConn, sdbus::ObjectPath{kCardPath}, kPkiBit, sdbus::ObjectPath{kReaderPath}, mgr,
-                    fix.deps());
+    CardHost host;
+    CardObject card(*serverConn, sdbus::ObjectPath{kCardPath}, kPkiBit, sdbus::ObjectPath{kReaderPath}, host.core,
+                    host.launcher, CardHost::cardDeps());
     serverConn->enterEventLoopAsync();
 
     auto clientConn = sdbus::createSessionBusConnection();
@@ -810,10 +724,9 @@ TEST(CardObjectOperations, SignAcceptsVisualSignatureOnPades)
     ASSERT_NE(serverConn, nullptr);
     serverConn->requestName(sdbus::ServiceName{"org.librescrs.Agent.Test.SignVisual"});
 
-    OperationManager mgr(nullptr);
-    SignFixture fix{"visual"};
-    CardObject card(*serverConn, sdbus::ObjectPath{kCardPath}, kPkiBit, sdbus::ObjectPath{kReaderPath}, mgr,
-                    fix.deps());
+    CardHost host;
+    CardObject card(*serverConn, sdbus::ObjectPath{kCardPath}, kPkiBit, sdbus::ObjectPath{kReaderPath}, host.core,
+                    host.launcher, CardHost::cardDeps());
     serverConn->enterEventLoopAsync();
 
     auto clientConn = sdbus::createSessionBusConnection();
@@ -848,10 +761,9 @@ TEST(CardObjectOperations, SignRejectsVisualSignatureOnANonPadesFormat)
     ASSERT_NE(serverConn, nullptr);
     serverConn->requestName(sdbus::ServiceName{"org.librescrs.Agent.Test.SignVisualBadFormat"});
 
-    OperationManager mgr(nullptr);
-    SignFixture fix{"visualbadformat"};
-    CardObject card(*serverConn, sdbus::ObjectPath{kCardPath}, kPkiBit, sdbus::ObjectPath{kReaderPath}, mgr,
-                    fix.deps());
+    CardHost host;
+    CardObject card(*serverConn, sdbus::ObjectPath{kCardPath}, kPkiBit, sdbus::ObjectPath{kReaderPath}, host.core,
+                    host.launcher, CardHost::cardDeps());
     serverConn->enterEventLoopAsync();
 
     auto clientConn = sdbus::createSessionBusConnection();
@@ -886,10 +798,9 @@ TEST(CardObjectOperations, SignRejectsVisualSignatureMissingARequiredField)
     ASSERT_NE(serverConn, nullptr);
     serverConn->requestName(sdbus::ServiceName{"org.librescrs.Agent.Test.SignVisualMissingField"});
 
-    OperationManager mgr(nullptr);
-    SignFixture fix{"visualmissingfield"};
-    CardObject card(*serverConn, sdbus::ObjectPath{kCardPath}, kPkiBit, sdbus::ObjectPath{kReaderPath}, mgr,
-                    fix.deps());
+    CardHost host;
+    CardObject card(*serverConn, sdbus::ObjectPath{kCardPath}, kPkiBit, sdbus::ObjectPath{kReaderPath}, host.core,
+                    host.launcher, CardHost::cardDeps());
     serverConn->enterEventLoopAsync();
 
     auto clientConn = sdbus::createSessionBusConnection();
@@ -934,10 +845,9 @@ TEST(CardObjectOperations, SignRejectsVisualSignatureWithNonFiniteWidth)
     ASSERT_NE(serverConn, nullptr);
     serverConn->requestName(sdbus::ServiceName{"org.librescrs.Agent.Test.SignVisualInfWidth"});
 
-    OperationManager mgr(nullptr);
-    SignFixture fix{"visualinfwidth"};
-    CardObject card(*serverConn, sdbus::ObjectPath{kCardPath}, kPkiBit, sdbus::ObjectPath{kReaderPath}, mgr,
-                    fix.deps());
+    CardHost host;
+    CardObject card(*serverConn, sdbus::ObjectPath{kCardPath}, kPkiBit, sdbus::ObjectPath{kReaderPath}, host.core,
+                    host.launcher, CardHost::cardDeps());
     serverConn->enterEventLoopAsync();
 
     auto clientConn = sdbus::createSessionBusConnection();
@@ -971,10 +881,9 @@ TEST(CardObjectOperations, SignRejectsVisualSignatureWithNaNX)
     ASSERT_NE(serverConn, nullptr);
     serverConn->requestName(sdbus::ServiceName{"org.librescrs.Agent.Test.SignVisualNanX"});
 
-    OperationManager mgr(nullptr);
-    SignFixture fix{"visualnanx"};
-    CardObject card(*serverConn, sdbus::ObjectPath{kCardPath}, kPkiBit, sdbus::ObjectPath{kReaderPath}, mgr,
-                    fix.deps());
+    CardHost host;
+    CardObject card(*serverConn, sdbus::ObjectPath{kCardPath}, kPkiBit, sdbus::ObjectPath{kReaderPath}, host.core,
+                    host.launcher, CardHost::cardDeps());
     serverConn->enterEventLoopAsync();
 
     auto clientConn = sdbus::createSessionBusConnection();
@@ -1007,10 +916,9 @@ TEST(CardObjectOperations, SignRejectsVisualSignatureWithNegativeInfinityY)
     ASSERT_NE(serverConn, nullptr);
     serverConn->requestName(sdbus::ServiceName{"org.librescrs.Agent.Test.SignVisualNegInfY"});
 
-    OperationManager mgr(nullptr);
-    SignFixture fix{"visualneginfy"};
-    CardObject card(*serverConn, sdbus::ObjectPath{kCardPath}, kPkiBit, sdbus::ObjectPath{kReaderPath}, mgr,
-                    fix.deps());
+    CardHost host;
+    CardObject card(*serverConn, sdbus::ObjectPath{kCardPath}, kPkiBit, sdbus::ObjectPath{kReaderPath}, host.core,
+                    host.launcher, CardHost::cardDeps());
     serverConn->enterEventLoopAsync();
 
     auto clientConn = sdbus::createSessionBusConnection();
@@ -1085,10 +993,9 @@ TEST(CardObjectOperations, SignBatchWithoutPkiCapabilityThrowsUnsupported)
     ASSERT_NE(serverConn, nullptr) << "run under dbus-run-session";
     serverConn->requestName(sdbus::ServiceName{"org.librescrs.Agent.Test.SignBatchNoCapa"});
 
-    OperationManager mgr(nullptr);
-    SignFixture fix{"batchnocapa"};
+    CardHost host;
     CardObject card(*serverConn, sdbus::ObjectPath{kCardPath}, 0u /* no capability bits */,
-                    sdbus::ObjectPath{kReaderPath}, mgr, fix.deps());
+                    sdbus::ObjectPath{kReaderPath}, host.core, host.launcher, CardHost::cardDeps());
     serverConn->enterEventLoopAsync();
 
     auto clientConn = sdbus::createSessionBusConnection();
@@ -1113,10 +1020,9 @@ TEST(CardObjectOperations, SignBatchRejectsEmptyCertId)
     ASSERT_NE(serverConn, nullptr);
     serverConn->requestName(sdbus::ServiceName{"org.librescrs.Agent.Test.SignBatchEmptyCert"});
 
-    OperationManager mgr(nullptr);
-    SignFixture fix{"batchemptycert"};
-    CardObject card(*serverConn, sdbus::ObjectPath{kCardPath}, kPkiBit, sdbus::ObjectPath{kReaderPath}, mgr,
-                    fix.deps());
+    CardHost host;
+    CardObject card(*serverConn, sdbus::ObjectPath{kCardPath}, kPkiBit, sdbus::ObjectPath{kReaderPath}, host.core,
+                    host.launcher, CardHost::cardDeps());
     serverConn->enterEventLoopAsync();
 
     auto clientConn = sdbus::createSessionBusConnection();
@@ -1142,10 +1048,9 @@ TEST(CardObjectOperations, SignBatchRejectsZeroDocuments)
     ASSERT_NE(serverConn, nullptr);
     serverConn->requestName(sdbus::ServiceName{"org.librescrs.Agent.Test.SignBatchZeroDocs"});
 
-    OperationManager mgr(nullptr);
-    SignFixture fix{"batchzerodocs"};
-    CardObject card(*serverConn, sdbus::ObjectPath{kCardPath}, kPkiBit, sdbus::ObjectPath{kReaderPath}, mgr,
-                    fix.deps());
+    CardHost host;
+    CardObject card(*serverConn, sdbus::ObjectPath{kCardPath}, kPkiBit, sdbus::ObjectPath{kReaderPath}, host.core,
+                    host.launcher, CardHost::cardDeps());
     serverConn->enterEventLoopAsync();
 
     auto clientConn = sdbus::createSessionBusConnection();
@@ -1192,10 +1097,9 @@ TEST(CardObjectOperations, SignBatchAcceptsOneDocumentAndReturnsOperationPath)
     ASSERT_NE(serverConn, nullptr);
     serverConn->requestName(sdbus::ServiceName{"org.librescrs.Agent.Test.SignBatchOneDoc"});
 
-    OperationManager mgr(nullptr);
-    SignFixture fix{"batchonedoc"};
-    CardObject card(*serverConn, sdbus::ObjectPath{kCardPath}, kPkiBit, sdbus::ObjectPath{kReaderPath}, mgr,
-                    fix.deps());
+    CardHost host;
+    CardObject card(*serverConn, sdbus::ObjectPath{kCardPath}, kPkiBit, sdbus::ObjectPath{kReaderPath}, host.core,
+                    host.launcher, CardHost::cardDeps());
     serverConn->enterEventLoopAsync();
 
     auto clientConn = sdbus::createSessionBusConnection();
@@ -1228,10 +1132,9 @@ TEST(CardObjectOperations, SignBatchAcceptsAMultiDocumentBatchAndReturnsOperatio
     ASSERT_NE(serverConn, nullptr);
     serverConn->requestName(sdbus::ServiceName{"org.librescrs.Agent.Test.SignBatchMultiDoc"});
 
-    OperationManager mgr(nullptr);
-    SignFixture fix{"batchmultidoc"};
-    CardObject card(*serverConn, sdbus::ObjectPath{kCardPath}, kPkiBit, sdbus::ObjectPath{kReaderPath}, mgr,
-                    fix.deps());
+    CardHost host;
+    CardObject card(*serverConn, sdbus::ObjectPath{kCardPath}, kPkiBit, sdbus::ObjectPath{kReaderPath}, host.core,
+                    host.launcher, CardHost::cardDeps());
     serverConn->enterEventLoopAsync();
 
     auto clientConn = sdbus::createSessionBusConnection();
@@ -1256,10 +1159,9 @@ TEST(CardObjectOperations, SignBatchRejectsANonHttpsTsaUrlViaTheSharedOptionsRes
     ASSERT_NE(serverConn, nullptr);
     serverConn->requestName(sdbus::ServiceName{"org.librescrs.Agent.Test.SignBatchTsaUrl"});
 
-    OperationManager mgr(nullptr);
-    SignFixture fix{"batchtsaurl"};
-    CardObject card(*serverConn, sdbus::ObjectPath{kCardPath}, kPkiBit, sdbus::ObjectPath{kReaderPath}, mgr,
-                    fix.deps());
+    CardHost host;
+    CardObject card(*serverConn, sdbus::ObjectPath{kCardPath}, kPkiBit, sdbus::ObjectPath{kReaderPath}, host.core,
+                    host.launcher, CardHost::cardDeps());
     serverConn->enterEventLoopAsync();
 
     auto clientConn = sdbus::createSessionBusConnection();
@@ -1294,10 +1196,9 @@ TEST(CardObjectOperations, SignBatchChargesTheRateLimiterExactlyOnceRegardlessOf
     ASSERT_NE(serverConn, nullptr);
     serverConn->requestName(sdbus::ServiceName{"org.librescrs.Agent.Test.SignBatchOneCharge"});
 
-    OperationManager mgr(nullptr);
-    SignFixture fix{"batchonecharge"};
-    CardObject card(*serverConn, sdbus::ObjectPath{kCardPath}, kPkiBit, sdbus::ObjectPath{kReaderPath}, mgr,
-                    fix.deps());
+    CardHost host;
+    CardObject card(*serverConn, sdbus::ObjectPath{kCardPath}, kPkiBit, sdbus::ObjectPath{kReaderPath}, host.core,
+                    host.launcher, CardHost::cardDeps());
     serverConn->enterEventLoopAsync();
 
     auto clientConn = sdbus::createSessionBusConnection();
@@ -1347,10 +1248,9 @@ TEST(CardObjectOperations, SignBatchRateLimitFiresBeforeTheDocumentCountGate)
     ASSERT_NE(serverConn, nullptr);
     serverConn->requestName(sdbus::ServiceName{"org.librescrs.Agent.Test.SignBatchOrderedGate"});
 
-    OperationManager mgr(nullptr);
-    SignFixture fix{"batchorderedgate"};
-    CardObject card(*serverConn, sdbus::ObjectPath{kCardPath}, kPkiBit, sdbus::ObjectPath{kReaderPath}, mgr,
-                    fix.deps());
+    CardHost host;
+    CardObject card(*serverConn, sdbus::ObjectPath{kCardPath}, kPkiBit, sdbus::ObjectPath{kReaderPath}, host.core,
+                    host.launcher, CardHost::cardDeps());
     serverConn->enterEventLoopAsync();
 
     auto clientConn = sdbus::createSessionBusConnection();
@@ -1392,10 +1292,9 @@ TEST(CardObjectOperations, SignDeferringTheFormatSniffsItFromTheDocument)
     ASSERT_NE(serverConn, nullptr);
     serverConn->requestName(sdbus::ServiceName{"org.librescrs.Agent.Test.SignFormatAuto"});
 
-    OperationManager mgr(nullptr);
-    SignFixture fix{"formatauto"};
-    CardObject card(*serverConn, sdbus::ObjectPath{kCardPath}, kPkiBit, sdbus::ObjectPath{kReaderPath}, mgr,
-                    fix.deps());
+    CardHost host;
+    CardObject card(*serverConn, sdbus::ObjectPath{kCardPath}, kPkiBit, sdbus::ObjectPath{kReaderPath}, host.core,
+                    host.launcher, CardHost::cardDeps());
     serverConn->enterEventLoopAsync();
 
     auto clientConn = sdbus::createSessionBusConnection();
@@ -1431,10 +1330,9 @@ TEST(CardObjectOperations, SignDeferringThePackagingTakesTheFormatsDefault)
     ASSERT_NE(serverConn, nullptr);
     serverConn->requestName(sdbus::ServiceName{"org.librescrs.Agent.Test.SignPackagingAuto"});
 
-    OperationManager mgr(nullptr);
-    SignFixture fix{"packagingauto"};
-    CardObject card(*serverConn, sdbus::ObjectPath{kCardPath}, kPkiBit, sdbus::ObjectPath{kReaderPath}, mgr,
-                    fix.deps());
+    CardHost host;
+    CardObject card(*serverConn, sdbus::ObjectPath{kCardPath}, kPkiBit, sdbus::ObjectPath{kReaderPath}, host.core,
+                    host.launcher, CardHost::cardDeps());
     serverConn->enterEventLoopAsync();
 
     auto clientConn = sdbus::createSessionBusConnection();

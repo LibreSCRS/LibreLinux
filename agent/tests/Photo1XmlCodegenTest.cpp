@@ -20,7 +20,7 @@ using Adaptor = org::librescrs::Agent::Operation::Photo1_adaptor;
 // Result(a{sh} photos).
 static_assert(std::is_invocable_v<decltype(&Adaptor::emitResult), Adaptor&, const PhotoMap&>,
               "Photo1.Result wire shape frozen as a{sh}; the generated emitResult signature drifted from the shape "
-              "declared in dbus/org.librescrs.Agent.Operation.Photo1.xml");
+              "declared in org.librescrs.Agent.Operation.Photo1.xml");
 
 // GetResult() -> a{sh} is a private pure-virtual per sdbus-c++ convention;
 // verify it exists with the documented return shape by overriding it.
@@ -33,7 +33,7 @@ private:
     }
 };
 static_assert(!std::is_abstract_v<Photo1Probe>, "Photo1 adaptor must expose GetResult() -> a{sh} as declared in "
-                                                "dbus/org.librescrs.Agent.Operation.Photo1.xml");
+                                                "org.librescrs.Agent.Operation.Photo1.xml");
 } // namespace
 
 TEST(Photo1Xml, ResultAndGetResultWireShapesFrozen)

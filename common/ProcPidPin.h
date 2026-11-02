@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 // SPDX-FileCopyrightText: 2026 hirashix0
 //
-// PID-reuse-safe /proc readers, shared by the agent (polkit start-time
-// subject, requester labels) and the prompter (caller trust gate).
+// PID-reuse-safe /proc readers, shared by the agent (requester labels, and the
+// polkit start-time subject on a bus that hands out no pidfd for the caller --
+// where it does, polkit is given that pidfd and nothing here is read) and the
+// prompter (caller trust gate).
 //
 // A PID obtained from kernel-validated D-Bus credentials (or anywhere else)
 // can be recycled to a DIFFERENT process between the moment we learn it and

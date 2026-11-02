@@ -12,9 +12,10 @@
 // constant names, with no compile/link tie between them — so a typo in any copy
 // was a silent routing failure with no compile error. One constexpr table here
 // keeps every exporter, model, proxy, and fake agreeing on the wire names. (The
-// XML in agent/dbus/*.xml remains the cross-stack contract these mirror; the
-// generated *_adaptor.h headers also expose an INTERFACE_NAME each, for the
-// hand-written exporters/models that don't include a specific adaptor.)
+// agent library's D-Bus XML, from which this tree generates its adaptors and
+// proxies, remains the cross-stack contract these mirror; the generated
+// *_adaptor.h headers also expose an INTERFACE_NAME each, for the hand-written
+// exporters/models that don't include a specific adaptor.)
 //
 // External-service names (PolicyKit1, freedesktop.DBus interfaces) that are NOT
 // the agent's own contract stay with their callers — the one exception is the

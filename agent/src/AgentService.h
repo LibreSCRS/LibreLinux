@@ -6,6 +6,7 @@
 #include "BusExporter.h"
 #include <LibreSCRS/Agent/presence/MonitorBridge.h>
 #include "PrompterClient.h"
+#include "SessionLifecycleWatch.h"
 #include <filesystem>
 #include <memory>
 #include <mutex>
@@ -65,8 +66,8 @@ private:
     void quiesce() noexcept;
 
     CapabilityResolver& m_resolver;
-    // Borrowed plugin registry (may be null) threaded into the frontend, which
-    // builds the per-card credential depositor from it.
+    // Borrowed plugin registry (may be null) threaded into the frontend, whose
+    // operation launcher builds the credential depositor from it.
     LibreSCRS::Plugin::CardPluginService* m_pluginService{nullptr};
     std::string m_version;
     // Config paths captured from the ctor and handed to the AgentCore aggregate
@@ -88,11 +89,15 @@ private:
     // Main session bus. Hosts every [2] sdbus object + the NameOwnerChanged proxy,
     // so it MUST outlive them; detached from the loop in teardownEventLoop().
     // shared_ptr (not unique_ptr): every typed Operation1 op co-owns a share
-    // (keepAlive'd through the frontend -> CardObject), so a typed op abandoned to
+    // (keepAlive'd by the frontend's operation launcher), so a typed op abandoned to
     // the process-lifetime zombie list keeps the connection alive until it drains —
     // its channel's adaptor emit + unregister then touch a LIVE connection instead
     // of one freed with this host.
     std::shared_ptr<sdbus::IConnection> m_connection;
+    // The agent's own system-bus connection for logind's lifecycle signals, pumped
+    // by the same sd-event loop so they are answered on the dispatcher. Null when
+    // there is no system bus. Detached from the loop in teardownEventLoop().
+    std::unique_ptr<sdbus::IConnection> m_systemBus;
     // sd-event loop driving the bus connection AND the SIGTERM/SIGINT sources (so a
     // signal is honoured promptly even mid-slot); detached/freed in
     // teardownEventLoop() before the member chain unwinds.
@@ -134,8 +139,8 @@ private:
     std::optional<AgentCore> m_core;
 
     // ---- [4] the inbound frontend — constructed LAST, destroyed FIRST ----------
-    // Owns the exported Reader1/Card1 objects + the root ManagerObject; borrows the
-    // core (re-sourced from m_core accessors) + the transport. Destroyed first: it
+    // Owns the exported Reader1/Card1 objects + the root ManagerObject and the
+    // operation launcher; borrows the core + the transport. Destroyed first: it
     // clears its materialization callback on the still-live transport and drops its
     // objects while the core it borrows is still alive.
     std::unique_ptr<AgentFrontend> m_frontend;
@@ -143,5 +148,9 @@ private:
     // monitor subscription is drained, no further registry mutation can fire a
     // presence observer during the rest of teardown.
     std::unique_ptr<MonitorBridge> m_bridge;
+    // Inbound lifecycle SOURCE (sleep, screen lock, session switch from logind on
+    // m_systemBus). Borrows the core, m_stateMutex and the frontend; dropped first
+    // in quiesce(), so no lifecycle event reaches a half-torn-down composition.
+    std::unique_ptr<SessionLifecycleWatch> m_lifecycle;
 };
 } // namespace LibreSCRS::Agent

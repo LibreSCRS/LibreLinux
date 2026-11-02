@@ -49,7 +49,8 @@ void BusExporter::observePresenceFrom(ObjectRegistry& registry)
 {
     registry.setObservers([this](const ReaderState& reader) { publishReader(reader); },
                           [this](const CardState& card) { publishCard(card); }, [this](ObjectId id) { withdraw(id); },
-                          [this](ObjectId reader, const PropertyDelta& delta) { updateProperties(reader, delta); });
+                          [this](ObjectId reader, const PropertyDelta& delta) { updateProperties(reader, delta); },
+                          [this](const ReaderState& reader) { relabelReader(reader); });
 }
 
 BusExporter::~BusExporter()
@@ -82,7 +83,7 @@ std::optional<BusExporter::ReaderCard> BusExporter::resolveReaderCard(const std:
     return ReaderCard{.readerName = entry.name, .cardKey = entry.cardPath};
 }
 
-BusExporter::PresenceRoster BusExporter::presenceRoster() const
+PresenceRoster BusExporter::presenceRoster() const
 {
     // ONE lock for the WHOLE roster, not one per entry: a torn read could pair
     // reader A's name with reader B's card path, which is exactly the
@@ -90,13 +91,13 @@ BusExporter::PresenceRoster BusExporter::presenceRoster() const
     const std::lock_guard guard(m_presenceMutex);
     PresenceRoster out;
     out.readerNames.reserve(m_presence.size());
-    out.cardPaths.reserve(m_presence.size());
+    out.cardKeys.reserve(m_presence.size());
     for (const auto& [path, entry] : m_presence) {
         out.readerNames.push_back(entry.name);
         // "/" is the no-card sentinel of the wire property; normalise it to
         // empty so a caller cannot accidentally match on it.
         const bool holdsCard = entry.hasCard && !entry.cardPath.empty() && entry.cardPath != "/";
-        out.cardPaths.push_back(holdsCard ? entry.cardPath : std::string{});
+        out.cardKeys.push_back(holdsCard ? entry.cardPath : std::string{});
     }
     return out;
 }
@@ -186,6 +187,15 @@ void BusExporter::updateProperties(ObjectId reader, const PropertyDelta& delta)
     }
     if (m_materializer.onUpdate) {
         m_materializer.onUpdate(reader, delta);
+    }
+}
+
+void BusExporter::relabelReader(const ReaderState& reader)
+{
+    // The label is not part of the presence snapshot (nothing here resolves by
+    // it); only the live Reader1 object carries it.
+    if (m_materializer.onRelabel) {
+        m_materializer.onRelabel(reader);
     }
 }
 

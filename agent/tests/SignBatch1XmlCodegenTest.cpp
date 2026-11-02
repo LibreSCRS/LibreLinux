@@ -23,7 +23,7 @@ using RowsWire = std::vector<RowTuple>;
 // Result(a(sha{sv}u) rows).
 static_assert(std::is_invocable_v<decltype(&Adaptor::emitResult), Adaptor&, const RowsWire&>,
               "SignBatch1.Result wire shape frozen as a(sha{sv}u); the generated emitResult signature drifted from "
-              "the shape declared in dbus/org.librescrs.Agent.Operation.SignBatch1.xml");
+              "the shape declared in org.librescrs.Agent.Operation.SignBatch1.xml");
 
 // GetResult() -> a(sha{sv}u) is a private pure-virtual per sdbus-c++ convention;
 // verify it exists with the documented return shape by overriding it.
@@ -37,7 +37,7 @@ private:
 };
 static_assert(!std::is_abstract_v<SignBatch1Probe>,
               "SignBatch1 adaptor must expose GetResult() -> a(sha{sv}u) as declared in "
-              "dbus/org.librescrs.Agent.Operation.SignBatch1.xml");
+              "org.librescrs.Agent.Operation.SignBatch1.xml");
 } // namespace
 
 TEST(SignBatch1Xml, ResultAndGetResultWireShapesFrozen)

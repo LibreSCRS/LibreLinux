@@ -23,7 +23,7 @@ std::string slurp(const char* path)
 }
 } // namespace
 
-// The worker hop (AgentFrontend::makeCardResolver) must obtain its post sink via the
+// The worker hop (AgentFrontend::scheduleCardResolve) must obtain its post sink via the
 // transport handout and never name the legacy concrete poster member/setter.
 TEST(TransportCaptureGuard, WorkerHopMarshalsThroughTransportHandoutSink)
 {
@@ -86,67 +86,43 @@ TEST(TransportTeardownGuard, DestructorPerformsNoCoreDeref)
         << "the explicit observer sever must live in AgentService::quiesce()";
 }
 
-// Co-own guard: every typed op the frontend spawns must be handed the SINGLE
-// crypto-worker context (for abandoned-worker keep-alive) plus the shutdown-cancel
-// token, and the CardObject must attach the context to each op it builds — so an
-// abandoned typed op co-owns every core member its unwind touches (the cache for a
-// nested CAN/MRZ prompt's putCan/putMrz past the flow gate) through one share and
-// bails + skips completion on teardown.
-TEST(TypedOpKeepAliveGuard, FrontendHandsEachTypedOpTheCoOwnedContextAndShutdownToken)
+// Co-own guard: an operation abandoned mid-prompt outlives the host's
+// composition, so it must co-own the core members, the seams it drives and the
+// bus connection its channel is exported on. The agent library's launcher
+// attaches all three to every operation it builds; what this host owes it is the
+// connection share, and one launcher for every card rather than a seam bundle of
+// its own per card.
+TEST(TypedOpKeepAliveGuard, TheFrontendLaunchesThroughOneLauncherThatCoOwnsTheConnection)
 {
     const std::string src = slurp(LIBRELINUX_AGENTFRONTEND_CPP);
     ASSERT_FALSE(src.empty()) << "AgentFrontend source path not wired";
 
-    EXPECT_NE(src.find("deps.cryptoContext = m_cryptoCtx"), std::string::npos)
-        << "each typed op's deps must co-own the single crypto-worker context";
-    EXPECT_NE(src.find("deps.shutdownToken = m_cryptoCtx->shutdown"), std::string::npos)
-        << "each typed op's deps must carry the context's shutdown-cancel token";
-    EXPECT_NE(src.find("deps.connectionKeepAlive = m_connection"), std::string::npos)
-        << "each typed op's deps must co-own the agent bus connection (channel keep-alive)";
-    // The pre-fix per-member shares must be gone from the frontend.
-    EXPECT_EQ(src.find("deps.prompterKeepAlive"), std::string::npos)
-        << "the frontend must not co-own the prompter as a separate per-member share";
-    EXPECT_EQ(src.find("deps.credentialsKeepAlive"), std::string::npos)
-        << "the frontend must not co-own the credential cache as a separate per-member share";
+    EXPECT_NE(src.find("m_launcher(core, Operations::OperationSeams::production(core, pluginService), m_connection)"),
+              std::string::npos)
+        << "the frontend's launcher must run the production seams and co-own the agent bus connection";
+    EXPECT_EQ(src.find("std::make_shared<Operations::Lm"), std::string::npos)
+        << "the frontend must not build a seam bundle of its own";
+    EXPECT_EQ(src.find("cryptoContext"), std::string::npos)
+        << "the core members an operation co-owns are the launcher's to attach";
 }
 
-TEST(TypedOpKeepAliveGuard, CardObjectAttachesLifetimeGuardsToEveryTypedOp)
+TEST(TypedOpKeepAliveGuard, EveryCardOperationGoesThroughTheLauncher)
 {
     const std::string src = slurp(LIBRELINUX_CARDOBJECT_CPP);
     ASSERT_FALSE(src.empty()) << "CardObject source path not wired";
 
-    // The guard helper co-owns the single context + the bus connection and binds
-    // the shutdown token.
-    EXPECT_NE(src.find("op.keepAlive(m_deps.cryptoContext)"), std::string::npos)
-        << "attachLifetimeGuards must co-own the single crypto-worker context";
-    EXPECT_NE(src.find("op.keepAlive(m_deps.connectionKeepAlive)"), std::string::npos)
-        << "attachLifetimeGuards must co-own the agent bus connection (typed-op channel keep-alive)";
-    EXPECT_EQ(src.find("op.keepAlive(m_deps.prompterKeepAlive)"), std::string::npos)
-        << "the pre-fix per-member prompter keep-alive must be gone";
-    EXPECT_NE(src.find("op.bindShutdownToken(m_deps.shutdownToken)"), std::string::npos)
-        << "attachLifetimeGuards must bind the shutdown-cancel token";
-
-    // The LM seam bundle must be co-owned too: an abandoned qualified-sign worker
-    // derefs its signer seam's vtable + the engine it holds by reference on unblock,
-    // so the seam object itself must outlive the zombie. The stateless read/cert
-    // seams are co-owned uniformly (their statelessness is a margin, not the guard).
-    EXPECT_NE(src.find("op.keepAlive(m_deps.ownedSigner)"), std::string::npos)
-        << "attachLifetimeGuards must co-own the signing seam share (abandoned sign-worker keep-alive)";
-    EXPECT_NE(src.find("op.keepAlive(m_deps.ownedReader)"), std::string::npos)
-        << "attachLifetimeGuards must co-own the identity-reader seam share";
-    EXPECT_NE(src.find("op.keepAlive(m_deps.ownedCertReader)"), std::string::npos)
-        << "attachLifetimeGuards must co-own the certificate-reader seam share";
-
-    // Every prompting op the CardObject spawns must run the guard helper: the raw
-    // build call MUST be followed by attachLifetimeGuards(*op) (never a bare
-    // `return buildXOperation(...)`). GetPhoto prompts on a cache miss, so it too
-    // must attach — all four typed paths.
-    std::size_t attaches = 0;
-    for (std::size_t pos = src.find("attachLifetimeGuards(*op)"); pos != std::string::npos;
-         pos = src.find("attachLifetimeGuards(*op)", pos + 1)) {
-        ++attaches;
+    // Nine operations, nine launches; nothing queued, assembled or kept alive by
+    // hand beside them.
+    std::size_t launches = 0;
+    for (std::size_t pos = src.find("return launch("); pos != std::string::npos;
+         pos = src.find("return launch(", pos + 1)) {
+        ++launches;
     }
-    EXPECT_GE(attaches, 4u) << "Sign / ReadIdentity / ReadCertificates / GetPhoto must each attach the lifetime guards";
+    EXPECT_EQ(launches, 9u) << "every Card1 / Credentials1 operation must be launched through the launcher";
+    EXPECT_EQ(src.find(".publish("), std::string::npos) << "no operation may be queued around the launcher";
+    EXPECT_EQ(src.find("::Deps"), std::string::npos) << "no operation's dependencies may be assembled here";
+    EXPECT_EQ(src.find("keepAlive("), std::string::npos) << "the keep-alives are the launcher's to attach";
+    EXPECT_EQ(src.find("bindShutdownToken("), std::string::npos) << "the shutdown binding is the launcher's to attach";
 }
 
 // Ordering guard: quiesce() stops the inbound monitor BEFORE severing the core

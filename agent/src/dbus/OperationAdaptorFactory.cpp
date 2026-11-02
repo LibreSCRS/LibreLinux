@@ -6,7 +6,7 @@
 #include "dbus/CredentialOutcomeNames.h"
 #include "dbus/TypedResultStore.h"
 #include "operations/Operation1Adaptor.h"
-#include <LibreSCRS/Agent/backend/Logging.h>
+#include <LibreSCRS/Logging.h>
 #include <LibreSCRS/Agent/backend/OperationChannel.h>
 #include <LibreSCRS/Agent/OperationState.h>
 #include "org.librescrs.Agent.Operation.Certificates1_adaptor.h"
@@ -49,8 +49,8 @@ constexpr const char* kNoResult = "org.librescrs.Agent.Error.NoResult";
 
 // One OperationChannel impl per typed sub-adaptor. Each owns its inner
 // per-kind adaptor (Operation1 + the typed sub-interface incl. its GetResult)
-// and shares the same OperationState so Cancel() flips the same flag the worker
-// observes via OperationBase::isCancelled(). emitResult selects its variant arm
+// and shares the same OperationState; the adaptor's Operation1.Cancel runs the
+// operation's CancelRoute when its launcher calls it. emitResult selects its variant arm
 // from the closed ResultPayload, publishes the late-subscriber recovery store
 // (served by GetResult while the op survives the cleanup grace), and marshals
 // the matching wire signal (the memfd sealing for Photo1/Sign1 lives here — the
@@ -65,8 +65,9 @@ class Identity1Adaptor final : public Operation1Adaptor<org::librescrs::Agent::O
 {
 public:
     Identity1Adaptor(sdbus::IConnection& bus, sdbus::ObjectPath path, std::shared_ptr<OperationState> state,
-                     std::shared_ptr<IdentityResultState> resultState)
-        : Operation1Adaptor(bus, std::move(path), std::move(state)), m_resultState(std::move(resultState))
+                     CancelRoute cancel, std::shared_ptr<IdentityResultState> resultState)
+        : Operation1Adaptor(bus, std::move(path), std::move(state), std::move(cancel)),
+          m_resultState(std::move(resultState))
     {}
 
 private:
@@ -85,9 +86,10 @@ private:
 class IdentityChannel final : public OperationChannel
 {
 public:
-    IdentityChannel(sdbus::IConnection& bus, sdbus::ObjectPath path, std::shared_ptr<OperationState> state)
+    IdentityChannel(sdbus::IConnection& bus, sdbus::ObjectPath path, std::shared_ptr<OperationState> state,
+                    CancelRoute cancel)
         : m_resultState(std::make_shared<IdentityResultState>()),
-          m_inner(bus, std::move(path), std::move(state), m_resultState)
+          m_inner(bus, std::move(path), std::move(state), std::move(cancel), m_resultState)
     {}
     void emitPropertiesChanged() noexcept override
     {
@@ -137,8 +139,9 @@ class Certificates1Adaptor final : public Operation1Adaptor<org::librescrs::Agen
 {
 public:
     Certificates1Adaptor(sdbus::IConnection& bus, sdbus::ObjectPath path, std::shared_ptr<OperationState> state,
-                         std::shared_ptr<CertificatesResultState> resultState)
-        : Operation1Adaptor(bus, std::move(path), std::move(state)), m_resultState(std::move(resultState))
+                         CancelRoute cancel, std::shared_ptr<CertificatesResultState> resultState)
+        : Operation1Adaptor(bus, std::move(path), std::move(state), std::move(cancel)),
+          m_resultState(std::move(resultState))
     {}
 
 private:
@@ -157,9 +160,10 @@ private:
 class CertificatesChannel final : public OperationChannel
 {
 public:
-    CertificatesChannel(sdbus::IConnection& bus, sdbus::ObjectPath path, std::shared_ptr<OperationState> state)
+    CertificatesChannel(sdbus::IConnection& bus, sdbus::ObjectPath path, std::shared_ptr<OperationState> state,
+                        CancelRoute cancel)
         : m_resultState(std::make_shared<CertificatesResultState>()),
-          m_inner(bus, std::move(path), std::move(state), m_resultState)
+          m_inner(bus, std::move(path), std::move(state), std::move(cancel), m_resultState)
     {}
     void emitPropertiesChanged() noexcept override
     {
@@ -196,8 +200,9 @@ class Photo1Adaptor final : public Operation1Adaptor<org::librescrs::Agent::Oper
 {
 public:
     Photo1Adaptor(sdbus::IConnection& bus, sdbus::ObjectPath path, std::shared_ptr<OperationState> state,
-                  std::shared_ptr<PhotoResultState> resultState)
-        : Operation1Adaptor(bus, std::move(path), std::move(state)), m_resultState(std::move(resultState))
+                  CancelRoute cancel, std::shared_ptr<PhotoResultState> resultState)
+        : Operation1Adaptor(bus, std::move(path), std::move(state), std::move(cancel)),
+          m_resultState(std::move(resultState))
     {}
 
 private:
@@ -236,9 +241,10 @@ private:
 class PhotoChannel final : public OperationChannel
 {
 public:
-    PhotoChannel(sdbus::IConnection& bus, sdbus::ObjectPath path, std::shared_ptr<OperationState> state)
+    PhotoChannel(sdbus::IConnection& bus, sdbus::ObjectPath path, std::shared_ptr<OperationState> state,
+                 CancelRoute cancel)
         : m_resultState(std::make_shared<PhotoResultState>()),
-          m_inner(bus, std::move(path), std::move(state), m_resultState)
+          m_inner(bus, std::move(path), std::move(state), std::move(cancel), m_resultState)
     {}
     void emitPropertiesChanged() noexcept override
     {
@@ -316,8 +322,9 @@ class Sign1Adaptor final : public Operation1Adaptor<org::librescrs::Agent::Opera
 {
 public:
     Sign1Adaptor(sdbus::IConnection& bus, sdbus::ObjectPath path, std::shared_ptr<OperationState> state,
-                 std::shared_ptr<SignResultState> resultState)
-        : Operation1Adaptor(bus, std::move(path), std::move(state)), m_resultState(std::move(resultState))
+                 CancelRoute cancel, std::shared_ptr<SignResultState> resultState)
+        : Operation1Adaptor(bus, std::move(path), std::move(state), std::move(cancel)),
+          m_resultState(std::move(resultState))
     {}
 
 private:
@@ -336,9 +343,10 @@ private:
 class SignChannel final : public OperationChannel
 {
 public:
-    SignChannel(sdbus::IConnection& bus, sdbus::ObjectPath path, std::shared_ptr<OperationState> state)
+    SignChannel(sdbus::IConnection& bus, sdbus::ObjectPath path, std::shared_ptr<OperationState> state,
+                CancelRoute cancel)
         : m_resultState(std::make_shared<SignResultState>()),
-          m_inner(bus, std::move(path), std::move(state), m_resultState)
+          m_inner(bus, std::move(path), std::move(state), std::move(cancel), m_resultState)
     {}
     void emitPropertiesChanged() noexcept override
     {
@@ -390,8 +398,9 @@ class SignBatch1Adaptor final : public Operation1Adaptor<org::librescrs::Agent::
 {
 public:
     SignBatch1Adaptor(sdbus::IConnection& bus, sdbus::ObjectPath path, std::shared_ptr<OperationState> state,
-                      std::shared_ptr<SignBatchResultState> resultState)
-        : Operation1Adaptor(bus, std::move(path), std::move(state)), m_resultState(std::move(resultState))
+                      CancelRoute cancel, std::shared_ptr<SignBatchResultState> resultState)
+        : Operation1Adaptor(bus, std::move(path), std::move(state), std::move(cancel)),
+          m_resultState(std::move(resultState))
     {}
 
 private:
@@ -434,9 +443,10 @@ private:
 class SignBatchChannel final : public OperationChannel
 {
 public:
-    SignBatchChannel(sdbus::IConnection& bus, sdbus::ObjectPath path, std::shared_ptr<OperationState> state)
+    SignBatchChannel(sdbus::IConnection& bus, sdbus::ObjectPath path, std::shared_ptr<OperationState> state,
+                     CancelRoute cancel)
         : m_resultState(std::make_shared<SignBatchResultState>()),
-          m_inner(bus, std::move(path), std::move(state), m_resultState)
+          m_inner(bus, std::move(path), std::move(state), std::move(cancel), m_resultState)
     {}
     void emitPropertiesChanged() noexcept override
     {
@@ -585,8 +595,9 @@ class Credentials1Adaptor final : public Operation1Adaptor<org::librescrs::Agent
 {
 public:
     Credentials1Adaptor(sdbus::IConnection& bus, sdbus::ObjectPath path, std::shared_ptr<OperationState> state,
-                        std::shared_ptr<CredentialsResultState> resultState)
-        : Operation1Adaptor(bus, std::move(path), std::move(state)), m_resultState(std::move(resultState))
+                        CancelRoute cancel, std::shared_ptr<CredentialsResultState> resultState)
+        : Operation1Adaptor(bus, std::move(path), std::move(state), std::move(cancel)),
+          m_resultState(std::move(resultState))
     {}
 
 private:
@@ -605,9 +616,10 @@ private:
 class CredentialsChannel final : public OperationChannel
 {
 public:
-    CredentialsChannel(sdbus::IConnection& bus, sdbus::ObjectPath path, std::shared_ptr<OperationState> state)
+    CredentialsChannel(sdbus::IConnection& bus, sdbus::ObjectPath path, std::shared_ptr<OperationState> state,
+                       CancelRoute cancel)
         : m_resultState(std::make_shared<CredentialsResultState>()),
-          m_inner(bus, std::move(path), std::move(state), m_resultState)
+          m_inner(bus, std::move(path), std::move(state), std::move(cancel), m_resultState)
     {}
     void emitPropertiesChanged() noexcept override
     {
@@ -651,95 +663,46 @@ private:
 
 namespace LibreSCRS::Agent {
 
-std::unique_ptr<Operations::OperationBase> buildIdentityOperation(sdbus::IConnection& bus,
-                                                                  const sdbus::ObjectPath& path,
-                                                                  Operations::ReadIdentityOperation::Deps deps)
+std::unique_ptr<Operations::OperationChannel> makeIdentityChannel(sdbus::IConnection& bus, sdbus::ObjectPath path,
+                                                                  std::shared_ptr<Operations::OperationState> state,
+                                                                  Operations::CancelRoute cancel)
 {
-    // Construct the shared OperationState BEFORE the channel so the same
-    // shared_ptr is handed to the channel and to OperationBase — no window
-    // where Cancel() is dropped before hooks are bound.
-    auto state = std::make_shared<Operations::OperationState>();
-    auto channel = std::make_unique<Operations::IdentityChannel>(bus, path, state);
-    return std::make_unique<Operations::ReadIdentityOperation>(std::move(channel), std::move(deps), state);
+    return std::make_unique<Operations::IdentityChannel>(bus, std::move(path), std::move(state), std::move(cancel));
 }
 
-std::unique_ptr<Operations::OperationBase> buildPhotoOperation(sdbus::IConnection& bus, const sdbus::ObjectPath& path,
-                                                               Operations::GetPhotoOperation::Deps deps)
+std::unique_ptr<Operations::OperationChannel> makePhotoChannel(sdbus::IConnection& bus, sdbus::ObjectPath path,
+                                                               std::shared_ptr<Operations::OperationState> state,
+                                                               Operations::CancelRoute cancel)
 {
-    auto state = std::make_shared<Operations::OperationState>();
-    auto channel = std::make_unique<Operations::PhotoChannel>(bus, path, state);
-    return std::make_unique<Operations::GetPhotoOperation>(std::move(channel), std::move(deps), state);
+    return std::make_unique<Operations::PhotoChannel>(bus, std::move(path), std::move(state), std::move(cancel));
 }
 
-std::unique_ptr<Operations::OperationBase> buildCertificatesOperation(sdbus::IConnection& bus,
-                                                                      const sdbus::ObjectPath& path,
-                                                                      Operations::ReadCertificatesOperation::Deps deps)
+std::unique_ptr<Operations::OperationChannel> makeCertificatesChannel(sdbus::IConnection& bus, sdbus::ObjectPath path,
+                                                                      std::shared_ptr<Operations::OperationState> state,
+                                                                      Operations::CancelRoute cancel)
 {
-    auto state = std::make_shared<Operations::OperationState>();
-    auto channel = std::make_unique<Operations::CertificatesChannel>(bus, path, state);
-    return std::make_unique<Operations::ReadCertificatesOperation>(std::move(channel), std::move(deps), state);
+    return std::make_unique<Operations::CertificatesChannel>(bus, std::move(path), std::move(state), std::move(cancel));
 }
 
-std::unique_ptr<Operations::OperationBase> buildTokenInfoOperation(sdbus::IConnection& bus,
-                                                                   const sdbus::ObjectPath& path,
-                                                                   Operations::ReadTokenInfoOperation::Deps deps)
+std::unique_ptr<Operations::OperationChannel> makeSignChannel(sdbus::IConnection& bus, sdbus::ObjectPath path,
+                                                              std::shared_ptr<Operations::OperationState> state,
+                                                              Operations::CancelRoute cancel)
 {
-    // Reuses IdentityChannel verbatim: it marshals any CardReadSnapshot
-    // through Identity1.Result/GetResult regardless of which Operation
-    // produced it — ReadTokenInfo mints NO new result interface.
-    auto state = std::make_shared<Operations::OperationState>();
-    auto channel = std::make_unique<Operations::IdentityChannel>(bus, path, state);
-    return std::make_unique<Operations::ReadTokenInfoOperation>(std::move(channel), std::move(deps), state);
+    return std::make_unique<Operations::SignChannel>(bus, std::move(path), std::move(state), std::move(cancel));
 }
 
-std::unique_ptr<Operations::OperationBase> buildSignOperation(sdbus::IConnection& bus, const sdbus::ObjectPath& path,
-                                                              Operations::SignOperation::Deps deps)
+std::unique_ptr<Operations::OperationChannel> makeSignBatchChannel(sdbus::IConnection& bus, sdbus::ObjectPath path,
+                                                                   std::shared_ptr<Operations::OperationState> state,
+                                                                   Operations::CancelRoute cancel)
 {
-    auto state = std::make_shared<Operations::OperationState>();
-    // The SignChannel owns the recovery store shared between its emitResult
-    // (writer) and the Sign1 adaptor's GetResult (reader); the op no longer
-    // threads it in.
-    auto channel = std::make_unique<Operations::SignChannel>(bus, path, state);
-    return std::make_unique<Operations::SignOperation>(std::move(channel), std::move(deps), state);
+    return std::make_unique<Operations::SignBatchChannel>(bus, std::move(path), std::move(state), std::move(cancel));
 }
 
-std::unique_ptr<Operations::OperationBase> buildSignBatchOperation(sdbus::IConnection& bus,
-                                                                   const sdbus::ObjectPath& path,
-                                                                   Operations::SignBatchOperation::Deps deps)
+std::unique_ptr<Operations::OperationChannel> makeCredentialsChannel(sdbus::IConnection& bus, sdbus::ObjectPath path,
+                                                                     std::shared_ptr<Operations::OperationState> state,
+                                                                     Operations::CancelRoute cancel)
 {
-    auto state = std::make_shared<Operations::OperationState>();
-    // The SignBatchChannel owns the recovery store shared between its
-    // emitResult (writer) and the SignBatch1 adaptor's GetResult (reader),
-    // mirroring SignChannel's own composition.
-    auto channel = std::make_unique<Operations::SignBatchChannel>(bus, path, state);
-    return std::make_unique<Operations::SignBatchOperation>(std::move(channel), std::move(deps), state);
-}
-
-std::unique_ptr<Operations::OperationBase>
-buildListCredentialsOperation(sdbus::IConnection& bus, const sdbus::ObjectPath& path,
-                              Operations::ListCredentialsOperation::Deps deps)
-{
-    auto state = std::make_shared<Operations::OperationState>();
-    auto channel = std::make_unique<Operations::CredentialsChannel>(bus, path, state);
-    return std::make_unique<Operations::ListCredentialsOperation>(std::move(channel), std::move(deps), state);
-}
-
-std::unique_ptr<Operations::OperationBase> buildManagePinOperation(sdbus::IConnection& bus,
-                                                                   const sdbus::ObjectPath& path,
-                                                                   Operations::ManagePinOperation::Deps deps)
-{
-    auto state = std::make_shared<Operations::OperationState>();
-    auto channel = std::make_unique<Operations::CredentialsChannel>(bus, path, state);
-    return std::make_unique<Operations::ManagePinOperation>(std::move(channel), std::move(deps), state);
-}
-
-std::unique_ptr<Operations::OperationBase>
-buildActivateSigningKeyOperation(sdbus::IConnection& bus, const sdbus::ObjectPath& path,
-                                 Operations::ActivateSigningKeyOperation::Deps deps)
-{
-    auto state = std::make_shared<Operations::OperationState>();
-    auto channel = std::make_unique<Operations::CredentialsChannel>(bus, path, state);
-    return std::make_unique<Operations::ActivateSigningKeyOperation>(std::move(channel), std::move(deps), state);
+    return std::make_unique<Operations::CredentialsChannel>(bus, std::move(path), std::move(state), std::move(cancel));
 }
 
 } // namespace LibreSCRS::Agent

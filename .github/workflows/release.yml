@@ -14,7 +14,8 @@ name: Release
 #   build      source tarball + bill of materials; packages per distribution.
 #              On a tag the upstream packages are downloaded from the upstream
 #              releases, which the release order publishes first; in a
-#              rehearsal they are built from the commits deps.lock names.
+#              rehearsal, and for arch always (Arch packages are never
+#              released), they are built from the commits deps.lock names.
 #   seal       SHA256SUMS, signatures, and their verification (on a tag:
 #              keyless and a provenance attestation; in a rehearsal: an
 #              ephemeral key, and the keyless path proved on fixtures).
@@ -117,19 +118,23 @@ jobs:
           retention-days: 3
 
   packages:
+    # One slug per job: build the packages, then install them in a clean
+    # container and judge the result.
     name: packages (${{ matrix.slug }})
     needs: [preflight]
     runs-on: ubuntu-24.04
     # Measured locally at -j4: middleware 7-9 min, agent libraries 7-9, this
     # repository 3-4 per distribution, then 2-4 to verify; on a tag the
-    # upstream packages are downloaded instead of built.
+    # upstream packages are downloaded instead of built, except for arch.
     timeout-minutes: 120
     permissions:
       contents: read
     strategy:
       fail-fast: false
       matrix:
-        slug: [debian13, ubuntu2604, fedora43, fedora44, opensusetw]
+        # arch builds the PKGBUILD the AUR publishes and installs what it
+        # makes; its packages are not release assets.
+        slug: [debian13, ubuntu2604, fedora43, fedora44, opensusetw, arch]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -149,7 +154,12 @@ jobs:
           packages: ${{ steps.build.outputs.art }}/${{ matrix.slug }}
           report: ${{ runner.temp }}/pkg-report
           hook: packaging/ci/verify-installed.sh
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+      # Whether there is an asset set at all is the builder's answer, not the
+      # slug's name; an empty upload stays an error everywhere else.
+      # Only an explicit 'false' skips the upload: a builder that does not
+      # give the answer yet leaves it empty, and that must still upload.
+      - if: steps.build.outputs.assets != 'false'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: packages-${{ matrix.slug }}
           path: ${{ steps.build.outputs.dist }}

@@ -27,8 +27,8 @@
 #include <LibreSCRS/Plugin/PluginTypes.h>
 #include <LibreSCRS/Plugin/ReadResult.h>
 #include <LibreSCRS/SmartCard/AppletAid.h>
-#include <LibreSCRS/SmartCard/CardMap.h>
 #include <LibreSCRS/SmartCard/CardSession.h>
+#include <LibreSCRS/SmartCard/testing/CardSessionTesting.h>
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <unistd.h>
@@ -518,7 +518,8 @@ TEST_F(PrompterIntegrationTest, RetryContextIsForwardedAsItsOwnOptionKeys)
 
 TEST_F(PrompterIntegrationTest, AltKindsRideTheOptionsDict)
 {
-    m_mock->setBehavior(MockBehavior{.status = wire::kStatusOk, .secretBytes = "123456"});
+    m_mock->setBehavior(MockBehavior{.status = std::string{wire::replyStatusToken(wire::PromptReplyStatus::Ok)},
+                                     .secretBytes = "123456"});
 
     PromptOptions opts;
     opts.altKinds = {wire::kKindMrz};
@@ -542,7 +543,8 @@ TEST_F(PrompterIntegrationTest, AltKindsRideTheOptionsDict)
 // seconds to transcribe two lines of 44 characters.
 TEST_F(PrompterIntegrationTest, AltDeadlineRidesTheOptionsDictBesideAltKinds)
 {
-    m_mock->setBehavior(MockBehavior{.status = wire::kStatusOk, .secretBytes = "123456"});
+    m_mock->setBehavior(MockBehavior{.status = std::string{wire::replyStatusToken(wire::PromptReplyStatus::Ok)},
+                                     .secretBytes = "123456"});
 
     PromptOptions opts;
     opts.altKinds = {wire::kKindMrz};
@@ -563,7 +565,8 @@ TEST_F(PrompterIntegrationTest, AltDeadlineRidesTheOptionsDictBesideAltKinds)
 // prompter that predates the key is unaffected.
 TEST_F(PrompterIntegrationTest, NoAlternativeDeadlineMeansNoSuchKey)
 {
-    m_mock->setBehavior(MockBehavior{.status = wire::kStatusOk, .secretBytes = "123456"});
+    m_mock->setBehavior(MockBehavior{.status = std::string{wire::replyStatusToken(wire::PromptReplyStatus::Ok)},
+                                     .secretBytes = "123456"});
 
     PromptOptions opts;
     const auto result = m_client->requestCan(opts);
@@ -580,7 +583,8 @@ TEST_F(PrompterIntegrationTest, NoAlternativeDeadlineMeansNoSuchKey)
 // chosen kind, secret intact.
 TEST_F(PrompterIntegrationTest, OldPrompterIgnoresAltKindsAndPlainOkStillWorks)
 {
-    m_mock->setBehavior(MockBehavior{.status = wire::kStatusOk, .secretBytes = "123456"});
+    m_mock->setBehavior(MockBehavior{.status = std::string{wire::replyStatusToken(wire::PromptReplyStatus::Ok)},
+                                     .secretBytes = "123456"});
 
     PromptOptions opts;
     opts.altKinds = {wire::kKindMrz};
@@ -598,7 +602,8 @@ TEST_F(PrompterIntegrationTest, OldPrompterIgnoresAltKindsAndPlainOkStillWorks)
 // AND which credential it is actually holding.
 TEST_F(PrompterIntegrationTest, OkMrzMapsToChosenKindWhenSent)
 {
-    m_mock->setBehavior(MockBehavior{.status = wire::kStatusOkMrz, .secretBytes = std::string{kSpecimenMrzPayload}});
+    m_mock->setBehavior(MockBehavior{.status = std::string{wire::replyStatusToken(wire::PromptReplyStatus::OkMrz)},
+                                     .secretBytes = std::string{kSpecimenMrzPayload}});
 
     PromptOptions opts;
     opts.altKinds = {wire::kKindMrz};
@@ -617,7 +622,8 @@ TEST_F(PrompterIntegrationTest, OkMrzMapsToChosenKindWhenSent)
 // would deposit as a CAN.
 TEST_F(PrompterIntegrationTest, OkMrzWithoutOptInCollapsesToError)
 {
-    m_mock->setBehavior(MockBehavior{.status = wire::kStatusOkMrz, .secretBytes = std::string{kSpecimenMrzPayload}});
+    m_mock->setBehavior(MockBehavior{.status = std::string{wire::replyStatusToken(wire::PromptReplyStatus::OkMrz)},
+                                     .secretBytes = std::string{kSpecimenMrzPayload}});
 
     const auto result = m_client->requestCan(PromptOptions{});
     EXPECT_EQ(result.status, PromptStatus::Error);
@@ -631,7 +637,8 @@ TEST_F(PrompterIntegrationTest, OkMrzWithoutOptInCollapsesToError)
 // non-CAN kind still fails closed.
 TEST_F(PrompterIntegrationTest, OkMrzOnNonCanRequestWithAltKindsCollapsesToError)
 {
-    m_mock->setBehavior(MockBehavior{.status = wire::kStatusOkMrz, .secretBytes = std::string{kSpecimenMrzPayload}});
+    m_mock->setBehavior(MockBehavior{.status = std::string{wire::replyStatusToken(wire::PromptReplyStatus::OkMrz)},
+                                     .secretBytes = std::string{kSpecimenMrzPayload}});
 
     PromptOptions opts;
     opts.altKinds = {wire::kKindMrz};
@@ -679,7 +686,7 @@ class TravelDocumentCandidate final : public LibreSCRS::Plugin::CardPlugin
 public:
     TravelDocumentCandidate()
     {
-        setIdentity("travel-doc-stub", "stub", 0);
+        setIdentity("travel-doc-stub", 0);
     }
     LibreSCRS::Plugin::CardCapabilities capabilities() const override
     {
@@ -732,17 +739,17 @@ TEST_F(PrompterIntegrationTest, ProductionReadOnEmrtdCandidateOffersMrzAlternati
 {
     // The user dismisses the dialog: this case is about the REQUEST that goes
     // out, not about what comes back.
-    m_mock->setBehavior(MockBehavior{.status = wire::kStatusCancelled});
+    m_mock->setBehavior(
+        MockBehavior{.status = std::string{wire::replyStatusToken(wire::PromptReplyStatus::Cancelled)}});
 
     auto factory = [](const std::string& r)
         -> std::expected<std::shared_ptr<LibreSCRS::SmartCard::CardSession>, LibreSCRS::SmartCard::OpenError> {
-        return LibreSCRS::SmartCard::detail::makeDetachedCardSession(r);
+        return LibreSCRS::SmartCard::Testing::makeDetachedCardSession(r);
     };
     auto resolver = [](std::span<const std::uint8_t>, LibreSCRS::SmartCard::CardSession&) {
         return Operations::CandidateList{std::make_shared<TravelDocumentCandidate>()};
     };
-    Operations::CardSessionHolder holder("FakeReader", std::move(factory), std::move(resolver),
-                                         std::make_shared<LibreSCRS::SmartCard::CardMap>());
+    Operations::CardSessionHolder holder("FakeReader", std::move(factory), std::move(resolver));
 
     ProviderDrivingReader reader;
     Operations::NullCredentialDepositor depositor;
@@ -768,8 +775,7 @@ TEST_F(PrompterIntegrationTest, ProductionReadOnEmrtdCandidateOffersMrzAlternati
     });
     reader.onRead = [&flow] {
         static_cast<void>(flow.credentialProvider()(LibreSCRS::Auth::AuthRequirement::forPaceSecret(
-            LibreSCRS::SmartCard::AppletAid{}, LibreSCRS::Auth::PaceSecretKind::Can, std::nullopt,
-            LibreSCRS::LocalizedText{})));
+            LibreSCRS::Auth::PaceSecretKind::Can, LibreSCRS::LocalizedText{})));
     };
 
     const auto result = flow.run();
@@ -797,7 +803,8 @@ TEST_F(PrompterIntegrationTest, ProductionReadOnEmrtdCandidateOffersMrzAlternati
 
 TEST_F(PrompterIntegrationTest, EachRequestArrivesOnItsOwnConnection)
 {
-    m_mock->setBehavior(MockBehavior{.status = std::string{wire::kStatusOk}, .secretBytes = "1234"});
+    m_mock->setBehavior(MockBehavior{.status = std::string{wire::replyStatusToken(wire::PromptReplyStatus::Ok)},
+                                     .secretBytes = "1234"});
 
     static_cast<void>(m_client->requestPin(PromptOptions{}));
     static_cast<void>(m_client->requestPin(PromptOptions{}));
@@ -810,7 +817,8 @@ TEST_F(PrompterIntegrationTest, EachRequestArrivesOnItsOwnConnection)
 
 TEST_F(PrompterIntegrationTest, ACancelNeverTravelsOnTheConnectionItsRequestUsed)
 {
-    m_mock->setBehavior(MockBehavior{.status = std::string{wire::kStatusOk}, .secretBytes = "1234"});
+    m_mock->setBehavior(MockBehavior{.status = std::string{wire::replyStatusToken(wire::PromptReplyStatus::Ok)},
+                                     .secretBytes = "1234"});
     static_cast<void>(m_client->requestPin(PromptOptions{}));
 
     m_client->cancel("nonce:probe");
@@ -827,7 +835,8 @@ TEST_F(PrompterIntegrationTest, ACancelNeverTravelsOnTheConnectionItsRequestUsed
 // prompter would have to guess -- which is the defect this replaces.
 TEST_F(PrompterIntegrationTest, TheRequestCarriesItsPromptIdOnTheWire)
 {
-    m_mock->setBehavior(MockBehavior{.status = std::string{wire::kStatusOk}, .secretBytes = "1234"});
+    m_mock->setBehavior(MockBehavior{.status = std::string{wire::replyStatusToken(wire::PromptReplyStatus::Ok)},
+                                     .secretBytes = "1234"});
 
     PromptOptions options;
     options.promptId = "nonce:41";
@@ -855,7 +864,8 @@ TEST_F(PrompterIntegrationTest, AnUnstampedPromptSendsNoAddressee)
     // Absent rather than empty-string: the key follows the same omit-when-unset
     // convention as every other optional option, so a helper cannot mistake an
     // empty addressee for a real one.
-    m_mock->setBehavior(MockBehavior{.status = std::string{wire::kStatusOk}, .secretBytes = "1234"});
+    m_mock->setBehavior(MockBehavior{.status = std::string{wire::replyStatusToken(wire::PromptReplyStatus::Ok)},
+                                     .secretBytes = "1234"});
 
     static_cast<void>(m_client->requestPin(PromptOptions{}));
 
@@ -869,7 +879,8 @@ TEST_F(PrompterIntegrationTest, TheRequestCarriesItsEntryDeadlineOnTheWire)
     // The helper enforces the deadline and closes its own window, so a deadline
     // that never reached it leaves a window standing with nobody reading it --
     // which is the defect the deadline exists to remove.
-    m_mock->setBehavior(MockBehavior{.status = std::string{wire::kStatusOk}, .secretBytes = "1234"});
+    m_mock->setBehavior(MockBehavior{.status = std::string{wire::replyStatusToken(wire::PromptReplyStatus::Ok)},
+                                     .secretBytes = "1234"});
 
     PromptOptions options;
     options.deadlineMs = 120'000;
@@ -885,7 +896,8 @@ TEST_F(PrompterIntegrationTest, AnUnsetDeadlineIsOmittedRatherThanSentAsZero)
 {
     // 0 is the "unset" sentinel and a helper must never read it as an instant
     // expiry; omitting it keeps that impossible rather than merely documented.
-    m_mock->setBehavior(MockBehavior{.status = std::string{wire::kStatusOk}, .secretBytes = "1234"});
+    m_mock->setBehavior(MockBehavior{.status = std::string{wire::replyStatusToken(wire::PromptReplyStatus::Ok)},
+                                     .secretBytes = "1234"});
 
     static_cast<void>(m_client->requestPin(PromptOptions{}));
 
@@ -894,7 +906,7 @@ TEST_F(PrompterIntegrationTest, AnUnsetDeadlineIsOmittedRatherThanSentAsZero)
 
 TEST_F(PrompterIntegrationTest, AnExpiredWindowIsNotReportedAsAUserCancellation)
 {
-    m_mock->setBehavior(MockBehavior{.status = std::string{wire::kStatusTimeout}});
+    m_mock->setBehavior(MockBehavior{.status = std::string{wire::replyStatusToken(wire::PromptReplyStatus::Timeout)}});
 
     const PromptResult result = m_client->requestCan(PromptOptions{});
 
@@ -925,7 +937,8 @@ TEST_F(PrompterIntegrationTest, AnOutOfDateHelperGetsNoWindowRaised)
     // dismiss is the failure, so answering "error" after showing one would not
     // be an improvement.
     m_mock->reportProtocolVersion(LibreLinux::PrompterWire::kProtocolVersion - 1);
-    m_mock->setBehavior(MockBehavior{.status = std::string{wire::kStatusOk}, .secretBytes = "1234"});
+    m_mock->setBehavior(MockBehavior{.status = std::string{wire::replyStatusToken(wire::PromptReplyStatus::Ok)},
+                                     .secretBytes = "1234"});
 
     const PromptResult result = m_client->requestPin(PromptOptions{});
 
@@ -956,7 +969,8 @@ TEST_F(PrompterIntegrationTest, TheVersionIsReadOnceRatherThanBeforeEveryPrompt)
     // A property round trip in front of every dialog would put a synchronous
     // call between the holder and their prompt, for an answer that cannot
     // change without the helper being replaced.
-    m_mock->setBehavior(MockBehavior{.status = std::string{wire::kStatusOk}, .secretBytes = "1234"});
+    m_mock->setBehavior(MockBehavior{.status = std::string{wire::replyStatusToken(wire::PromptReplyStatus::Ok)},
+                                     .secretBytes = "1234"});
 
     static_cast<void>(m_client->requestPin(PromptOptions{}));
     static_cast<void>(m_client->requestPin(PromptOptions{}));
@@ -972,4 +986,30 @@ TEST_F(PrompterIntegrationTest, TheAgentSweepsTheHelperOnceWhenItStarts)
     EXPECT_EQ(m_mock->resets(), 0);
     m_client->resetPrompter();
     EXPECT_EQ(m_mock->resets(), 1);
+}
+
+// A helper that could not be reached is not one that is out of date. The first
+// prompt finds no prompter on the bus (not started yet, in its restart limit, or
+// slow to activate): that prompt fails, and the next one asks again and is
+// served once the helper is there -- nothing about the first failure is
+// remembered as a property of the helper.
+TEST(PrompterClientReachability, AnUnreachableHelperIsAskedAgainNotDeclaredOutOfDate)
+{
+    constexpr const char* kLateService = "org.librescrs.Prompter1.Test.Late";
+    PrompterClient client(kLateService, kMockObjectPath);
+
+    const auto first = client.requestPin(PromptOptions{});
+    EXPECT_EQ(first.status, PromptStatus::Error) << "nobody owns the name yet";
+
+    auto serverConn = sdbus::createSessionBusConnection();
+    serverConn->requestName(sdbus::ServiceName{kLateService});
+    MockPrompter mock(*serverConn, sdbus::ObjectPath{kMockObjectPath});
+    mock.setBehavior(MockBehavior{.status = "ok", .secretBytes = "1234"});
+    serverConn->enterEventLoopAsync();
+
+    const auto second = client.requestPin(PromptOptions{});
+    EXPECT_EQ(second.status, PromptStatus::Ok) << "the helper is there now";
+    ASSERT_TRUE(second.secret.has_value());
+    EXPECT_EQ(second.secret->view(), "1234");
+    serverConn->leaveEventLoop();
 }

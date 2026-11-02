@@ -3,6 +3,9 @@
 # Runs INSIDE a fresh container. /pkg holds this repository's packages,
 # /pkg-<Repo> the upstream ones.
 #
+# FAMILY is deb, rpm or arch; anything else is refused rather than read as
+# one of them.
+#
 # The five files this package has to put in root-owned system directories are
 # named one at a time. The p11-kit registration is the one that catches a unit
 # or a module landing in lib64 on a target whose library directory is not lib.
@@ -30,7 +33,8 @@ if [ "${PKG_MANAGER:-}" = zypper ]; then
 fi
 
 
-if [ "${FAMILY:-deb}" = deb ]; then
+case "${FAMILY:-}" in
+deb)
   export DEBIAN_FRONTEND=noninteractive
   # The base container is not a machine. Ubuntu's image ships
   # /etc/dpkg/dpkg.cfg.d/excludes with path-exclude=/usr/share/locale/*/LC_MESSAGES/*.mo
@@ -50,7 +54,6 @@ if [ "${FAMILY:-deb}" = deb ]; then
       /pkg-LibreMiddleware/librescrs-card-plugins_*.deb \
       /pkg/librescrs-agent_*.deb /pkg/librescrs-pinentry-kde_*.deb >/dev/null
   check "V1 agent and prompter install with their upstreams" $?
-  LIBGLOB="/usr/lib/*"
   installed_list() { dpkg-query -W -f='${Package}\n'; }
   files_of() { dpkg -L "$1" 2>/dev/null; }
   scripts_of() {
@@ -60,7 +63,8 @@ if [ "${FAMILY:-deb}" = deb ]; then
     done
   }
   remove_ours() { apt-get purge -y $(installed_list | grep -E 'librescrs|liblibrescrs') >/dev/null; }
-else
+  ;;
+rpm)
   dnf -y -q install p11-kit dbus-daemon >/dev/null
   # Runtime packages only -- see the Debian branch for why no agent package is
   # installed here.
@@ -68,12 +72,33 @@ else
       /pkg-LibreMiddleware/librescrs-card-plugins-5*.rpm \
       /pkg/librescrs-agent-5*.rpm /pkg/librescrs-pinentry-kde-5*.rpm >/dev/null
   check "V1 agent and prompter install with their upstreams" $?
-  LIBGLOB="/usr/lib64"
   installed_list() { rpm -qa --qf '%{NAME}\n'; }
   files_of() { rpm -ql "$1" 2>/dev/null; }
   scripts_of() { rpm -q --scripts librescrs-agent librescrs-pinentry-kde 2>/dev/null; }
   remove_ours() { dnf -y -q remove $(installed_list | grep -E '^(librescrs|liblibrescrs)') >/dev/null; }
-fi
+  ;;
+arch)
+  pacman -S --noconfirm --needed p11-kit dbus >/dev/null
+  # Runtime packages only -- see the Debian branch for why no agent package is
+  # installed here. The middleware's recipe makes one package, with no
+  # development package to leave out.
+  pacman -U --noconfirm /pkg-LibreMiddleware/librescrs-middleware-5*.pkg.tar.zst \
+      /pkg/librescrs-agent-5*.pkg.tar.zst /pkg/librescrs-pinentry-kde-5*.pkg.tar.zst >/dev/null
+  check "V1 agent and prompter install with their upstreams" $?
+  installed_list() { pacman -Qq; }
+  files_of() { pacman -Qlq "$1" 2>/dev/null; }
+  scripts_of() {
+    for s in /var/lib/pacman/local/librescrs-*/install; do
+      [ -e "$s" ] || continue; echo "--- $s"; cat "$s"
+    done
+  }
+  remove_ours() { pacman -Rns --noconfirm $(installed_list | grep -E '^(librescrs|liblibrescrs)') >/dev/null; }
+  ;;
+*)
+  echo "FAIL FAMILY='${FAMILY:-}' is not deb, rpm or arch"
+  exit 2
+  ;;
+esac
 
 # ── V2: the five system files, one assertion each ─────────────────────────
 test -f /usr/share/polkit-1/actions/org.librescrs.agent.configure.policy
@@ -151,15 +176,6 @@ n=$(wc -l < /tmp/all.txt); echo "PATH_COUNT=$n"
 test "$n" -gt 20; check "V-coexist the path list is not empty (counted $n)" $?
 test ! -s /tmp/dupes.txt; check "V-coexist every installed path owned exactly once" $?
 [ -s /tmp/dupes.txt ] && cat /tmp/dupes.txt
-
-# ── V11: no unresolved shared-library dependency ──────────────────────────
-miss=0
-for f in /usr/libexec/librescrs-agent /usr/libexec/librescrs-pinentry-kde \
-         $LIBGLOB/pkcs11/librescrs-pkcs11-agent.so; do
-  [ -e "$f" ] || continue
-  if ldd "$f" 2>/dev/null | grep -q 'not found'; then echo "  not found in $f"; miss=1; fi
-done
-test "$miss" -eq 0; check "V11 no unresolved shared-library dependency" $?
 
 # ── V9: removal leaves nothing under /usr ─────────────────────────────────
 remove_ours

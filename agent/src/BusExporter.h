@@ -3,6 +3,7 @@
 #pragma once
 #include <LibreSCRS/Agent/backend/AgentTransport.h>
 #include <LibreSCRS/Agent/PresenceTypes.h>
+#include <LibreSCRS/Agent/value/ReaderLabels.h> // PresenceRoster
 #include <sdbus-c++/IConnection.h>
 #include <sdbus-c++/IProxy.h> // m_nocProxy (client-disconnect NameOwnerChanged watch)
 #include <chrono>
@@ -73,15 +74,11 @@ public:
     [[nodiscard]] std::optional<ReaderCard> resolveReaderCard(const std::string& readerPath) const;
 
     // The whole reader roster and the card each one currently holds, taken in
-    // ONE lock and index-aligned. A prompt's reader label needs both: which
-    // reader holds a given card, and the full set — a dual-interface unit is
-    // only distinguishable across the set, so a per-reader query could not tell
-    // its two slots apart. An entry with no card carries an empty card path.
-    struct PresenceRoster
-    {
-        std::vector<std::string> readerNames;
-        std::vector<std::string> cardPaths;
-    };
+    // ONE lock and index-aligned, keyed by card object path. A prompt's reader
+    // label and the power-hold verdict need both: which reader holds a given
+    // card, and the full set — a dual-interface unit is only distinguishable
+    // across the set, so a per-reader query could not tell its two slots apart.
+    // An entry with no card carries an empty key.
     [[nodiscard]] PresenceRoster presenceRoster() const;
 
     // The callbacks the AgentFrontend registers so each typed presence delta
@@ -95,6 +92,7 @@ public:
         std::function<void(const CardState&)> onCard;
         std::function<void(ObjectId)> onWithdraw;
         std::function<void(ObjectId, const PropertyDelta&)> onUpdate;
+        std::function<void(const ReaderState&)> onRelabel;
     };
     void setMaterializer(Materializer materializer);
     void clearMaterializer() noexcept;
@@ -124,6 +122,10 @@ public:
     void publishCard(const CardState& card) override;
     void withdraw(ObjectId id) override;
     void updateProperties(ObjectId reader, const PropertyDelta& delta) override;
+    // A published reader's label (Model/Interface) changed because a reader
+    // arrived or left beside it: the registry decides the label over the whole
+    // roster, this only forwards it to the live Reader1 object.
+    void relabelReader(const ReaderState& reader);
 
     // Loop-marshaling surface: run @p fn on the event-loop thread now (post) or
     // after @p delay (postAfter), through the wired poster. A no-op when no poster

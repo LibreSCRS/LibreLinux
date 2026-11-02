@@ -3,15 +3,15 @@
 //
 // Teeth test for the qualified-timestamped-sign path's LM-seam keep-alive — the
 // last abandoned-worker gap. A Card1.Sign op carries its signing seam (the
-// production LmSigner) by BARE reference in its Deps, backed by a CardObject-owned
-// share (CardOperationDeps::ownedSigner). The seam holds the signing-engine
+// production LmSigner) by BARE reference in its Deps, backed by the launcher's
+// seam bundle (OperationSeams::signer). The seam holds the signing-engine
 // provider by reference and, on the abandoned-worker path, unblocks past the flow
 // gate and dereferences its OWN vtable + that engine (snapshot() at entry,
-// recordLastTsaUrlUsed() at success-exit). If the seam is freed with the CardObject
-// while the worker is parked, that unblock is a use-after-free.
+// recordLastTsaUrlUsed() at success-exit). If the seam is freed with the host's
+// composition while the worker is parked, that unblock is a use-after-free.
 //
-// The fix makes the owned seams shared_ptr and keepAlives the signer share into the
-// typed op (CardObject::attachLifetimeGuards), exactly alongside the crypto context
+// The fix makes the owned seams shared_ptr and keepAlives the seam share into the
+// typed op (the agent library's OperationLauncher), exactly alongside the crypto context
 // (which co-owns the engine + config). This test wires a fake signer seam through
 // the SAME bare-Signer& Deps + keepAlive(share) shape, wedges it, abandons the
 // worker, drops the composition's seam + context shares, and releases: only the
@@ -19,7 +19,7 @@
 // runs the whole LmSigner touch sequence against LIVE memory.
 //
 // PROVE TEETH (manual): remove `op->keepAlive(seam)` below (the seam co-ownership
-// the production CardObject::attachLifetimeGuards adds) and re-run under
+// the production OperationLauncher adds) and re-run under
 // ThreadSanitizer — the seam is then freed at the composition drop and the wedged
 // worker's sign() call (a virtual dispatch through the freed seam's vtable, then its
 // m_engine deref) traps on freed memory. Removing the context keepAlive instead
@@ -181,7 +181,7 @@ private:
 // sign(), abandoned, and the composition's seam + engine/config shares are dropped
 // while it is parked. Only the op's co-owned shares (the signer share + the crypto
 // context that holds the engine + config) keep them alive — attached exactly as
-// CardObject::attachLifetimeGuards does; the delayed unblock then runs the whole
+// the OperationLauncher does; the delayed unblock then runs the whole
 // LmSigner touch sequence (vtable dispatch, snapshot(), recordLastTsaUrlUsed) on
 // LIVE memory (TSan-clean) and the op skips its completion because the shutdown
 // token fired.
@@ -210,7 +210,7 @@ TEST(SignSeamWedgeDrain, AbandonedSignOpKeepsItsSeamEngineAndConfigAliveThroughC
         .config = config,
         .signingEngine = engine,
     });
-    // The CardObject-owned signing seam (CardOperationDeps::ownedSigner): a share the
+    // The launcher-owned signing seam (OperationSeams::signer): a share the
     // typed op co-owns via keepAlive so an abandoned worker keeps the seam OBJECT
     // alive for its post-unblock vtable dispatch + engine deref.
     std::shared_ptr<Signer> seam =
@@ -222,7 +222,7 @@ TEST(SignSeamWedgeDrain, AbandonedSignOpKeepsItsSeamEngineAndConfigAliveThroughC
         auto op = std::make_unique<SignSeamDrivingOp>(std::make_unique<RecordingChannel>(slots),
                                                       std::make_shared<OperationState>(), *seam);
         // Co-own the seam share + the crypto context (engine + config) + bind the
-        // shutdown token, EXACTLY as CardObject::attachLifetimeGuards does for the
+        // shutdown token, EXACTLY as the OperationLauncher does for the
         // production sign op. Removing keepAlive(seam) is the RED-proof.
         op->keepAlive(seam);
         op->keepAlive(ctx);

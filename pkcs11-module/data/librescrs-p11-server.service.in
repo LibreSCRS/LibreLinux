@@ -37,7 +37,6 @@ LockPersonality=yes
 RestrictSUIDSGID=yes
 SystemCallArchitectures=native
 SystemCallFilter=@system-service
-RemoveIPC=yes
 
 [Install]
 WantedBy=graphical-session.target

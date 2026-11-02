@@ -3,7 +3,7 @@
 //
 // Machine gate for the Operation1 errorCode taxonomy: pins the agent's
 // ErrorCode enum, value-for-value and count, against the enumeration
-// documented in dbus/org.librescrs.Agent.Operation1.xml. That enumeration is
+// documented in org.librescrs.Agent.Operation1.xml. That enumeration is
 // the canonical wire contract — a new code lands there first (codes cross the
 // bus as plain uint32; the XML doc block is the only place the wire values are
 // published to clients).

@@ -1,60 +1,42 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 // SPDX-FileCopyrightText: 2026 hirashix0
 #pragma once
-#include <LibreSCRS/Agent/operations/ActivateSigningKeyOperation.h>
-#include <LibreSCRS/Agent/operations/GetPhotoOperation.h>
-#include <LibreSCRS/Agent/operations/ListCredentialsOperation.h>
-#include <LibreSCRS/Agent/operations/ManagePinOperation.h>
-#include <LibreSCRS/Agent/operations/OperationBase.h>
-#include <LibreSCRS/Agent/operations/ReadCertificatesOperation.h>
-#include <LibreSCRS/Agent/operations/ReadIdentityOperation.h>
-#include <LibreSCRS/Agent/operations/ReadTokenInfoOperation.h>
-#include <LibreSCRS/Agent/operations/SignBatchOperation.h>
-#include <LibreSCRS/Agent/operations/SignOperation.h>
+#include <LibreSCRS/Agent/OperationState.h>
+#include <LibreSCRS/Agent/backend/OperationChannel.h>
+#include "operations/CancelRoute.h"
 #include <sdbus-c++/IConnection.h>
 #include <sdbus-c++/Types.h>
 #include <memory>
 
 namespace LibreSCRS::Agent {
 
-// Backend adaptor factories. Each builds the sdbus-hosted Operation1 + typed
-// sub-adaptor, the shared OperationState, and the typed Operation host for one
-// Card1 method, then returns the OperationBase the core OperationManager queues.
-// Moved out of the (now neutral) OperationManager so the core scheduler carries
-// no sdbus adaptor construction; the caller derives the exported wire path via
-// dbus/OperationPath.h and hands it in here.
-[[nodiscard]] std::unique_ptr<Operations::OperationBase>
-buildIdentityOperation(sdbus::IConnection& bus, const sdbus::ObjectPath& path,
-                       Operations::ReadIdentityOperation::Deps deps);
-[[nodiscard]] std::unique_ptr<Operations::OperationBase>
-buildPhotoOperation(sdbus::IConnection& bus, const sdbus::ObjectPath& path, Operations::GetPhotoOperation::Deps deps);
-[[nodiscard]] std::unique_ptr<Operations::OperationBase>
-buildCertificatesOperation(sdbus::IConnection& bus, const sdbus::ObjectPath& path,
-                           Operations::ReadCertificatesOperation::Deps deps);
-// Reuses the SAME Identity1 channel machinery buildIdentityOperation does
-// (Operations::IdentityChannel): ReadTokenInfo mints NO new result
-// interface — its CardReadSnapshot rides Identity1.Result exactly like
-// ReadIdentity's.
-[[nodiscard]] std::unique_ptr<Operations::OperationBase>
-buildTokenInfoOperation(sdbus::IConnection& bus, const sdbus::ObjectPath& path,
-                        Operations::ReadTokenInfoOperation::Deps deps);
-[[nodiscard]] std::unique_ptr<Operations::OperationBase>
-buildSignOperation(sdbus::IConnection& bus, const sdbus::ObjectPath& path, Operations::SignOperation::Deps deps);
-[[nodiscard]] std::unique_ptr<Operations::OperationBase>
-buildSignBatchOperation(sdbus::IConnection& bus, const sdbus::ObjectPath& path,
-                        Operations::SignBatchOperation::Deps deps);
+// The bus side of a card operation: each builds the exported Operation1 +
+// typed result sub-adaptor at @p path over the state the operation shares with
+// it. The agent library's OperationLauncher builds the operation itself around
+// the channel, so this file knows nothing of an operation's dependencies.
+using ChannelMaker = std::unique_ptr<Operations::OperationChannel> (*)(
+    sdbus::IConnection& bus, sdbus::ObjectPath path, std::shared_ptr<Operations::OperationState> state,
+    Operations::CancelRoute cancel);
 
-// Credentials1 operations. Each builds the Operation1 + Operation.Credentials1
-// typed host on @p path (delivering the (a{sv}, aa{sv}) result inline) and returns
-// the OperationBase the scheduler queues.
-[[nodiscard]] std::unique_ptr<Operations::OperationBase>
-buildListCredentialsOperation(sdbus::IConnection& bus, const sdbus::ObjectPath& path,
-                              Operations::ListCredentialsOperation::Deps deps);
-[[nodiscard]] std::unique_ptr<Operations::OperationBase>
-buildManagePinOperation(sdbus::IConnection& bus, const sdbus::ObjectPath& path,
-                        Operations::ManagePinOperation::Deps deps);
-[[nodiscard]] std::unique_ptr<Operations::OperationBase>
-buildActivateSigningKeyOperation(sdbus::IConnection& bus, const sdbus::ObjectPath& path,
-                                 Operations::ActivateSigningKeyOperation::Deps deps);
+// ReadIdentity. ReadTokenInfo reuses it: its snapshot rides Identity1.Result.
+[[nodiscard]] std::unique_ptr<Operations::OperationChannel>
+makeIdentityChannel(sdbus::IConnection& bus, sdbus::ObjectPath path, std::shared_ptr<Operations::OperationState> state,
+                    Operations::CancelRoute cancel);
+[[nodiscard]] std::unique_ptr<Operations::OperationChannel>
+makePhotoChannel(sdbus::IConnection& bus, sdbus::ObjectPath path, std::shared_ptr<Operations::OperationState> state,
+                 Operations::CancelRoute cancel);
+[[nodiscard]] std::unique_ptr<Operations::OperationChannel>
+makeCertificatesChannel(sdbus::IConnection& bus, sdbus::ObjectPath path,
+                        std::shared_ptr<Operations::OperationState> state, Operations::CancelRoute cancel);
+[[nodiscard]] std::unique_ptr<Operations::OperationChannel>
+makeSignChannel(sdbus::IConnection& bus, sdbus::ObjectPath path, std::shared_ptr<Operations::OperationState> state,
+                Operations::CancelRoute cancel);
+[[nodiscard]] std::unique_ptr<Operations::OperationChannel>
+makeSignBatchChannel(sdbus::IConnection& bus, sdbus::ObjectPath path, std::shared_ptr<Operations::OperationState> state,
+                     Operations::CancelRoute cancel);
+// ListCredentials, ManagePin and ActivateSigningKey: Credentials1.Result inline.
+[[nodiscard]] std::unique_ptr<Operations::OperationChannel>
+makeCredentialsChannel(sdbus::IConnection& bus, sdbus::ObjectPath path,
+                       std::shared_ptr<Operations::OperationState> state, Operations::CancelRoute cancel);
 
 } // namespace LibreSCRS::Agent

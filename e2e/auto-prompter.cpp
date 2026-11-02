@@ -157,7 +157,8 @@ private:
         // SAFETY GATE: no gate file -> never release anything.
         if (!gateOpen()) {
             logDecision(kind, false, "no-gate");
-            return {wire::kStatusCancelled, sdbus::UnixFd{sealedFd({}), sdbus::adopt_fd}, std::string{}};
+            return {std::string{wire::replyStatusToken(wire::PromptReplyStatus::Cancelled)},
+                    sdbus::UnixFd{sealedFd({}), sdbus::adopt_fd}, std::string{}};
         }
 
         // Stand in for a user who takes the offered switch to the MRZ form:
@@ -171,29 +172,34 @@ private:
             if (mrz == nullptr) {
                 // Same fail-safe as every other kind: NEVER fabricate a secret.
                 logDecision(kind, false, "env-unset");
-                return {wire::kStatusCancelled, sdbus::UnixFd{sealedFd({}), sdbus::adopt_fd}, std::string{}};
+                return {std::string{wire::replyStatusToken(wire::PromptReplyStatus::Cancelled)},
+                        sdbus::UnixFd{sealedFd({}), sdbus::adopt_fd}, std::string{}};
             }
             logDecision(kind, true, "alt-kind-mrz");
-            return {wire::kStatusOkMrz, sdbus::UnixFd{sealedFd(std::string_view{mrz}), sdbus::adopt_fd}, std::string{}};
+            return {std::string{wire::replyStatusToken(wire::PromptReplyStatus::OkMrz)},
+                    sdbus::UnixFd{sealedFd(std::string_view{mrz}), sdbus::adopt_fd}, std::string{}};
         }
 
         const char* key = envKeyFor(kind);
         if (key == nullptr) {
             logDecision(kind, false, "unknown-kind");
-            return {wire::kStatusCancelled, sdbus::UnixFd{sealedFd({}), sdbus::adopt_fd}, std::string{}};
+            return {std::string{wire::replyStatusToken(wire::PromptReplyStatus::Cancelled)},
+                    sdbus::UnixFd{sealedFd({}), sdbus::adopt_fd}, std::string{}};
         }
 
         const char* value = std::getenv(key);
         if (value == nullptr) {
             // Env unset -> fail-safe: NEVER fabricate a secret.
             logDecision(kind, false, "env-unset");
-            return {wire::kStatusCancelled, sdbus::UnixFd{sealedFd({}), sdbus::adopt_fd}, std::string{}};
+            return {std::string{wire::replyStatusToken(wire::PromptReplyStatus::Cancelled)},
+                    sdbus::UnixFd{sealedFd({}), sdbus::adopt_fd}, std::string{}};
         }
 
         // Exactly the env bytes, no trailing newline.
         const std::string_view secret{value};
         logDecision(kind, true, nullptr);
-        return {wire::kStatusOk, sdbus::UnixFd{sealedFd(secret), sdbus::adopt_fd}, std::string{}};
+        return {std::string{wire::replyStatusToken(wire::PromptReplyStatus::Ok)},
+                sdbus::UnixFd{sealedFd(secret), sdbus::adopt_fd}, std::string{}};
     }
 
     // The multi-secret path (change_pin): primary = current PIN, secondary =
@@ -213,7 +219,8 @@ private:
     {
         const auto refuse = [&](const char* reason) {
             logDecision(kind, false, reason);
-            return std::tuple{wire::kStatusCancelled, sdbus::UnixFd{sealedFd({}), sdbus::adopt_fd},
+            return std::tuple{std::string{wire::replyStatusToken(wire::PromptReplyStatus::Cancelled)},
+                              sdbus::UnixFd{sealedFd({}), sdbus::adopt_fd},
                               sdbus::UnixFd{sealedFd({}), sdbus::adopt_fd}, std::string{}};
         };
 
@@ -231,7 +238,8 @@ private:
         }
 
         logDecision(kind, true, nullptr);
-        return {wire::kStatusOk, sdbus::UnixFd{sealedFd(std::string_view{current}), sdbus::adopt_fd},
+        return {std::string{wire::replyStatusToken(wire::PromptReplyStatus::Ok)},
+                sdbus::UnixFd{sealedFd(std::string_view{current}), sdbus::adopt_fd},
                 sdbus::UnixFd{sealedFd(std::string_view{replacement}), sdbus::adopt_fd}, std::string{}};
     }
 

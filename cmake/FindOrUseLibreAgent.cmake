@@ -1,98 +1,129 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
-# SPDX-FileCopyrightText: 2026 hirashix0
+# FindOrUseLibreAgent -- the one way a LibreSCRS repository consumes LibreAgent.
 #
-# Hybrid LibreAgent core consumption (mirrors
-# LibreCelik/cmake/FindOrUseLibreMiddleware.cmake): prefer
-# find_package(CONFIG) when LIBRELINUX_USE_INSTALLED_AGENT_CORE=ON, otherwise
-# build the neutral core from source via FetchContent. Either path provides the
-# namespaced LibreAgent::Core imported/alias target the Linux backend links.
+# A consumer carries a byte-identical copy of this file in its cmake/ (the
+# check-version gate compares the two) and writes, before including it, the
+# default of the one switch that picks where the agent comes from:
 #
-# The FetchContent path takes a fixed revision from the LibreAgent row of deps.lock,
-# never a branch. This is the DEFAULT path here (the installed-package option
-# below is opt-in), so a branch would make every build of a given LibreLinux
-# revision depend on whatever the agent's trunk happened to be that day: two
-# builds of the same tag would compile different code, and an unrelated agent
-# push could turn this repo's CI red with no change here. Raising the pin is a
-# deliberate act that rides with the change that needs it.
+#   set(LIBRESCRS_AGENT_FROM_SOURCE_DEFAULT ON)   # or OFF
+#   include(cmake/FindOrUseLibreAgent.cmake)
+#   librescrs_use_libreagent(COMPONENTS Core Wire)
 #
-# Dev builds re-point FetchContent at a local sibling checkout with
-#   -DFETCHCONTENT_SOURCE_DIR_LIBREAGENT=/path/to/LibreAgent
-# (the source tree is consumed in place; its tests + install/export stay behind
-# PROJECT_IS_TOP_LEVEL, so only the library builds here). A green build against
-# a source override proves the SOURCES, not the pin -- only a fetch of the
-# pinned revision proves the pin. Do not read one as the other.
+# LIBRESCRS_AGENT_FROM_SOURCE (a cache option; -D overrides the default)
+#   ON   build the agent from the revision the LibreAgent row of the
+#        repository's deps.lock names (FetchContent).
+#   OFF  find_package(LibreAgent <this major>.0 CONFIG) -- an installed agent.
+#
+# One name and one polarity for every repository. Four copies used to carry
+# four names, one of them with the opposite sense (a FETCH switch defaulting
+# OFF beside three USE_INSTALLED switches defaulting OFF), so the same -D
+# meant opposite things one directory apart.
+#
+# COMPONENTS names what the repository links. On the installed path they are
+# the find_package components: without them the lookup probes every component,
+# and on a machine that also has the Qt client installed that runs its
+# find_dependency(Qt6) for a dependency the repository never asked for. On the
+# source path each named component, and what it needs (ClientQt and
+# Pkcs11SocketClient need Wire, the socket client needs Pkcs11Facade, the Qt
+# client's doubles need the Qt client), is switched on and every other one off,
+# BEFORE the subproject is configured: option() does not overwrite a cache
+# variable that already exists, so a switch seeded afterwards does nothing.
+#
+# The revision and the URL are the LibreAgent row of deps.lock
+# (`<name> <url> <commit>`), which `bump-deps` writes and `bump-deps check`
+# holds; never a branch, or two builds of one tag would compile different code.
+# The lock is a configure dependency, so a bumped row re-runs configure.
+# Dev builds point FetchContent at a local checkout with
+# -DFETCHCONTENT_SOURCE_DIR_LIBREAGENT=<path>; a green build against a source
+# override proves the sources, not the pin.
+#
+# The floor on the installed path is this repository's own major (the
+# repositories release in lockstep): it says only "an agent from another major
+# cannot satisfy this build"; the package's SameMajorVersion rule says the rest.
 
-option(LIBRELINUX_USE_INSTALLED_AGENT_CORE
-       "Consume LibreAgent via find_package(CONFIG) instead of FetchContent" OFF)
-
-# The revision -- and the URL -- are the LibreAgent row of deps.lock
-# (`<name> <url> <commit>`), which `bump-deps` writes and
-# `bump-deps check` holds (form, reachable from upstream main, same revision
-# as every other consumer, and in CI: the tree actually built == the row).
-# This file only reads the row. CMAKE_CONFIGURE_DEPENDS makes a bumped lock
-# re-run configure, so the fetched tree follows the lock instead of staying
-# at the revision the build directory first fetched.
-set(_librelinux_deps_lock "${CMAKE_CURRENT_LIST_DIR}/../deps.lock")
-set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_librelinux_deps_lock}")
-file(STRINGS "${_librelinux_deps_lock}" _librelinux_agent_row REGEX "^LibreAgent[ \t]")
-list(LENGTH _librelinux_agent_row _librelinux_agent_rows)
-if(NOT _librelinux_agent_rows EQUAL 1)
-    message(FATAL_ERROR "deps.lock must hold exactly one LibreAgent row")
+if(NOT DEFINED LIBRESCRS_AGENT_FROM_SOURCE_DEFAULT)
+    message(FATAL_ERROR "Set LIBRESCRS_AGENT_FROM_SOURCE_DEFAULT (ON or OFF) before including "
+                        "FindOrUseLibreAgent.cmake: the repository decides where its agent comes from.")
 endif()
-string(REGEX REPLACE "[ \t]+" ";" _librelinux_agent_row "${_librelinux_agent_row}")
-list(GET _librelinux_agent_row 1 LIBREAGENT_URL)
-list(GET _librelinux_agent_row 2 LIBREAGENT_PIN)
+option(LIBRESCRS_AGENT_FROM_SOURCE
+       "Build LibreAgent from the deps.lock revision (FetchContent) instead of find_package(CONFIG)"
+       ${LIBRESCRS_AGENT_FROM_SOURCE_DEFAULT})
 
-# This backend always builds its own test tree (enable_testing() in the root
-# CMakeLists.txt is unconditional), and one of those tests drives the CSCA
-# anchor import against a synthetic master list. That fixture is the agent's,
-# and used to be carried here as a byte-identical copy; it is now asked for by
-# name. Set BEFORE the FetchContent branch below, which reads it.
-#
-# Deliberately not gated on BUILD_TESTING: this repository never defines that
-# variable, so the condition would simply be false, the component would never
-# be requested, and the fixture would go missing at link time. A gate that is
-# always closed is worse than no gate.
-set(LIBREAGENT_BUILD_TEST_SUPPORT ON CACHE BOOL "" FORCE)
+function(librescrs_use_libreagent)
+    cmake_parse_arguments(PARSE_ARGV 0 _lua "" "" "COMPONENTS")
+    if(_lua_UNPARSED_ARGUMENTS)
+        message(FATAL_ERROR "librescrs_use_libreagent: unknown arguments: ${_lua_UNPARSED_ARGUMENTS}")
+    endif()
+    if(NOT _lua_COMPONENTS)
+        message(FATAL_ERROR "librescrs_use_libreagent: name the COMPONENTS this repository links")
+    endif()
+    set(_lua_known Core Wire ClientQt ClientQtTestSupport Pkcs11Facade Pkcs11SocketClient TestSupport)
+    foreach(_lua_c IN LISTS _lua_COMPONENTS)
+        if(NOT _lua_c IN_LIST _lua_known)
+            message(FATAL_ERROR "librescrs_use_libreagent: unknown component ${_lua_c} (known: ${_lua_known})")
+        endif()
+    endforeach()
+    if(NOT PROJECT_VERSION_MAJOR)
+        message(FATAL_ERROR "librescrs_use_libreagent: call it after project(), whose major is the floor")
+    endif()
 
-if(LIBRELINUX_USE_INSTALLED_AGENT_CORE)
-    # The floor is a PACKAGING compatibility statement, not an API-accuracy one:
-    # it says only "an agent this old cannot possibly satisfy this backend", and
-    # the exported package's own SameMajorVersion rule additionally rejects
-    # anything from a different major. It is NOT what keeps this backend in step
-    # with the core's API — that is the revision the source path below consumes,
-    # and a mismatch there fails at compile time, where it belongs. Raising the
-    # floor above the agent's actual released version buys no accuracy: it just
-    # makes this branch unsatisfiable by every agent package that exists, which
-    # is a build break for packagers rather than a guard.
-    #
-    # Name the components. Without them the lookup probes EVERY known
-    # component, which on a machine that also has the Qt client installed runs
-    # that component's find_dependency(Qt6) and fails hard for a dependency
-    # this backend never asked for: a clean chroot passes, a developer machine
-    # does not. Naming them also makes an agent package built without one of
-    # them fail configuration BY NAME here, instead of the module discovering a
-    # missing component at link time -- or the fixture test quietly
-    # disappearing. Four are needed: the neutral core this backend has always
-    # linked, the PKCS#11 facade the module is now built from, the master-list
-    # fixture the anchor-import test links, and the wire vocabulary the
-    # error-name parity test links. The last one is why this list is checked
-    # by configuring against a real install and not by reading: the source
-    # path defines every target, so a name missing here is invisible until
-    # someone takes the installed path.
-    find_package(LibreAgent 5.0 REQUIRED CONFIG COMPONENTS Core Wire Pkcs11Facade TestSupport)
-    message(STATUS "LibreAgent: using installed package (CONFIG)")
-else()
-    message(STATUS "LibreAgent: building from source (FetchContent, pin ${LIBREAGENT_PIN})")
+    if(NOT LIBRESCRS_AGENT_FROM_SOURCE)
+        find_package(LibreAgent ${PROJECT_VERSION_MAJOR}.0 REQUIRED CONFIG COMPONENTS ${_lua_COMPONENTS})
+        message(STATUS "LibreAgent: installed package (CONFIG), components ${_lua_COMPONENTS}")
+        return()
+    endif()
+
+    set(_lua_lock "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../deps.lock")
+    if(NOT EXISTS "${_lua_lock}")
+        message(FATAL_ERROR "LIBRESCRS_AGENT_FROM_SOURCE is ON but there is no ${_lua_lock} to take the revision from")
+    endif()
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_lua_lock}")
+    file(STRINGS "${_lua_lock}" _lua_row REGEX "^LibreAgent[ \t]")
+    list(LENGTH _lua_row _lua_rows)
+    if(NOT _lua_rows EQUAL 1)
+        message(FATAL_ERROR "${_lua_lock} must hold exactly one LibreAgent row (it holds ${_lua_rows})")
+    endif()
+    string(REGEX REPLACE "[ \t]+" ";" _lua_row "${_lua_row}")
+    list(LENGTH _lua_row _lua_fields)
+    if(NOT _lua_fields EQUAL 3)
+        message(FATAL_ERROR "${_lua_lock}: the LibreAgent row is not `<name> <url> <commit>`")
+    endif()
+    list(GET _lua_row 1 _lua_url)
+    list(GET _lua_row 2 _lua_pin)
+    if(NOT _lua_pin MATCHES "^[0-9a-f]+$")
+        message(FATAL_ERROR "${_lua_lock}: the LibreAgent revision \"${_lua_pin}\" is not a commit")
+    endif()
+
+    # What each named component needs on the source path.
+    set(_lua_on ${_lua_COMPONENTS})
+    if("ClientQtTestSupport" IN_LIST _lua_on)
+        list(APPEND _lua_on ClientQt)
+    endif()
+    if("ClientQt" IN_LIST _lua_on OR "Pkcs11SocketClient" IN_LIST _lua_on)
+        list(APPEND _lua_on Wire)
+    endif()
+    if("Pkcs11SocketClient" IN_LIST _lua_on)
+        list(APPEND _lua_on Pkcs11Facade)
+    endif()
+    foreach(_lua_pair IN ITEMS Core:CORE Wire:WIRE ClientQt:CLIENT_QT ClientQtTestSupport:CLIENT_QT_TEST_SUPPORT
+                               Pkcs11Facade:PKCS11_FACADE Pkcs11SocketClient:PKCS11_SOCKET_CLIENT
+                               TestSupport:TEST_SUPPORT)
+        string(REPLACE ":" ";" _lua_pair "${_lua_pair}")
+        list(GET _lua_pair 0 _lua_name)
+        list(GET _lua_pair 1 _lua_switch)
+        if(_lua_name IN_LIST _lua_on)
+            set(LIBREAGENT_BUILD_${_lua_switch} ON CACHE BOOL "" FORCE)
+        else()
+            set(LIBREAGENT_BUILD_${_lua_switch} OFF CACHE BOOL "" FORCE)
+        endif()
+    endforeach()
+
+    message(STATUS "LibreAgent: building from source (FetchContent, pin ${_lua_pin}), components ${_lua_COMPONENTS}")
     include(FetchContent)
-    # Both component switches default OFF in the agent, and option() does not
-    # overwrite a cache variable that already exists -- so the switch has to be
-    # seeded BEFORE the subproject is configured. Without this the module links
-    # a target that was never defined, on the DEFAULT consumption path. The
-    # other platform backend already seeds Core and Wire the same way.
-    set(LIBREAGENT_BUILD_PKCS11_FACADE ON CACHE BOOL "" FORCE)
-    FetchContent_Declare(LibreAgent
-        GIT_REPOSITORY ${LIBREAGENT_URL}
-        GIT_TAG ${LIBREAGENT_PIN})
-    FetchContent_MakeAvailable(LibreAgent) # provides LibreAgent::Core + ::Pkcs11Facade
-endif()
+    FetchContent_Declare(LibreAgent GIT_REPOSITORY ${_lua_url} GIT_TAG ${_lua_pin})
+    # The agent's own headers are found through its targets; a consumer that
+    # turned on CMAKE_INCLUDE_CURRENT_DIR must not hand it this directory's.
+    # Set here, it reaches the subproject and ends with this function.
+    set(CMAKE_INCLUDE_CURRENT_DIR OFF)
+    FetchContent_MakeAvailable(LibreAgent)
+endfunction()

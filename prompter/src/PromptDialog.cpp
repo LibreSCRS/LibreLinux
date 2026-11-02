@@ -5,6 +5,8 @@
 
 #include "PrompterWire.h"
 
+#include <LibreSCRS/Agent/wire/ReaderInterface.h> // the reader_interface tokens
+
 #include "CanInputWidget.h"
 #include "ChangePinInputWidget.h"
 #include "InputWidgetBase.h"
@@ -31,6 +33,8 @@
 namespace LibreLinux::Prompter {
 
 namespace {
+
+using LibreSCRS::Agent::Wire::ReaderInterface;
 
 // Every prompt opens at least this wide, so a card's successive dialogs do not
 // change size with their text. Chosen to fit the longest reader chrome line
@@ -62,8 +66,8 @@ InputWidgetBase* widgetFor(PromptDialog::Kind kind, const PromptDialog::Options&
 // Recognised @c last_error msgKey (mirrors
 // LibreSCRS::Auth::ErrorKeys::preReadAuthFailed().key on the agent's LM
 // dependency; duplicated here as a documented literal, the same
-// cross-binary vocabulary convention PrompterWire.h's kKind*/kStatus*
-// constants already use -- this file has no LM dependency to share the
+// cross-binary vocabulary convention the option keys in PrompterWire.h
+// already use -- this file has no LM dependency to share the
 // constant with). The only source of a `last_error` today is the eMRTD read
 // flows' AuthFailed path (CredentialCache::markCredentialWrong).
 constexpr const char* kErrorPreReadAuthFailed = "librescrs.error.preRead.authFailed";
@@ -161,12 +165,21 @@ QLabel* makeClientSuppliedLabel(const QString& text, const char* objectName, QWi
 // sends a closed token and never prose: it has no localisation, so any English
 // it composed would arrive already written and no prompter could fix it.
 // An unrecognised token is treated as "unknown" and renders nothing.
+ReaderInterface readerInterfaceOf(const QString& token)
+{
+    return LibreSCRS::Agent::Wire::readerInterfaceFromToken(token.toStdString()).value_or(ReaderInterface::Unknown);
+}
+
 QString readerInterfaceText(const QString& token)
 {
-    if (token == QLatin1String(PrompterWire::kReaderInterfaceContact))
+    switch (readerInterfaceOf(token)) {
+    case ReaderInterface::Contact:
         return i18nc("@info which physical slot of a reader a prompt belongs to", "contact");
-    if (token == QLatin1String(PrompterWire::kReaderInterfaceContactless))
+    case ReaderInterface::Contactless:
         return i18nc("@info which physical slot of a reader a prompt belongs to", "contactless");
+    case ReaderInterface::Unknown:
+        break;
+    }
     return {};
 }
 
@@ -176,10 +189,14 @@ QString readerInterfaceText(const QString& token)
 // beside them carries the meaning wherever a font lacks the glyph.
 QString readerInterfaceGlyph(const QString& token)
 {
-    if (token == QLatin1String(PrompterWire::kReaderInterfaceContact))
+    switch (readerInterfaceOf(token)) {
+    case ReaderInterface::Contact:
         return QString::fromUtf8("\xF0\x9F\x92\xB3"); // card in a slot
-    if (token == QLatin1String(PrompterWire::kReaderInterfaceContactless))
+    case ReaderInterface::Contactless:
         return QString::fromUtf8("\xF0\x9F\x93\xB6"); // wireless waves
+    case ReaderInterface::Unknown:
+        break;
+    }
     return {};
 }
 

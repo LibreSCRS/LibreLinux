@@ -60,7 +60,9 @@ public:
     /// the same path as @p expectedPeer. A non-resolvable PID or a mismatch
     /// returns @c false (fail-closed). Both sides are weakly canonicalised
     /// (symlinks followed where the target exists) so an install symlink and
-    /// its target compare equal.
+    /// its target compare equal. A caller whose executable the kernel reports
+    /// as @c "<expected> (deleted)" -- the agent still running after an
+    /// upgrade replaced its binary -- is the expected peer too.
     [[nodiscard]] static bool isAuthorizedCaller(pid_t pid, const std::filesystem::path& expectedPeer);
 };
 

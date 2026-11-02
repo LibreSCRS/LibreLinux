@@ -477,7 +477,7 @@ TEST_F(PrompterAuthIntegrationTest, OkMrzMintedOnlyWhenOfferedAndChosen)
         ok->click();
     });
 
-    EXPECT_EQ(std::get<0>(reply), wire::kStatusOkMrz)
+    EXPECT_EQ(std::get<0>(reply), std::string{wire::replyStatusToken(wire::PromptReplyStatus::OkMrz)})
         << "a CAN request that opted in and whose user switched must answer with the distinct status";
     const int fd = std::get<1>(reply).get();
     ASSERT_GE(fd, 0);
@@ -510,7 +510,8 @@ TEST_F(PrompterAuthIntegrationTest, PlainOkWhenOptedInButUserStaysOnCan)
         ok->click();
     });
 
-    EXPECT_EQ(std::get<0>(reply), wire::kStatusOk) << "opting in must not by itself change the answered status";
+    EXPECT_EQ(std::get<0>(reply), std::string{wire::replyStatusToken(wire::PromptReplyStatus::Ok)})
+        << "opting in must not by itself change the answered status";
     EXPECT_EQ(readMemfd(std::get<1>(reply).get()), std::string("123456"));
 }
 
@@ -539,7 +540,7 @@ TEST_F(PrompterAuthIntegrationTest, AltKindsIgnoredForNonCanKinds)
         ok->click();
     });
     EXPECT_FALSE(pinSawSwitch.load()) << "the option is CAN-scoped; a PIN prompt must render no switch";
-    EXPECT_EQ(std::get<0>(pinReply), wire::kStatusOk);
+    EXPECT_EQ(std::get<0>(pinReply), std::string{wire::replyStatusToken(wire::PromptReplyStatus::Ok)});
 
     // Kind "mrz": the dialog IS the MRZ form, but the request never offered a
     // choice — the reply must stay on today's vocabulary, so a flow bug can
@@ -554,7 +555,8 @@ TEST_F(PrompterAuthIntegrationTest, AltKindsIgnoredForNonCanKinds)
         ok->click();
     });
     EXPECT_FALSE(mrzSawSwitch.load()) << "an MRZ prompt has nothing to switch to";
-    EXPECT_EQ(std::get<0>(mrzReply), wire::kStatusOk) << "only a CAN request that opted in may mint the new status";
+    EXPECT_EQ(std::get<0>(mrzReply), std::string{wire::replyStatusToken(wire::PromptReplyStatus::Ok)})
+        << "only a CAN request that opted in may mint the new status";
     EXPECT_EQ(readMemfd(std::get<1>(mrzReply).get()), std::string(kSpecimenPayload));
 }
 
@@ -580,7 +582,7 @@ TEST_F(PrompterAuthIntegrationTest, AltKindsValueHygiene)
             okButtonOf(*dlg)->click();
         });
     EXPECT_FALSE(sawSwitchForUnknownMember.load()) << "only the alternative the dialog can actually offer counts";
-    EXPECT_EQ(std::get<0>(unknownReply), wire::kStatusOk);
+    EXPECT_EQ(std::get<0>(unknownReply), std::string{wire::replyStatusToken(wire::PromptReplyStatus::Ok)});
 
     // An empty list is an opt-in to nothing.
     std::atomic<bool> sawSwitchForEmptyList{true};
@@ -594,7 +596,7 @@ TEST_F(PrompterAuthIntegrationTest, AltKindsValueHygiene)
                                okButtonOf(*dlg)->click();
                            });
     EXPECT_FALSE(sawSwitchForEmptyList.load()) << "an empty list offers nothing";
-    EXPECT_EQ(std::get<0>(emptyReply), wire::kStatusOk);
+    EXPECT_EQ(std::get<0>(emptyReply), std::string{wire::replyStatusToken(wire::PromptReplyStatus::Ok)});
 
     // The known member alongside junk still offers exactly ONE switch; the
     // junk members are ignored, never rendered as further affordances.
@@ -613,7 +615,7 @@ TEST_F(PrompterAuthIntegrationTest, AltKindsValueHygiene)
             okButtonOf(*dlg)->click();
         });
     EXPECT_EQ(switchCount.load(), 1) << "unknown members must not render additional affordances";
-    EXPECT_EQ(std::get<0>(mixedReply), wire::kStatusOkMrz);
+    EXPECT_EQ(std::get<0>(mixedReply), std::string{wire::replyStatusToken(wire::PromptReplyStatus::OkMrz)});
 }
 
 TEST_F(PrompterAuthIntegrationTest, MistypedAltKindsIsTreatedAsAbsent)
@@ -644,7 +646,7 @@ TEST_F(PrompterAuthIntegrationTest, MistypedAltKindsIsTreatedAsAbsent)
     });
 
     EXPECT_FALSE(sawSwitch.load()) << "a mistyped option must behave exactly like a caller that never sent it";
-    EXPECT_EQ(std::get<0>(reply), wire::kStatusOk);
+    EXPECT_EQ(std::get<0>(reply), std::string{wire::replyStatusToken(wire::PromptReplyStatus::Ok)});
     EXPECT_EQ(readMemfd(std::get<1>(reply).get()), std::string("123456"));
     EXPECT_TRUE(std::get<2>(reply).empty()) << "a mistyped option is not an error";
 }

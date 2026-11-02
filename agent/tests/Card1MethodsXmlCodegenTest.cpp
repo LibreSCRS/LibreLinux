@@ -56,17 +56,15 @@ private:
     {
         return sdbus::ObjectPath{"/"};
     }
-    sdbus::ObjectPath Sign(const std::string& /*certId*/, const sdbus::UnixFd& /*inputFd*/,
-                           const std::map<std::string, sdbus::Variant>& /*options*/) override
-    {
-        return sdbus::ObjectPath{"/"};
-    }
-    sdbus::ObjectPath SignBatch(const std::vector<sdbus::Struct<std::string, sdbus::UnixFd>>& /*documents*/,
-                                const std::string& /*certId*/,
-                                const std::map<std::string, sdbus::Variant>& /*options*/) override
-    {
-        return sdbus::ObjectPath{"/"};
-    }
+    // Sign and SignBatch are authorised before they act and defer their reply
+    // until the authority answers (org.freedesktop.DBus.Method.Async).
+    void Sign(sdbus::Result<sdbus::ObjectPath>&& /*result*/, std::string /*certId*/, sdbus::UnixFd /*inputFd*/,
+              std::map<std::string, sdbus::Variant> /*options*/) override
+    {}
+    void SignBatch(sdbus::Result<sdbus::ObjectPath>&& /*result*/,
+                   std::vector<sdbus::Struct<std::string, sdbus::UnixFd>> /*documents*/, std::string /*certId*/,
+                   std::map<std::string, sdbus::Variant> /*options*/) override
+    {}
 };
 static_assert(!std::is_abstract_v<Card1Probe>,
               "Card1 adaptor must expose PreReadAuthMethod + CardType + Atr + ReadIdentity + GetPhoto + "

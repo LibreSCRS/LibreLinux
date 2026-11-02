@@ -16,7 +16,7 @@
 // some line was emitted — a report that says nothing useful is the defect.
 #include "PluginDirectory.h"
 
-#include <LibreSCRS/Agent/backend/Logging.h>
+#include <LibreSCRS/Logging.h>
 #include <LibreSCRS/Plugin/CardPluginService.h>
 
 #include <gtest/gtest.h>
@@ -40,7 +40,7 @@ using LibreSCRS::Agent::resolvePluginDir;
 using Source = PluginDirCandidate::Source;
 using Verdict = PluginDirCandidate::Verdict;
 using State = LibreSCRS::Agent::PluginDirState;
-using Level = LibreSCRS::Agent::log::Level;
+using Level = LibreSCRS::log::Level;
 using LoadOutcome = LibreSCRS::Plugin::LoadOutcome;
 
 // A directory that removes itself, so a case can hand the cascade a real
@@ -351,7 +351,7 @@ TEST(PluginDirectoryReport, AnEmptyDirectoryReachesTheLogAsAWarning)
 {
     TempDir empty("empty");
     std::vector<std::pair<Level, std::string>> captured;
-    LibreSCRS::Agent::log::init(
+    LibreSCRS::log::init(
         [&captured](Level level, std::string_view line) { captured.emplace_back(level, std::string(line)); });
 
     const auto resolution =
@@ -359,7 +359,7 @@ TEST(PluginDirectoryReport, AnEmptyDirectoryReachesTheLogAsAWarning)
     const LibreSCRS::Plugin::CardPluginService service(resolution.dir);
     reportPluginLoad(resolution, service);
 
-    LibreSCRS::Agent::log::resetForTest();
+    LibreSCRS::log::resetForTest();
 
     ASSERT_FALSE(captured.empty()) << "resolving a plugin directory must not be silent";
     EXPECT_TRUE(hasLevel(captured, Level::Warn)) << joined(captured);
@@ -374,7 +374,7 @@ TEST(PluginDirectoryReport, AnUnloadableFileInTheDirectoryReachesTheLog)
         bogus << "this is not an elf";
     }
     std::vector<std::pair<Level, std::string>> captured;
-    LibreSCRS::Agent::log::init(
+    LibreSCRS::log::init(
         [&captured](Level level, std::string_view line) { captured.emplace_back(level, std::string(line)); });
 
     const auto resolution =
@@ -382,7 +382,7 @@ TEST(PluginDirectoryReport, AnUnloadableFileInTheDirectoryReachesTheLog)
     const LibreSCRS::Plugin::CardPluginService service(resolution.dir);
     reportPluginLoad(resolution, service);
 
-    LibreSCRS::Agent::log::resetForTest();
+    LibreSCRS::log::resetForTest();
 
     EXPECT_NE(joined(captured).find("not-a-plugin.so"), std::string::npos)
         << "a file that failed to load has to be named:\n"

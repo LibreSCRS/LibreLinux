@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2026 hirashix0
 #pragma once
 #include <LibreSCRS/Agent/OperationState.h>
+#include "operations/CancelRoute.h"
 #include "org.librescrs.Agent.Operation1_adaptor.h"
 #include <sdbus-c++/AdaptorInterfaces.h>
 #include <sdbus-c++/IConnection.h>
@@ -31,8 +32,9 @@ class Operation1Adaptor : public sdbus::AdaptorInterfaces<org::librescrs::Agent:
     using Base = sdbus::AdaptorInterfaces<org::librescrs::Agent::Operation1_adaptor, ResultSubAdaptor>;
 
 public:
-    Operation1Adaptor(sdbus::IConnection& connection, sdbus::ObjectPath path, std::shared_ptr<OperationState> state)
-        : Base(connection, std::move(path)), m_state(std::move(state))
+    Operation1Adaptor(sdbus::IConnection& connection, sdbus::ObjectPath path, std::shared_ptr<OperationState> state,
+                      CancelRoute cancel)
+        : Base(connection, std::move(path)), m_state(std::move(state)), m_cancel(std::move(cancel))
     {
         Base::registerAdaptor();
     }
@@ -85,15 +87,6 @@ public:
 
     void emitPropertiesChangedForOperation1() noexcept;
 
-#ifdef LIBRELINUX_TESTING
-    void invokeCancelForTest() noexcept
-    {
-        if (m_state) {
-            m_state->cancelled.store(true, std::memory_order_release);
-        }
-    }
-#endif
-
 private:
     // Generated private-virtual surface — sdbus-c++ convention.
     std::uint32_t Phase() override
@@ -124,14 +117,21 @@ private:
     {
         return terminalErrorCode();
     }
+    // A caller other than the owner gets the same empty reply, so the reply does
+    // not tell it whether the path belongs to someone else.
     void Cancel() override
     {
-        if (m_state) {
-            m_state->cancelled.store(true, std::memory_order_release);
+        if (m_cancel.owner.empty() || !m_cancel.run) {
+            return;
+        }
+        const auto msg = Base::getObject().getCurrentlyProcessedMessage();
+        if (const char* sender = msg.getSender(); sender != nullptr && m_cancel.owner == sender) {
+            m_cancel.run();
         }
     }
 
     std::shared_ptr<OperationState> m_state;
+    CancelRoute m_cancel;
 };
 
 } // namespace LibreSCRS::Agent::Operations

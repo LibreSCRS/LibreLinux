@@ -1,45 +1,34 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 // SPDX-FileCopyrightText: 2026 hirashix0
 #include "dbus/CardObject.h"
+#include "dbus/AuthorizedReply.h"
+#include "dbus/SyncErrorBusName.h"
 #include "AgentErrorNames.h" // shared wire error-name table (hoisted UnsupportedOnThisCard + credential errors)
 #include "AgentObjectPath.h" // objectIdFromPath (reader path -> ObjectId)
-#include <LibreSCRS/Agent/CryptoWorkerContext.h>
+#include <LibreSCRS/Agent/AgentCore.h>
 #include <LibreSCRS/Agent/backend/Authorizer.h>
-#include <LibreSCRS/Agent/backend/Logging.h>
+#include <LibreSCRS/Logging.h>
 #include "CallerIdentity.h"
 #include <LibreSCRS/Agent/cache/CredentialSnapshotCache.h>
 #include <LibreSCRS/Agent/config/ConfigStore.h>
 #include "dbus/ObjectManagerSignals.h" // emitObjectManagerAdded/Removed
-#include "dbus/OperationAdaptorFactory.h"
 #include "dbus/OperationPath.h"
-#include <LibreSCRS/Agent/operations/ActivateSigningKeyOperation.h>
-#include <LibreSCRS/Agent/operations/GetPhotoOperation.h>
-#include <LibreSCRS/Agent/operations/ListCredentialsOperation.h>
-#include <LibreSCRS/Agent/operations/ManagePinOperation.h>
-#include <LibreSCRS/Agent/operations/OperationManager.h>
+#include <LibreSCRS/Agent/operations/OperationArtifact.h>
+#include <LibreSCRS/Agent/operations/OperationLauncher.h>
 #include <LibreSCRS/Agent/operations/PinChangeFlow.h> // PinManageRequest, validatePinManageRequest
-#include <LibreSCRS/Agent/operations/PromptSerializer.h>
 #include <LibreSCRS/Agent/operations/RateLimiter.h>
-#include <LibreSCRS/Agent/operations/ReadCertificatesOperation.h>
-#include <LibreSCRS/Agent/operations/ReadIdentityOperation.h>
-#include <LibreSCRS/Agent/operations/ReadTokenInfoOperation.h>
 #include <LibreSCRS/Agent/operations/BatchSignFlow.h> // isValidBatchDocumentCount, BatchDocumentInput
-#include <LibreSCRS/Agent/operations/SignOperation.h>
 #include <LibreSCRS/Agent/operations/SignatureParams.h>
-#include <LibreSCRS/Agent/util/CallerLabel.h>       // sanitizeLabel (neutral core)
-#include <LibreSCRS/Agent/value/CredentialRecord.h> // CredentialSnapshot, EntryError
+#include <LibreSCRS/Agent/util/CallerLabel.h>        // sanitizeLabel (neutral core)
+#include <LibreSCRS/Agent/value/CredentialRecord.h>  // CredentialSnapshot, EntryError
+#include <LibreSCRS/Agent/value/SyncErrorTaxonomy.h> // toSyncError
+#include <LibreSCRS/Agent/wire/BoundedFdRead.h>      // readBoundedRegularFd, kMaxInputBytes
 #include <LibreSCRS/Plugin/PluginTypes.h>
 #include <sdbus-c++/Error.h>
 #include <sdbus-c++/IObject.h>
 #include <sdbus-c++/Message.h>
-#include <unistd.h>    // read, close
-#include <sys/stat.h>  // fstat, S_ISREG
-#include <sys/types.h> // pid_t, ssize_t
-#include <array>
-#include <cerrno>
-#include <cstddef>
+#include <sys/types.h> // pid_t
 #include <cstdint>
-#include <expected>
 #include <optional>
 #include <string>
 #include <utility>
@@ -61,7 +50,6 @@ constexpr std::uint32_t kPinManagementCapBit =
 // mirrors share one spelling with this producer.
 constexpr const char* kUnsupportedErrName = LibreLinux::AgentWire::kErrUnsupportedOnThisCard;
 constexpr const char* kInvalidRequestErrName = LibreLinux::AgentWire::kErrInvalidRequest;
-constexpr const char* kUnknownCredentialErrName = LibreLinux::AgentWire::kErrUnknownCredential;
 constexpr const char* kInternalErrName = "org.librescrs.Agent.Error.Internal";
 constexpr const char* kBadParamErrName = "org.librescrs.Agent.Error.UnsupportedSignatureParameter";
 constexpr const char* kInputTooLargeErrName = "org.librescrs.Agent.Error.InputTooLarge";
@@ -69,89 +57,9 @@ constexpr const char* kInputTooLargeErrName = "org.librescrs.Agent.Error.InputTo
 // they are sourced directly from common/AgentErrorNames.h at each call site
 // (no hand-spelled local copy to drift from the producer/consumer spelling).
 
-// The read/photo flows take the deposit seam by REFERENCE, so a wiring site
-// that has no plugin registry to resolve deposit targets from still has to hand
-// them something. This shared no-op stands in there, exactly as NullGroupSink
-// stands in for a wiring site with no Group signal to emit: the renegotiation
-// then deposits nothing and the re-run fails auth truthfully, instead of the
-// deps struct carrying an optional reference nobody can honour. Stateless, so
-// one instance serves every card.
-Operations::CredentialDepositor& depositorOrNoOp(Operations::CredentialDepositor* wired) noexcept
-{
-    static Operations::NullCredentialDepositor noDeposit;
-    return wired != nullptr ? *wired : noDeposit;
-}
-
-// Artifact labels surfaced in the consent prompt — WHAT the client is about
-// to read. Domain-blind, no card specifics. Stable, lower-case identifiers a
-// future polkit action / CTK binding can also key off.
-constexpr const char* kArtifactIdentity = "identity";
-constexpr const char* kArtifactPhoto = "photo";
-constexpr const char* kArtifactCertificates = "certificates";
-constexpr const char* kArtifactTokenInfo = "token";
-constexpr const char* kArtifactCredentials = "credentials";
-// Card1.SignBatch's TRUSTED, agent-owned consent category token (never
-// client-supplied — mirrors kArtifactIdentity/kArtifactPhoto/etc.'s closed
-// vocabulary). Recorded here for the same discoverability/registry purpose
-// as its siblings; the flow that actually builds the consent prompt
-// (operations/BatchSignFlow.cpp, in the LibreAgent core) hardcodes this SAME
-// literal directly (a different repo/library, so it cannot reference this
-// constant) — kept in sync by convention/review, not by a shared header. A
-// single Sign's own "signature" token has no CardObject.cpp entry either,
-// for the identical reason: SignFlow.cpp hardcodes it the same way.
-constexpr const char* kArtifactSignatureBatch = "signature-batch";
-
 // The closed options-key set for Credentials1.ManagePin (all non-secret). Any
 // other key at method entry is an undefined-option InvalidRequest.
 constexpr const char* kOptionActivateKey = "activateKey";
-
-// Document input cap — oversize is rejected at method entry.
-constexpr std::size_t kMaxInputBytes = 256ull * 1024 * 1024;
-
-enum class ReadStatus { Ok, TooLarge, Error, NotRegular };
-struct ReadDoc
-{
-    ReadStatus status{ReadStatus::Error};
-    std::vector<std::uint8_t> bytes;
-};
-
-// Read the whole document off @p fd (a read-only client fd/memfd), capping at
-// @p cap bytes. The fd MUST be a regular file or memfd: a pipe/socket/char fd
-// would let a client stall a blocking ::read() indefinitely on the single bus
-// thread (whole-agent DoS), so non-regular fds are rejected up-front via fstat.
-// A regular file / memfd is finite and bounded by the cap.
-ReadDoc readDocument(int fd, std::size_t cap)
-{
-    if (fd < 0) {
-        return {ReadStatus::Error, {}};
-    }
-    struct stat st{};
-    if (::fstat(fd, &st) != 0) {
-        return {ReadStatus::Error, {}};
-    }
-    if (!S_ISREG(st.st_mode)) {
-        // FIFO/socket/char/block/dir: not a bounded, seekable document source.
-        return {ReadStatus::NotRegular, {}};
-    }
-    std::vector<std::uint8_t> out;
-    std::array<std::uint8_t, 64 * 1024> buf{};
-    for (;;) {
-        const ssize_t n = ::read(fd, buf.data(), buf.size());
-        if (n < 0) {
-            if (errno == EINTR) {
-                continue;
-            }
-            return {ReadStatus::Error, {}};
-        }
-        if (n == 0) {
-            return {ReadStatus::Ok, std::move(out)};
-        }
-        if (out.size() + static_cast<std::size_t>(n) > cap) {
-            return {ReadStatus::TooLarge, {}};
-        }
-        out.insert(out.end(), buf.data(), buf.data() + n);
-    }
-}
 
 // Read a client-supplied string option, defaulting when absent or mistyped.
 std::string optString(const std::map<std::string, sdbus::Variant>& options, const std::string& key,
@@ -399,32 +307,12 @@ ResolvedSignOptions resolveSignOptions(const std::map<std::string, sdbus::Varian
 } // namespace
 
 CardObject::CardObject(sdbus::IConnection& connection, sdbus::ObjectPath path, std::uint32_t capabilities,
-                       sdbus::ObjectPath reader, Operations::OperationManager& manager, CardOperationDeps deps)
+                       sdbus::ObjectPath reader, AgentCore& core, Operations::OperationLauncher& launcher,
+                       CardOperationDeps deps)
     : AdaptorInterfaces(connection, path), m_connection(connection), m_capabilities(capabilities),
-      m_reader(std::move(reader)), m_manager(manager), m_deps(std::move(deps)), m_selfPath(std::move(path)),
-      m_cardType(m_deps.cardType)
+      m_reader(std::move(reader)), m_core(core), m_launcher(launcher), m_deps(std::move(deps)),
+      m_selfPath(std::move(path)), m_cardType(m_deps.cardType)
 {
-    // Auto-populate the non-owning seam handles from the unique_ptr members
-    // when those were provided by the production path (BusExporter). Tests
-    // that supply handles directly bypass this branch.
-    if (m_deps.ownedReader && !m_deps.reader) {
-        m_deps.reader = m_deps.ownedReader.get();
-    }
-    if (m_deps.ownedDepositor && !m_deps.depositor) {
-        m_deps.depositor = m_deps.ownedDepositor.get();
-    }
-    if (m_deps.ownedCertReader && !m_deps.certReader) {
-        m_deps.certReader = m_deps.ownedCertReader.get();
-    }
-    if (m_deps.ownedTrustVerifier && !m_deps.trustVerifier) {
-        m_deps.trustVerifier = m_deps.ownedTrustVerifier.get();
-    }
-    if (m_deps.ownedSigner && !m_deps.signer) {
-        m_deps.signer = m_deps.ownedSigner.get();
-    }
-    if (m_deps.ownedCredentials && !m_deps.credentialManager) {
-        m_deps.credentialManager = m_deps.ownedCredentials.get();
-    }
     registerAdaptor();
     // Announce over the ObjectManager so a client tracking the live tree resolves
     // the card immediately (sdbus-c++ does not auto-emit InterfacesAdded). Without
@@ -435,54 +323,47 @@ CardObject::CardObject(sdbus::IConnection& connection, sdbus::ObjectPath path, s
 
 CardObject::~CardObject()
 {
+    // A grant running on the thread an authorization answered on finishes
+    // before anything here is torn down; one arriving later runs nothing.
+    m_grantGate->close();
     // Withdraw BEFORE unregistering, while the interface list is still enumerable,
     // so live-tracking clients drop the card (and terminalise its operations).
     emitObjectManagerRemoved(getObject(), "card");
     unregisterAdaptor();
 }
 
-void CardObject::attachLifetimeGuards(Operations::OperationBase& op) const
+template <class Args>
+sdbus::ObjectPath CardObject::launch(ChannelMaker makeChannel, Args args, const std::string& sender,
+                                     const std::string& requester)
 {
-    // Co-own the single crypto-worker context for the op's whole lifetime and bind
-    // the agent-wide shutdown-cancel token. An op whose worker is abandoned while
-    // blocked in the consent prompt then keeps every core member its post-unblock
-    // unwind may touch alive through this ONE share: the prompter for the blocked
-    // call, the gate for the SlotGuard unwind, and the credential cache for a nested
-    // CAN/MRZ prompt's putCan/putMrz (which lands past the flow gate). The context's
-    // lease member is harmlessly along for the ride (the typed path never touches the
-    // pkcs11 lease). On teardown the op bails at its flow's post-prompt gate + skips
-    // its wire completion where it can. No-ops for a null context / default token a
-    // conformance test may leave unset.
-    op.keepAlive(m_deps.cryptoContext);
-    // Co-own the op's OWN sdbus channel resource class too: a share of the agent bus
-    // connection, so an abandoned typed op keeps the connection alive until it drains
-    // and its channel adaptor's emit + unregister touch LIVE memory (a DIFFERENT
-    // resource than the core members the crypto context covers). Held in the op's
-    // keepAlive vector, which is destroyed AFTER the channel (OperationBase member
-    // order), so the unregister at op destruction still sees a live connection.
-    op.keepAlive(m_deps.connectionKeepAlive);
-    // Co-own the LM seam bundle the op drives. The op Deps carry the seam by bare
-    // reference (bound at build time from the .get() handle), so an abandoned
-    // qualified-sign worker that unblocks past the flow gate and dereferences its
-    // signer seam's vtable + the engine it holds by reference would touch a seam
-    // freed with the CardObject — unless the op co-owns the seam share. The sign
-    // seam is the one with post-unblock state (snapshot() + recordLastTsaUrlUsed);
-    // the stateless read/cert seams are co-owned uniformly so the invariant does not
-    // rest on their statelessness. Null in tests that wire the bare handles directly
-    // (keepAlive no-ops a null share).
-    op.keepAlive(m_deps.ownedSigner);
-    op.keepAlive(m_deps.ownedReader);
-    // The deposit seam holds the plugin registry by reference, so an abandoned
-    // reader that unblocks past the flow gate and renegotiates must not
-    // dereference a seam freed with the CardObject.
-    op.keepAlive(m_deps.ownedDepositor);
-    op.keepAlive(m_deps.ownedCertReader);
-    op.keepAlive(m_deps.ownedTrustVerifier);
-    // The credential seam is stateless (a router over the plugin list), co-owned
-    // uniformly with the other seams so an abandoned credential worker that unblocks
-    // past the flow gate never dereferences a seam freed with the CardObject.
-    op.keepAlive(m_deps.ownedCredentials);
-    op.bindShutdownToken(m_deps.shutdownToken);
+    // The sender is registered for disconnect-cancel before the operation enters
+    // the reader's queue, so a NameOwnerChanged that lands mid-launch still finds
+    // it; an empty sender skips the registration.
+    const Operations::OperationTarget target{
+        .card = ReaderCard{.readerId = objectIdFromPath(m_reader),
+                           .readerName = m_deps.readerName,
+                           .cardKey = m_deps.cardKey},
+        .caller = CallerToken{sender},
+        .requester = requester,
+    };
+    // Operation1.Cancel from the launching client ends the operation the way a
+    // dropped connection does: OperationManager::cancel trips its token and
+    // dismisses a prompt it is waiting on.
+    const auto launched = m_launcher.launch(
+        target,
+        [this, makeChannel, &sender](OperationId id, const std::shared_ptr<Operations::OperationState>& state) {
+            Operations::CancelRoute cancel{
+                .owner = sender,
+                .run = [&operations = m_core.operationManager(), id] { operations.cancel(id); },
+            };
+            return makeChannel(m_connection, opObjectPath(id), state, std::move(cancel));
+        },
+        std::move(args));
+    if (!launched) {
+        throw sdbus::Error{sdbus::Error::Name{syncErrorBusName(launched.error())},
+                           "reader operation backlog full; retry shortly"};
+    }
+    return opObjectPath(*launched);
 }
 
 std::uint32_t CardObject::Capabilities()
@@ -545,71 +426,12 @@ bool CardObject::hasPinManagementCapability() const noexcept
     return (m_capabilities & kPinManagementCapBit) != 0u;
 }
 
-bool CardObject::hasAllSeams() const noexcept
+void CardObject::rateLimitCredentialMutation(const std::string& sender) const
 {
-    // The session now comes from the OperationManager's per-reader holder, not a
-    // per-card opener seam, so the opener is no longer part of the seam set.
-    return m_deps.reader != nullptr && m_deps.prompter != nullptr && m_deps.serializer != nullptr &&
-           m_deps.credentials != nullptr && m_deps.readCache != nullptr;
-}
-
-bool CardObject::hasCertSeams() const noexcept
-{
-    // Cert read uses the certReader + trustVerifier seams plus the shared
-    // prompt/credential plumbing; it does NOT need the identity CardReader or
-    // the identity read cache.
-    return m_deps.certReader != nullptr && m_deps.trustVerifier != nullptr && m_deps.prompter != nullptr &&
-           m_deps.serializer != nullptr && m_deps.credentials != nullptr;
-}
-
-bool CardObject::hasTokenInfoSeams() const noexcept
-{
-    // Token info uses the identity CardReader seam's readTokenInfo() (a
-    // sibling of read()) + the shared prompt/credential plumbing; it does
-    // NOT need the identity read cache (thin, no caching), mirroring
-    // hasCertSeams()'s shape.
-    return m_deps.reader != nullptr && m_deps.prompter != nullptr && m_deps.serializer != nullptr &&
-           m_deps.credentials != nullptr;
-}
-
-bool CardObject::hasSignSeams() const noexcept
-{
-    // Sign uses the signer seam + the shared credential plumbing, plus the
-    // agent-wide authorization gate, rate-limiter and config SSOT.
-    return m_deps.signer != nullptr && m_deps.prompter != nullptr && m_deps.serializer != nullptr &&
-           m_deps.credentials != nullptr && m_deps.authorizer != nullptr && m_deps.rateLimiter != nullptr &&
-           m_deps.config != nullptr;
-}
-
-bool CardObject::hasCredentialSeams() const noexcept
-{
-    // The Credentials1 flows need the PIN-lifecycle seam + the shared prompt /
-    // secret-cache plumbing + the per-card snapshot store. ManagePin /
-    // ActivateSigningKey additionally consult the authorization gate + rate limiter
-    // (required uniformly here so a mis-wired card fails closed rather than
-    // spawning an un-gated mutation).
-    return m_deps.credentialManager != nullptr && m_deps.prompter != nullptr && m_deps.serializer != nullptr &&
-           m_deps.credentials != nullptr && m_deps.snapshotCache != nullptr && m_deps.readCache != nullptr &&
-           m_deps.authorizer != nullptr && m_deps.rateLimiter != nullptr;
-}
-
-void CardObject::authorizeCredentialMutation(const std::string& sender) const
-{
-    // Authorize the CLIENT (default-allow; site policy may restrict) then apply the
-    // per-caller rate-limit, both keyed on the caller's unique bus name and BEFORE
-    // any prompt — the same authorize-then-allow ordering Card1.Sign uses, so a
-    // rejected caller never reaches the consent dialog.
-    switch (m_deps.authorizer->authorize(kActionCredentialsManage, CallerToken{sender})) {
-    case AuthorizationOutcome::Granted:
-        break;
-    case AuthorizationOutcome::Denied:
-        throw sdbus::Error{sdbus::Error::Name{LibreLinux::AgentWire::kErrNotAuthorized},
-                           "Not authorized to manage credentials"};
-    case AuthorizationOutcome::Undecided:
-        throw sdbus::Error{sdbus::Error::Name{LibreLinux::AgentWire::kErrCommunication},
-                           "The authorization service did not answer; nothing was changed"};
-    }
-    if (!m_deps.rateLimiter->allow(CallerToken{sender})) {
+    // Applied after the client was authorised and BEFORE any prompt, keyed on
+    // the caller's unique bus name -- the same authorize-then-allow ordering
+    // Card1.Sign uses, so a rejected caller never reaches the consent dialog.
+    if (!m_core.rateLimiter().allow(CallerToken{sender})) {
         throw sdbus::Error{sdbus::Error::Name{LibreLinux::AgentWire::kErrRateLimited},
                            "Too many credential requests; try again shortly"};
     }
@@ -656,48 +478,13 @@ sdbus::ObjectPath CardObject::ReadIdentity()
     if (!hasIdentityCapability()) {
         throw sdbus::Error{sdbus::Error::Name{kUnsupportedErrName}, "Card does not advertise IdentityData capability"};
     }
-    if (!hasAllSeams()) {
-        throw sdbus::Error{sdbus::Error::Name{kInternalErrName}, "Card operation dependencies not wired"};
-    }
     // Resolve the caller's identity + capture the sender WHILE the in-flight
     // message is still current (both read the per-call message credentials).
     const std::string requester = callerRequesterLabel();
     const std::string sender = callerSender();
-    Operations::ReadIdentityOperation::Deps deps{
-        // holder is stamped by OperationManager from the per-reader worker.
-        .reader = *m_deps.reader,
-        .depositor = depositorOrNoOp(m_deps.depositor),
-        .prompter = *m_deps.prompter,
-        .serializer = *m_deps.serializer,
-        .credentials = *m_deps.credentials,
-        .readCache = *m_deps.readCache,
-        .cardKey = m_deps.cardKey,
-        .readerName = m_deps.readerName,
-        .requester = requester,
-        .artifact = kArtifactIdentity,
-        .onCardType = m_deps.onCardTypeResolved,
-    };
-    // Pass the requesting client's unique-name (CallerToken) into publish so the
-    // sender → ops table is wired BEFORE the op enters the worker queue; a
-    // NameOwnerChanged that lands mid-publish still finds the id. publish hands
-    // the closure the worker holder + the minted OperationId; the backend factory
-    // builds the exported adaptor and the backend maps the id to the wire path.
-    // The per-reader backlog cap surfaces as QueueFull → the RateLimited wire error.
-    try {
-        const auto id = m_manager.publish(
-            objectIdFromPath(m_reader), m_deps.readerName, CallerToken{sender},
-            [this, deps = std::move(deps)](Operations::CardSessionHolder* holder,
-                                           OperationId opId) mutable -> std::unique_ptr<Operations::OperationBase> {
-                deps.holder = holder;
-                auto op = buildIdentityOperation(m_connection, opObjectPath(opId), std::move(deps));
-                attachLifetimeGuards(*op);
-                return op;
-            });
-        return opObjectPath(id);
-    } catch (const Operations::QueueFull&) {
-        throw sdbus::Error{sdbus::Error::Name{LibreLinux::AgentWire::kErrRateLimited},
-                           "reader operation backlog full; retry shortly"};
-    }
+    return launch(makeIdentityChannel,
+                  Operations::OperationLauncher::ReadIdentity{.onCardType = m_deps.onCardTypeResolved}, sender,
+                  requester);
 }
 
 sdbus::ObjectPath CardObject::GetPhoto()
@@ -708,44 +495,10 @@ sdbus::ObjectPath CardObject::GetPhoto()
         // a guaranteed-empty cache lookup into the Operation.
         throw sdbus::Error{sdbus::Error::Name{kUnsupportedErrName}, "Card does not advertise IdentityData capability"};
     }
-    if (!hasAllSeams()) {
-        throw sdbus::Error{sdbus::Error::Name{kInternalErrName}, "Card operation dependencies not wired"};
-    }
     const std::string requester = callerRequesterLabel();
     const std::string sender = callerSender();
-    Operations::GetPhotoOperation::Deps deps{
-        // holder is stamped by OperationManager from the per-reader worker.
-        .reader = *m_deps.reader,
-        .depositor = depositorOrNoOp(m_deps.depositor),
-        .prompter = *m_deps.prompter,
-        .serializer = *m_deps.serializer,
-        .credentials = *m_deps.credentials,
-        .readCache = *m_deps.readCache,
-        .cardKey = m_deps.cardKey,
-        .readerName = m_deps.readerName,
-        .requester = requester,
-        .artifact = kArtifactPhoto,
-        .onCardType = m_deps.onCardTypeResolved,
-    };
-    try {
-        const auto id = m_manager.publish(
-            objectIdFromPath(m_reader), m_deps.readerName, CallerToken{sender},
-            [this, deps = std::move(deps)](Operations::CardSessionHolder* holder,
-                                           OperationId opId) mutable -> std::unique_ptr<Operations::OperationBase> {
-                deps.holder = holder;
-                // GetPhoto prompts on a read-cache miss (it runs IdentityReadFlow),
-                // so it is the same abandoned-worker class as its three siblings and
-                // needs the same lifetime guards (co-own the crypto context + the
-                // connection, bind the shutdown token).
-                auto op = buildPhotoOperation(m_connection, opObjectPath(opId), std::move(deps));
-                attachLifetimeGuards(*op);
-                return op;
-            });
-        return opObjectPath(id);
-    } catch (const Operations::QueueFull&) {
-        throw sdbus::Error{sdbus::Error::Name{LibreLinux::AgentWire::kErrRateLimited},
-                           "reader operation backlog full; retry shortly"};
-    }
+    return launch(makePhotoChannel, Operations::OperationLauncher::GetPhoto{.onCardType = m_deps.onCardTypeResolved},
+                  sender, requester);
 }
 
 sdbus::ObjectPath CardObject::ReadCertificates()
@@ -753,33 +506,9 @@ sdbus::ObjectPath CardObject::ReadCertificates()
     if (!hasPkiCapability()) {
         throw sdbus::Error{sdbus::Error::Name{kUnsupportedErrName}, "Card does not advertise PKI capability"};
     }
-    if (!hasCertSeams()) {
-        throw sdbus::Error{sdbus::Error::Name{kInternalErrName}, "Card operation dependencies not wired"};
-    }
     const std::string requester = callerRequesterLabel();
     const std::string sender = callerSender();
-    Operations::ReadCertificatesOperation::Deps deps{
-        // holder is stamped by OperationManager from the per-reader worker.
-        .certReader = *m_deps.certReader,  .trustVerifier = *m_deps.trustVerifier, .prompter = *m_deps.prompter,
-        .serializer = *m_deps.serializer,  .credentials = *m_deps.credentials,     .readCache = *m_deps.readCache,
-        .cardKey = m_deps.cardKey,         .readerName = m_deps.readerName,        .requester = requester,
-        .artifact = kArtifactCertificates,
-    };
-    try {
-        const auto id = m_manager.publish(
-            objectIdFromPath(m_reader), m_deps.readerName, CallerToken{sender},
-            [this, deps = std::move(deps)](Operations::CardSessionHolder* holder,
-                                           OperationId opId) mutable -> std::unique_ptr<Operations::OperationBase> {
-                deps.holder = holder;
-                auto op = buildCertificatesOperation(m_connection, opObjectPath(opId), std::move(deps));
-                attachLifetimeGuards(*op);
-                return op;
-            });
-        return opObjectPath(id);
-    } catch (const Operations::QueueFull&) {
-        throw sdbus::Error{sdbus::Error::Name{LibreLinux::AgentWire::kErrRateLimited},
-                           "reader operation backlog full; retry shortly"};
-    }
+    return launch(makeCertificatesChannel, Operations::OperationLauncher::ReadCertificates{}, sender, requester);
 }
 
 sdbus::ObjectPath CardObject::ReadTokenInfo()
@@ -787,46 +516,24 @@ sdbus::ObjectPath CardObject::ReadTokenInfo()
     if (!hasPkiCapability()) {
         throw sdbus::Error{sdbus::Error::Name{kUnsupportedErrName}, "Card does not advertise PKI capability"};
     }
-    if (!hasTokenInfoSeams()) {
-        throw sdbus::Error{sdbus::Error::Name{kInternalErrName}, "Card operation dependencies not wired"};
-    }
     const std::string requester = callerRequesterLabel();
     const std::string sender = callerSender();
-    Operations::ReadTokenInfoOperation::Deps deps{
-        // holder is stamped by OperationManager from the per-reader worker.
-        .reader = *m_deps.reader,         .prompter = *m_deps.prompter,
-        .serializer = *m_deps.serializer, .credentials = *m_deps.credentials,
-        .cardKey = m_deps.cardKey,        .readerName = m_deps.readerName,
-        .requester = requester,           .artifact = kArtifactTokenInfo,
-    };
-    try {
-        const auto id = m_manager.publish(
-            objectIdFromPath(m_reader), m_deps.readerName, CallerToken{sender},
-            [this, deps = std::move(deps)](Operations::CardSessionHolder* holder,
-                                           OperationId opId) mutable -> std::unique_ptr<Operations::OperationBase> {
-                deps.holder = holder;
-                auto op = buildTokenInfoOperation(m_connection, opObjectPath(opId), std::move(deps));
-                attachLifetimeGuards(*op);
-                return op;
-            });
-        return opObjectPath(id);
-    } catch (const Operations::QueueFull&) {
-        throw sdbus::Error{sdbus::Error::Name{LibreLinux::AgentWire::kErrRateLimited},
-                           "reader operation backlog full; retry shortly"};
-    }
+    // Token info mints no result interface of its own: its snapshot rides
+    // Identity1.Result like ReadIdentity's.
+    return launch(makeIdentityChannel, Operations::OperationLauncher::ReadTokenInfo{}, sender, requester);
 }
 
-sdbus::ObjectPath CardObject::Sign(const std::string& certId, const sdbus::UnixFd& inputFd,
-                                   const std::map<std::string, sdbus::Variant>& options)
+void CardObject::Sign(sdbus::Result<sdbus::ObjectPath>&& result, std::string certId, sdbus::UnixFd inputFd,
+                      std::map<std::string, sdbus::Variant> options)
 {
     if (!hasPkiCapability()) {
-        throw sdbus::Error{sdbus::Error::Name{kUnsupportedErrName}, "Card does not advertise PKI capability"};
-    }
-    if (!hasSignSeams()) {
-        throw sdbus::Error{sdbus::Error::Name{kInternalErrName}, "Card operation dependencies not wired"};
+        result.returnError(
+            sdbus::Error{sdbus::Error::Name{kUnsupportedErrName}, "Card does not advertise PKI capability"});
+        return;
     }
     if (certId.empty()) {
-        throw sdbus::Error{sdbus::Error::Name{kBadParamErrName}, "certId is required (no auto-select)"};
+        result.returnError(sdbus::Error{sdbus::Error::Name{kBadParamErrName}, "certId is required (no auto-select)"});
+        return;
     }
 
     // Authorize the CLIENT (default-allow; site policy may restrict) then apply
@@ -834,25 +541,27 @@ sdbus::ObjectPath CardObject::Sign(const std::string& certId, const sdbus::UnixF
     // BEFORE ingesting the document, so a rejected caller never makes the agent
     // read (up to 256 MiB off) the input fd.
     const std::string sender = callerSender();
-    switch (m_deps.authorizer->authorize(kActionSign, CallerToken{sender})) {
-    case AuthorizationOutcome::Granted:
-        break;
-    case AuthorizationOutcome::Denied:
-        throw sdbus::Error{sdbus::Error::Name{LibreLinux::AgentWire::kErrNotAuthorized}, "Not authorized to sign"};
-    case AuthorizationOutcome::Undecided:
-        throw sdbus::Error{sdbus::Error::Name{LibreLinux::AgentWire::kErrCommunication},
-                           "The authorization service did not answer; nothing was changed"};
-    }
-    if (!m_deps.rateLimiter->allow(CallerToken{sender})) {
+    const std::string requester = callerRequesterLabel();
+    authorizeThenReply(m_core.authorizer(), kActionSign, sender, std::move(result), "Not authorized to sign",
+                       m_grantGate, [this, certId, inputFd, options, sender, requester] {
+                           return signGranted(certId, inputFd, options, sender, requester);
+                       });
+}
+
+sdbus::ObjectPath CardObject::signGranted(const std::string& certId, const sdbus::UnixFd& inputFd,
+                                          const std::map<std::string, sdbus::Variant>& options,
+                                          const std::string& sender, const std::string& requester)
+{
+    if (!m_core.rateLimiter().allow(CallerToken{sender})) {
         throw sdbus::Error{sdbus::Error::Name{LibreLinux::AgentWire::kErrRateLimited},
                            "Too many signing requests; try again shortly"};
     }
 
-    // KNOWN LIMITATION (deferred): the whole document — up to kMaxInputBytes
+    // KNOWN LIMITATION (deferred): the whole document — up to Wire::kMaxInputBytes
     // (256 MiB) — is read SYNCHRONOUSLY here on the single-threaded bus event
     // loop, so a large *regular-file* input stalls all D-Bus dispatch (other
     // clients, this op's later Cancel, NameOwnerChanged) for the read duration.
-    // The unbounded-stall DoS is already closed: readDocument fstat-rejects any
+    // The unbounded-stall DoS is already closed: readBoundedRegularFd fstat-rejects any
     // NON-regular fd (pipe/socket/char) up front, so the read is always bounded
     // by a finite, seekable source AND by the 256 MiB cap. Moving the bulk read
     // into the per-reader worker's doWork() is the SOTA fix but is intentionally
@@ -862,15 +571,15 @@ sdbus::ObjectPath CardObject::Sign(const std::string& certId, const sdbus::UnixF
     // every SignFlow test harness (which today sets inputDocument bytes
     // directly). Format=auto only needs a small prefix; the eventual fix should
     // sniff a bounded prefix on the bus thread and hand the fd to the worker.
-    auto doc = readDocument(inputFd.get(), kMaxInputBytes);
-    if (doc.status == ReadStatus::NotRegular) {
+    auto doc = Wire::readBoundedRegularFd(inputFd.get(), Wire::kMaxInputBytes);
+    if (doc.status == Wire::ReadStatus::NotRegular) {
         throw sdbus::Error{sdbus::Error::Name{kBadParamErrName},
                            "Input must be a regular file or memfd (no pipes/sockets)"};
     }
-    if (doc.status == ReadStatus::TooLarge) {
+    if (doc.status == Wire::ReadStatus::TooLarge) {
         throw sdbus::Error{sdbus::Error::Name{kInputTooLargeErrName}, "Input document exceeds the 256 MiB limit"};
     }
-    if (doc.status == ReadStatus::Error) {
+    if (doc.status == Wire::ReadStatus::Error) {
         throw sdbus::Error{sdbus::Error::Name{kInternalErrName}, "Failed to read the input document"};
     }
     if (doc.bytes.empty()) {
@@ -883,9 +592,8 @@ sdbus::ObjectPath CardObject::Sign(const std::string& certId, const sdbus::UnixF
     // Card1.SignBatch via resolveSignOptions() so the two entries can never
     // drift; an absent level/reason/location falls back to the agent's
     // Config1 SSOT.
-    ResolvedSignOptions resolved = resolveSignOptions(options, doc.bytes, *m_deps.config);
+    ResolvedSignOptions resolved = resolveSignOptions(options, doc.bytes, m_core.configStore());
 
-    const std::string requester = callerRequesterLabel();
     log::infof("sign requested: requester={} certId={} format={} level={} packaging={} bytes={}", requester,
                certId.substr(0, 12), resolved.format, resolved.level, resolved.packaging, doc.bytes.size());
     Operations::SignParams params{
@@ -905,44 +613,21 @@ sdbus::ObjectPath CardObject::Sign(const std::string& certId, const sdbus::UnixF
         .tsaUrl = std::move(resolved.tsaUrl),
         .visual = std::move(resolved.visual),
     };
-    Operations::SignOperation::Deps deps{
-        // holder is stamped by OperationManager from the per-reader worker.
-        .signer = *m_deps.signer,         .prompter = *m_deps.prompter,
-        .serializer = *m_deps.serializer, .credentials = *m_deps.credentials,
-        .cardKey = m_deps.cardKey,        .readerName = m_deps.readerName,
-        .requester = requester,           .params = std::move(params),
-    };
-    try {
-        const auto id = m_manager.publish(
-            objectIdFromPath(m_reader), m_deps.readerName, CallerToken{sender},
-            [this, deps = std::move(deps)](Operations::CardSessionHolder* holder,
-                                           OperationId opId) mutable -> std::unique_ptr<Operations::OperationBase> {
-                deps.holder = holder;
-                auto op = buildSignOperation(m_connection, opObjectPath(opId), std::move(deps));
-                attachLifetimeGuards(*op);
-                return op;
-            });
-        return opObjectPath(id);
-    } catch (const Operations::QueueFull&) {
-        throw sdbus::Error{sdbus::Error::Name{LibreLinux::AgentWire::kErrRateLimited},
-                           "reader operation backlog full; retry shortly"};
-    }
+    return launch(makeSignChannel, Operations::OperationLauncher::Sign{.params = std::move(params)}, sender, requester);
 }
 
-sdbus::ObjectPath CardObject::SignBatch(const std::vector<sdbus::Struct<std::string, sdbus::UnixFd>>& documents,
-                                        const std::string& certId, const std::map<std::string, sdbus::Variant>& options)
+void CardObject::SignBatch(sdbus::Result<sdbus::ObjectPath>&& result,
+                           std::vector<sdbus::Struct<std::string, sdbus::UnixFd>> documents, std::string certId,
+                           std::map<std::string, sdbus::Variant> options)
 {
     if (!hasPkiCapability()) {
-        throw sdbus::Error{sdbus::Error::Name{kUnsupportedErrName}, "Card does not advertise PKI capability"};
-    }
-    // SAME seam set as a single Sign (signer + shared prompt/credential
-    // plumbing + authorizer/rateLimiter/config) — SignBatch needs nothing
-    // beyond it.
-    if (!hasSignSeams()) {
-        throw sdbus::Error{sdbus::Error::Name{kInternalErrName}, "Card operation dependencies not wired"};
+        result.returnError(
+            sdbus::Error{sdbus::Error::Name{kUnsupportedErrName}, "Card does not advertise PKI capability"});
+        return;
     }
     if (certId.empty()) {
-        throw sdbus::Error{sdbus::Error::Name{kBadParamErrName}, "certId is required (no auto-select)"};
+        result.returnError(sdbus::Error{sdbus::Error::Name{kBadParamErrName}, "certId is required (no auto-select)"});
+        return;
     }
 
     // Authorize the CLIENT then apply the SAME sign-flood rate-limit as a
@@ -954,16 +639,19 @@ sdbus::ObjectPath CardObject::SignBatch(const std::vector<sdbus::Struct<std::str
     // one SignBatch call (of any size 1-12) always costs exactly one charge,
     // exactly like one Sign call costs one charge regardless of document size.
     const std::string sender = callerSender();
-    switch (m_deps.authorizer->authorize(kActionSign, CallerToken{sender})) {
-    case AuthorizationOutcome::Granted:
-        break;
-    case AuthorizationOutcome::Denied:
-        throw sdbus::Error{sdbus::Error::Name{LibreLinux::AgentWire::kErrNotAuthorized}, "Not authorized to sign"};
-    case AuthorizationOutcome::Undecided:
-        throw sdbus::Error{sdbus::Error::Name{LibreLinux::AgentWire::kErrCommunication},
-                           "The authorization service did not answer; nothing was changed"};
-    }
-    if (!m_deps.rateLimiter->allow(CallerToken{sender})) {
+    const std::string requester = callerRequesterLabel();
+    authorizeThenReply(m_core.authorizer(), kActionSign, sender, std::move(result), "Not authorized to sign",
+                       m_grantGate, [this, documents, certId, options, sender, requester] {
+                           return signBatchGranted(documents, certId, options, sender, requester);
+                       });
+}
+
+sdbus::ObjectPath CardObject::signBatchGranted(const std::vector<sdbus::Struct<std::string, sdbus::UnixFd>>& documents,
+                                               const std::string& certId,
+                                               const std::map<std::string, sdbus::Variant>& options,
+                                               const std::string& sender, const std::string& requester)
+{
+    if (!m_core.rateLimiter().allow(CallerToken{sender})) {
         throw sdbus::Error{sdbus::Error::Name{LibreLinux::AgentWire::kErrRateLimited},
                            "Too many signing requests; try again shortly"};
     }
@@ -975,7 +663,7 @@ sdbus::ObjectPath CardObject::SignBatch(const std::vector<sdbus::Struct<std::str
     }
 
     // Read every document off its own fd, in request order — the SAME 256 MiB
-    // cap + regular-file-only + non-empty rule Sign's own readDocument enforces
+    // cap + regular-file-only + non-empty rule Sign's own read enforces
     // for its single document, applied per document here. A single bad
     // document rejects the WHOLE call (no Operation minted): method entry has
     // no per-row partial semantics, only the flow does (auth/crypto failures).
@@ -984,15 +672,15 @@ sdbus::ObjectPath CardObject::SignBatch(const std::vector<sdbus::Struct<std::str
     for (const auto& entry : documents) {
         const std::string& displayName = std::get<0>(entry);
         const sdbus::UnixFd& fd = std::get<1>(entry);
-        auto doc = readDocument(fd.get(), kMaxInputBytes);
-        if (doc.status == ReadStatus::NotRegular) {
+        auto doc = Wire::readBoundedRegularFd(fd.get(), Wire::kMaxInputBytes);
+        if (doc.status == Wire::ReadStatus::NotRegular) {
             throw sdbus::Error{sdbus::Error::Name{kBadParamErrName},
                                "Every batch document must be a regular file or memfd (no pipes/sockets)"};
         }
-        if (doc.status == ReadStatus::TooLarge) {
+        if (doc.status == Wire::ReadStatus::TooLarge) {
             throw sdbus::Error{sdbus::Error::Name{kInputTooLargeErrName}, "A batch document exceeds the 256 MiB limit"};
         }
-        if (doc.status == ReadStatus::Error) {
+        if (doc.status == Wire::ReadStatus::Error) {
             throw sdbus::Error{sdbus::Error::Name{kInternalErrName}, "Failed to read a batch input document"};
         }
         if (doc.bytes.empty()) {
@@ -1009,12 +697,11 @@ sdbus::ObjectPath CardObject::SignBatch(const std::vector<sdbus::Struct<std::str
     // batch shares one resolved format/level/packaging, not a per-document
     // resolution. A "displayName" key (if sent) is simply never read here:
     // each entry in `documents` already supplied its own name above.
-    ResolvedSignOptions resolved = resolveSignOptions(options, inputs.front().bytes, *m_deps.config);
+    ResolvedSignOptions resolved = resolveSignOptions(options, inputs.front().bytes, m_core.configStore());
 
-    const std::string requester = callerRequesterLabel();
     log::infof("sign-batch requested: requester={} certId={} documents={} format={} level={} packaging={} artifact={}",
                requester, certId.substr(0, 12), inputs.size(), resolved.format, resolved.level, resolved.packaging,
-               kArtifactSignatureBatch);
+               Operations::Artifact::kSignatureBatch);
 
     Operations::SignParams params{
         .certId = certId,
@@ -1031,76 +718,70 @@ sdbus::ObjectPath CardObject::SignBatch(const std::vector<sdbus::Struct<std::str
         .tsaUrl = std::move(resolved.tsaUrl),
         .visual = std::move(resolved.visual),
     };
-    Operations::SignBatchOperation::Deps deps{
-        // holder is stamped by OperationManager from the per-reader worker.
-        .signer = *m_deps.signer,         .prompter = *m_deps.prompter,
-        .serializer = *m_deps.serializer, .credentials = *m_deps.credentials,
-        .cardKey = m_deps.cardKey,        .readerName = m_deps.readerName,
-        .requester = requester,           .params = std::move(params),
-        .documents = std::move(inputs),
-    };
-    try {
-        const auto id = m_manager.publish(
-            objectIdFromPath(m_reader), m_deps.readerName, CallerToken{sender},
-            [this, deps = std::move(deps)](Operations::CardSessionHolder* holder,
-                                           OperationId opId) mutable -> std::unique_ptr<Operations::OperationBase> {
-                deps.holder = holder;
-                auto op = buildSignBatchOperation(m_connection, opObjectPath(opId), std::move(deps));
-                attachLifetimeGuards(*op);
-                return op;
-            });
-        return opObjectPath(id);
-    } catch (const Operations::QueueFull&) {
-        throw sdbus::Error{sdbus::Error::Name{LibreLinux::AgentWire::kErrRateLimited},
-                           "reader operation backlog full; retry shortly"};
-    }
+    return launch(makeSignBatchChannel,
+                  Operations::OperationLauncher::SignBatch{.params = std::move(params), .documents = std::move(inputs)},
+                  sender, requester);
 }
 
 namespace {
 
-// Map a validatePinManageRequest EntryError onto its typed wire error. UnknownVerb
-// / UnknownOption / InvalidCombination are the client's fault (InvalidRequest);
-// UnknownCredential (bad or unlisted pinId, incl. the never-listed case) is its own
-// name so a client can distinguish "re-list and retry" from "fix your request".
-[[noreturn]] void throwEntryError(EntryError err)
+// A validatePinManageRequest EntryError as a typed wire error. The NAME is the
+// agent library's mapping (toSyncError: UnknownCredential is its own, so a
+// client can tell "re-list and retry" from "fix your request"; everything else
+// is InvalidRequest); the message says which of them it was.
+const char* entryErrorMessage(EntryError err) noexcept
 {
     switch (err) {
     case EntryError::UnknownCredential:
-        throw sdbus::Error{sdbus::Error::Name{kUnknownCredentialErrName},
-                           "pinId does not match any credential from the latest ListCredentials"};
+        return "pinId does not match any credential from the latest ListCredentials";
     case EntryError::AmbiguousCredential:
         // Distinct ids sharing one label: the seam addresses the card by label,
         // so the plugin would have to guess which PIN the user meant.
-        throw sdbus::Error{sdbus::Error::Name{kInvalidRequestErrName},
-                           "pinId addresses a credential label that is not unique on this card"};
+        return "pinId addresses a credential label that is not unique on this card";
     case EntryError::UnknownVerb:
     case EntryError::UnknownOption:
     case EntryError::InvalidCombination:
         break;
     }
-    throw sdbus::Error{sdbus::Error::Name{kInvalidRequestErrName}, "malformed credential-management request"};
+    return "malformed credential-management request";
+}
+
+[[noreturn]] void throwEntryError(EntryError err)
+{
+    throw sdbus::Error{sdbus::Error::Name{syncErrorBusName(toSyncError(err))}, entryErrorMessage(err)};
 }
 
 } // namespace
 
-sdbus::ObjectPath CardObject::ManagePin(const std::string& pinId, const std::string& verb,
-                                        const std::map<std::string, sdbus::Variant>& options)
+void CardObject::ManagePin(sdbus::Result<sdbus::ObjectPath>&& result, std::string pinId, std::string verb,
+                           std::map<std::string, sdbus::Variant> options)
 {
     // Entry gating: a management request against a card that does not advertise
     // PinManagement (bit 3) is refused at entry with no Operation minted, mirroring
     // the Identity/PKI gates.
     if (!hasPinManagementCapability()) {
-        throw sdbus::Error{sdbus::Error::Name{kUnsupportedErrName}, "Card does not advertise PinManagement capability"};
-    }
-    if (!hasCredentialSeams()) {
-        throw sdbus::Error{sdbus::Error::Name{kInternalErrName}, "Credential operation dependencies not wired"};
+        result.returnError(
+            sdbus::Error{sdbus::Error::Name{kUnsupportedErrName}, "Card does not advertise PinManagement capability"});
+        return;
     }
 
     // Authorize + rate-limit FIRST (same posture + ordering as Sign): a rejected
     // caller never has request validation — including its snapshot-cache get()
     // side effect — run on its behalf, and never reaches a prompt.
     const std::string sender = callerSender();
-    authorizeCredentialMutation(sender);
+    const std::string requester = callerRequesterLabel();
+    authorizeThenReply(m_core.authorizer(), kActionCredentialsManage, sender, std::move(result),
+                       "Not authorized to manage credentials", m_grantGate,
+                       [this, pinId, verb, options, sender, requester] {
+                           return managePinGranted(pinId, verb, options, sender, requester);
+                       });
+}
+
+sdbus::ObjectPath CardObject::managePinGranted(const std::string& pinId, const std::string& verb,
+                                               const std::map<std::string, sdbus::Variant>& options,
+                                               const std::string& sender, const std::string& requester)
+{
+    rateLimitCredentialMutation(sender);
 
     // Undefined options key -> typed error at entry (the adaptor-layer half of the
     // entry-gating rule set; validatePinManageRequest owns verb/combination/pinId).
@@ -1134,86 +815,40 @@ sdbus::ObjectPath CardObject::ManagePin(const std::string& pinId, const std::str
     // client that never listed (no snapshot) or names an unknown id is rejected here
     // rather than triggering an implicit list — an implicit list could prompt for
     // the CAN inside a call the user never framed as a read.
-    std::optional<CredentialSnapshot> snapshot = m_deps.snapshotCache->get(m_deps.cardKey);
+    std::optional<CredentialSnapshot> snapshot = m_core.credentialSnapshotCache().get(m_deps.cardKey);
     if (const auto valid = Operations::validatePinManageRequest(request, snapshot ? &*snapshot : nullptr); !valid) {
         throwEntryError(valid.error());
     }
 
-    const std::string requester = callerRequesterLabel();
     log::infof("credential change requested: requester={} verb={} pinId={}", requester, verb, pinId);
-    Operations::ManagePinOperation::Deps deps{
-        .credentials = *m_deps.credentialManager,
-        .prompter = *m_deps.prompter,
-        .serializer = *m_deps.serializer,
-        .credCache = *m_deps.credentials,
-        .snapshotCache = *m_deps.snapshotCache,
-        .readCache = *m_deps.readCache,
-        .cardKey = m_deps.cardKey,
-        .readerName = m_deps.readerName,
-        .requester = requester,
-        .artifact = kArtifactCredentials,
-        .request = std::move(request),
-        .snapshot = std::move(*snapshot),
-    };
-    try {
-        const auto id = m_manager.publish(
-            objectIdFromPath(m_reader), m_deps.readerName, CallerToken{sender},
-            [this, deps = std::move(deps)](Operations::CardSessionHolder* holder,
-                                           OperationId opId) mutable -> std::unique_ptr<Operations::OperationBase> {
-                deps.holder = holder;
-                auto op = buildManagePinOperation(m_connection, opObjectPath(opId), std::move(deps));
-                attachLifetimeGuards(*op);
-                return op;
-            });
-        return opObjectPath(id);
-    } catch (const Operations::QueueFull&) {
-        throw sdbus::Error{sdbus::Error::Name{LibreLinux::AgentWire::kErrRateLimited},
-                           "reader operation backlog full; retry shortly"};
-    }
+    return launch(
+        makeCredentialsChannel,
+        Operations::OperationLauncher::ManagePin{.request = std::move(request), .snapshot = std::move(*snapshot)},
+        sender, requester);
 }
 
-sdbus::ObjectPath CardObject::ActivateSigningKey()
+void CardObject::ActivateSigningKey(sdbus::Result<sdbus::ObjectPath>&& result)
 {
     if (!hasPinManagementCapability()) {
-        throw sdbus::Error{sdbus::Error::Name{kUnsupportedErrName}, "Card does not advertise PinManagement capability"};
-    }
-    if (!hasCredentialSeams()) {
-        throw sdbus::Error{sdbus::Error::Name{kInternalErrName}, "Credential operation dependencies not wired"};
+        result.returnError(
+            sdbus::Error{sdbus::Error::Name{kUnsupportedErrName}, "Card does not advertise PinManagement capability"});
+        return;
     }
     // Authorize + rate-limit (BEFORE any prompt). No client-supplied arguments to
     // validate — the addressed signing-key record is resolved inside the operation
     // from the latest listing (a card that exposes none answers unsupported).
     const std::string sender = callerSender();
-    authorizeCredentialMutation(sender);
-
     const std::string requester = callerRequesterLabel();
-    Operations::ActivateSigningKeyOperation::Deps deps{
-        .credentials = *m_deps.credentialManager,
-        .prompter = *m_deps.prompter,
-        .serializer = *m_deps.serializer,
-        .credCache = *m_deps.credentials,
-        .snapshotCache = *m_deps.snapshotCache,
-        .readCache = *m_deps.readCache,
-        .cardKey = m_deps.cardKey,
-        .readerName = m_deps.readerName,
-        .requester = requester,
-        .artifact = kArtifactCredentials,
-    };
-    try {
-        const auto id = m_manager.publish(
-            objectIdFromPath(m_reader), m_deps.readerName, CallerToken{sender},
-            [this, deps = std::move(deps)](Operations::CardSessionHolder* holder,
-                                           OperationId opId) mutable -> std::unique_ptr<Operations::OperationBase> {
-                deps.holder = holder;
-                auto op = buildActivateSigningKeyOperation(m_connection, opObjectPath(opId), std::move(deps));
-                attachLifetimeGuards(*op);
-                return op;
-            });
-        return opObjectPath(id);
-    } catch (const Operations::QueueFull&) {
-        throw sdbus::Error{sdbus::Error::Name{LibreLinux::AgentWire::kErrRateLimited},
-                           "reader operation backlog full; retry shortly"};
-    }
+    authorizeThenReply(m_core.authorizer(), kActionCredentialsManage, sender, std::move(result),
+                       "Not authorized to manage credentials", m_grantGate,
+                       [this, sender, requester] { return activateSigningKeyGranted(sender, requester); });
+}
+
+sdbus::ObjectPath CardObject::activateSigningKeyGranted(const std::string& sender, const std::string& requester)
+{
+    rateLimitCredentialMutation(sender);
+
+    return launch(makeCredentialsChannel, Operations::OperationLauncher::ActivateSigningKey{}, sender, requester);
 }
 
 sdbus::ObjectPath CardObject::ListCredentials()
@@ -1223,37 +858,9 @@ sdbus::ObjectPath CardObject::ListCredentials()
     if (!hasPinManagementCapability()) {
         throw sdbus::Error{sdbus::Error::Name{kUnsupportedErrName}, "Card does not advertise PinManagement capability"};
     }
-    if (!hasCredentialSeams()) {
-        throw sdbus::Error{sdbus::Error::Name{kInternalErrName}, "Credential operation dependencies not wired"};
-    }
     const std::string requester = callerRequesterLabel();
     const std::string sender = callerSender();
-    Operations::ListCredentialsOperation::Deps deps{
-        .credentials = *m_deps.credentialManager,
-        .prompter = *m_deps.prompter,
-        .serializer = *m_deps.serializer,
-        .credCache = *m_deps.credentials,
-        .snapshotCache = *m_deps.snapshotCache,
-        .cardKey = m_deps.cardKey,
-        .readerName = m_deps.readerName,
-        .requester = requester,
-        .artifact = kArtifactCredentials,
-    };
-    try {
-        const auto id = m_manager.publish(
-            objectIdFromPath(m_reader), m_deps.readerName, CallerToken{sender},
-            [this, deps = std::move(deps)](Operations::CardSessionHolder* holder,
-                                           OperationId opId) mutable -> std::unique_ptr<Operations::OperationBase> {
-                deps.holder = holder;
-                auto op = buildListCredentialsOperation(m_connection, opObjectPath(opId), std::move(deps));
-                attachLifetimeGuards(*op);
-                return op;
-            });
-        return opObjectPath(id);
-    } catch (const Operations::QueueFull&) {
-        throw sdbus::Error{sdbus::Error::Name{LibreLinux::AgentWire::kErrRateLimited},
-                           "reader operation backlog full; retry shortly"};
-    }
+    return launch(makeCredentialsChannel, Operations::OperationLauncher::ListCredentials{}, sender, requester);
 }
 
 } // namespace LibreSCRS::Agent

@@ -48,9 +48,10 @@ PromptRegistry& PrompterService::registryForTest() noexcept
 
 namespace {
 
-// Kind / option-key / status names live in common/PrompterWire.h (shared with
-// the agent consumer so the two binaries cannot drift). kStatusUnauthorized
-// pairs with a zero-byte sealed memfd so no dialog shows and no secret leaks.
+// Kind / option-key names live in common/PrompterWire.h (shared with the agent
+// consumer so the two binaries cannot drift); the reply status is the agent
+// library's. Unauthorized pairs with a zero-byte sealed memfd so no dialog
+// shows and no secret leaks.
 using PrompterWire::kOptAltDeadlineMs;
 using PrompterWire::kOptAltKinds;
 using PrompterWire::kOptArtifact;
@@ -73,12 +74,7 @@ using PrompterWire::kOptReaderInterface;
 using PrompterWire::kOptReaderModel;
 using PrompterWire::kOptRequester;
 using PrompterWire::kOptTitle;
-using PrompterWire::kStatusCancelled;
-using PrompterWire::kStatusError;
-using PrompterWire::kStatusOk;
-using PrompterWire::kStatusOkMrz;
-using PrompterWire::kStatusTimeout;
-using PrompterWire::kStatusUnauthorized;
+using PrompterWire::PromptReplyStatus;
 
 // Lift a stringly-typed option, tolerating either a real string variant
 // or a missing entry. Unrecognised types are treated as missing.
@@ -219,20 +215,22 @@ bool postToMain(QObject* target, Fn&& fn)
 // A throw means the caller is gone. The window is already closed and its entry
 // already taken by the time this runs, so swallowing is what prevents a leak
 // rather than what causes one.
-void answerSecret(SecretResult& result, std::string status, int fd) noexcept
+void answerSecret(SecretResult& result, PromptReplyStatus status, int fd) noexcept
 {
     try {
-        result.returnResults(std::move(status), sdbus::UnixFd{fd, sdbus::adopt_fd}, std::string{});
+        result.returnResults(std::string{PrompterWire::replyStatusToken(status)}, sdbus::UnixFd{fd, sdbus::adopt_fd},
+                             std::string{});
     } catch (...) {
         std::fprintf(stderr, "librescrs-pinentry-kde: reply dropped (caller gone)\n");
     }
 }
 
-void answerSecrets(SecretsResult& result, std::string status, int primaryFd, int secondaryFd) noexcept
+void answerSecrets(SecretsResult& result, PromptReplyStatus status, int primaryFd, int secondaryFd) noexcept
 {
     try {
-        result.returnResults(std::move(status), sdbus::UnixFd{primaryFd, sdbus::adopt_fd},
-                             sdbus::UnixFd{secondaryFd, sdbus::adopt_fd}, std::string{});
+        result.returnResults(std::string{PrompterWire::replyStatusToken(status)},
+                             sdbus::UnixFd{primaryFd, sdbus::adopt_fd}, sdbus::UnixFd{secondaryFd, sdbus::adopt_fd},
+                             std::string{});
     } catch (...) {
         std::fprintf(stderr, "librescrs-pinentry-kde: reply dropped (caller gone)\n");
     }
@@ -258,7 +256,7 @@ void raiseWindow(PromptDialog::Kind kind, const PromptDialog::Options& opts, pid
         // Two windows answering to one name would make a dismissal ambiguous,
         // which is the defect this registry exists to end. Refuse, fail closed.
         delete dlg;
-        answerSecret(*result, kStatusError, makeEmptySealedFd());
+        answerSecret(*result, PromptReplyStatus::Error, makeEmptySealedFd());
         return;
     }
 
@@ -271,16 +269,17 @@ void raiseWindow(PromptDialog::Kind kind, const PromptDialog::Options& opts, pid
         if (code != QDialog::Accepted) {
             // The clock and the holder are different events, and a client that
             // conflates them tells the holder they cancelled what expired.
-            answerSecret(*result, dlg->expired() ? kStatusTimeout : kStatusCancelled, makeEmptySealedFd());
+            answerSecret(*result, dlg->expired() ? PromptReplyStatus::Timeout : PromptReplyStatus::Cancelled,
+                         makeEmptySealedFd());
         } else if (const int fd = dlg->captureSecretFd(); fd < 0) {
-            answerSecret(*result, kStatusError, makeEmptySealedFd());
+            answerSecret(*result, PromptReplyStatus::Error, makeEmptySealedFd());
         } else {
             // The ONLY site that mints the switched-to-MRZ status, gated on the
             // very offer this prompt made: an accepted prompt that offered the
             // switch AND was submitted on the MRZ form answers with it, because
             // the fd then carries an MRZ payload rather than a CAN.
             const bool switched = offerMrzSwitch && dlg->mrzChosen();
-            answerSecret(*result, switched ? kStatusOkMrz : kStatusOk, fd);
+            answerSecret(*result, switched ? PromptReplyStatus::OkMrz : PromptReplyStatus::Ok, fd);
         }
         dlg->deleteLater();
     });
@@ -307,7 +306,7 @@ void raiseChangePinWindow(const PromptDialog::Options& opts, pid_t ownerPid, con
     const auto handle = registry().add(dlg, ownerPid, promptId);
     if (!handle) {
         delete dlg;
-        answerSecrets(*result, kStatusError, makeEmptySealedFd(), makeEmptySealedFd());
+        answerSecrets(*result, PromptReplyStatus::Error, makeEmptySealedFd(), makeEmptySealedFd());
         return;
     }
 
@@ -316,8 +315,8 @@ void raiseChangePinWindow(const PromptDialog::Options& opts, pid_t ownerPid, con
             return;
         }
         if (code != QDialog::Accepted) {
-            answerSecrets(*result, dlg->expired() ? kStatusTimeout : kStatusCancelled, makeEmptySealedFd(),
-                          makeEmptySealedFd());
+            answerSecrets(*result, dlg->expired() ? PromptReplyStatus::Timeout : PromptReplyStatus::Cancelled,
+                          makeEmptySealedFd(), makeEmptySealedFd());
             dlg->deleteLater();
             return;
         }
@@ -330,9 +329,9 @@ void raiseChangePinWindow(const PromptDialog::Options& opts, pid_t ownerPid, con
             if (pair.secondaryFd >= 0) {
                 ::close(pair.secondaryFd);
             }
-            answerSecrets(*result, kStatusError, makeEmptySealedFd(), makeEmptySealedFd());
+            answerSecrets(*result, PromptReplyStatus::Error, makeEmptySealedFd(), makeEmptySealedFd());
         } else {
-            answerSecrets(*result, kStatusOk, pair.primaryFd, pair.secondaryFd);
+            answerSecrets(*result, PromptReplyStatus::Ok, pair.primaryFd, pair.secondaryFd);
         }
         dlg->deleteLater();
     });
@@ -372,7 +371,7 @@ void PrompterService::RequestSecret(SecretResult&& result, std::string kind,
     // rogue same-user process can neither phish a secret nor flash a UI.
     const pid_t ownerPid = authorizeCaller("RequestSecret");
     if (ownerPid == 0) {
-        answerSecret(*reply, std::string{kStatusUnauthorized}, makeEmptySealedFd());
+        answerSecret(*reply, PromptReplyStatus::Unauthorized, makeEmptySealedFd());
         return;
     }
 
@@ -382,7 +381,7 @@ void PrompterService::RequestSecret(SecretResult&& result, std::string kind,
         // and clients map their own taxonomy. A hardcoded English literal here
         // would be permanently untranslatable and off the msgKey/fallback wire
         // convention.
-        answerSecret(*reply, std::string{kStatusError}, makeEmptySealedFd());
+        answerSecret(*reply, PromptReplyStatus::Error, makeEmptySealedFd());
         return;
     }
     PromptDialog::Options opts = buildOptions(options);
@@ -425,7 +424,7 @@ void PrompterService::RequestSecret(SecretResult&& result, std::string kind,
         // The GUI thread never got the window (shutdown race). Fail closed with
         // a real empty-sealed fd — never the -1 sentinel, which the wire encoder
         // cannot send.
-        answerSecret(*reply, std::string{kStatusError}, makeEmptySealedFd());
+        answerSecret(*reply, PromptReplyStatus::Error, makeEmptySealedFd());
     }
 }
 
@@ -439,11 +438,11 @@ void PrompterService::RequestSecrets(SecretsResult&& result, std::string kind,
     // of the multi-secret reply.
     const pid_t ownerPid = authorizeCaller("RequestSecrets");
     if (ownerPid == 0) {
-        answerSecrets(*reply, std::string{kStatusUnauthorized}, makeEmptySealedFd(), makeEmptySealedFd());
+        answerSecrets(*reply, PromptReplyStatus::Unauthorized, makeEmptySealedFd(), makeEmptySealedFd());
         return;
     }
     if (kind != PrompterWire::kKindChangePin) {
-        answerSecrets(*reply, std::string{kStatusError}, makeEmptySealedFd(), makeEmptySealedFd());
+        answerSecrets(*reply, PromptReplyStatus::Error, makeEmptySealedFd(), makeEmptySealedFd());
         return;
     }
 
@@ -460,7 +459,7 @@ void PrompterService::RequestSecrets(SecretsResult&& result, std::string kind,
         return;
     }
     if (!postToMain(app, raise)) {
-        answerSecrets(*reply, std::string{kStatusError}, makeEmptySealedFd(), makeEmptySealedFd());
+        answerSecrets(*reply, PromptReplyStatus::Error, makeEmptySealedFd(), makeEmptySealedFd());
     }
 }
 

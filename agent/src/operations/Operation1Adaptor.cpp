@@ -6,7 +6,7 @@
 #include <LibreSCRS/Agent/KeyType.h>
 #include <LibreSCRS/Agent/value/CardReadSnapshot.h>
 #include <LibreSCRS/Agent/value/CertSnapshot.h>
-#include <LibreSCRS/Agent/backend/Logging.h>
+#include <LibreSCRS/Logging.h>
 #include "org.librescrs.Agent.Operation.Certificates1_adaptor.h"
 #include "org.librescrs.Agent.Operation.Credentials1_adaptor.h"
 #include "org.librescrs.Agent.Operation.Identity1_adaptor.h"

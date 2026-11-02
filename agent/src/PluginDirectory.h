@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 hirashix0
 #pragma once
 
-#include <LibreSCRS/Agent/backend/Logging.h>
+#include <LibreSCRS/Logging.h>
 
 #include <cstddef>
 #include <cstdint>

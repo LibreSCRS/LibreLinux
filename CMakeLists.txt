@@ -83,11 +83,32 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(Systemd REQUIRED IMPORTED_TARGET libsystemd)
 find_package(LibreMiddleware 5.0 REQUIRED CONFIG)
 
-# The platform-neutral agent core (flows, scheduler, presence model, caches,
-# lease/broker policy, LM-backed seams, the 5 backend interfaces). The Linux
-# backend below implements those interfaces and builds the librescrs-agent
-# daemon on top of LibreAgent::Core.
-include(cmake/FindOrUseLibreAgent.cmake)
+# Strict warnings everywhere; errors only when asked (CI). The option carries
+# the name every LibreSCRS repository uses, so one -DLIBRESCRS_WERROR=ON means
+# the same thing in each of them -- the agent library built from source below
+# included.
+option(LIBRESCRS_WERROR "Treat compiler warnings as errors" OFF)
+
+# The one warning set every target this repository ships compiles with, plus
+# -Werror under LIBRESCRS_WERROR. NO_CONVERSION leaves out -Wconversion and
+# -Wsign-conversion, for the two targets that have never been built with them
+# (the prompter, whose generated sdbus-c++ headers trip them, and the PKCS#11
+# module).
+function(librelinux_strict_warnings target)
+    cmake_parse_arguments(PARSE_ARGV 1 arg "NO_CONVERSION" "" "")
+    set(conversion -Wconversion -Wsign-conversion)
+    if(arg_NO_CONVERSION)
+        set(conversion)
+    endif()
+    target_compile_options(${target} PRIVATE
+        -Wall -Wextra -Wpedantic
+        -Wshadow -Wnon-virtual-dtor -Wold-style-cast -Wcast-align
+        -Woverloaded-virtual ${conversion} -Wnull-dereference
+        -Wdouble-promotion -Wformat=2)
+    if(LIBRESCRS_WERROR)
+        target_compile_options(${target} PRIVATE -Werror)
+    endif()
+endfunction()
 
 # Bound every test. ctest's built-in default is 1500 seconds and nothing in this
 # tree overrode it, so a single wedged test could hold a hosted runner for
@@ -102,12 +123,41 @@ include(cmake/FindOrUseLibreAgent.cmake)
 # test with a three-second declared timeout, the bare call reports the suite
 # passing after twelve seconds and the module form times the test out after
 # three — so declaring the value next to a bare call would have had no effect
-# at all, silently. include(CTest) calls enable_testing() itself, so the
-# placement of the call below is unchanged. Set BEFORE the include, which would
-# otherwise cache 1500.
+# at all, silently. include(CTest) calls enable_testing() itself. Set BEFORE the
+# include, which would otherwise cache 1500. Included before the agent below,
+# which asks for its test-only components only when BUILD_TESTING is on.
 set(DART_TESTING_TIMEOUT 300 CACHE STRING
     "Default per-test ctest timeout, in seconds")
 include(CTest)
+
+# The platform-neutral agent core (flows, scheduler, presence model, caches,
+# lease/broker policy, LM-backed seams, the 5 backend interfaces). The Linux
+# backend below implements those interfaces and builds the librescrs-agent
+# daemon on top of LibreAgent::Core. By default it is built from the revision
+# deps.lock names; packaging passes -DLIBRESCRS_AGENT_FROM_SOURCE=OFF and takes
+# the installed librescrs-agent-core instead. What ships needs the core and the
+# PKCS#11 facade the module is built from; only the tests need the wire
+# vocabulary the error-name parity test links and the master-list fixture the
+# anchor-import test links, so a build without tests does not ask for them.
+set(LIBRESCRS_AGENT_FROM_SOURCE_DEFAULT ON)
+include(cmake/FindOrUseLibreAgent.cmake)
+set(_librelinux_agent_components Core Pkcs11Facade Wire)
+if(BUILD_TESTING)
+    list(APPEND _librelinux_agent_components TestSupport)
+endif()
+librescrs_use_libreagent(COMPONENTS ${_librelinux_agent_components})
+
+# The bus contract is the agent library's: every interface this tree serves or
+# calls is generated from its D-Bus XML (LIBREAGENT_DBUS_XML_DIR), and no copy
+# lives here. A subproject build publishes the directory in the cache; an
+# installed package sets it in its config file, which the call above read inside
+# a function, so it is read once more here where the variable stays.
+if(NOT LIBREAGENT_DBUS_XML_DIR)
+    find_package(LibreAgent ${PROJECT_VERSION_MAJOR}.0 REQUIRED CONFIG COMPONENTS ${_librelinux_agent_components})
+endif()
+if(NOT EXISTS "${LIBREAGENT_DBUS_XML_DIR}/org.librescrs.Agent.Manager1.xml")
+    message(FATAL_ERROR "LibreAgent's D-Bus XML not found in \"${LIBREAGENT_DBUS_XML_DIR}\"")
+endif()
 
 # --- one ctest entry per GoogleTest case ---------------------------------
 # With one entry per binary, ctest counts binaries: `ctest -R` cannot select a
@@ -138,34 +188,22 @@ if(BUILD_TESTING)
 
     find_program(DBUS_RUN_SESSION dbus-run-session REQUIRED)
 
-    # An address no bus can be listening on. ctest hands it to every bus-backed
-    # test in both variables below; dbus-run-session overwrites
-    # DBUS_SESSION_BUS_ADDRESS with the bus it starts, so the two are equal
-    # exactly when the wrapper did not run -- which is what
-    # common/tests/PrivateSessionBusTest.cpp asserts against.
-    set(LIBRELINUX_PRIVATE_BUS_SENTINEL "unix:path=/nonexistent/librescrs-no-private-bus")
-    set(LIBRELINUX_PRIVATE_BUS_ENV
-        "LIBRESCRS_OUTER_BUS=${LIBRELINUX_PRIVATE_BUS_SENTINEL};DBUS_SESSION_BUS_ADDRESS=${LIBRELINUX_PRIVATE_BUS_SENTINEL}")
-    set(LIBRELINUX_PRIVATE_BUS_SOURCE
-        "${CMAKE_CURRENT_SOURCE_DIR}/common/tests/PrivateSessionBusTest.cpp")
-
-    # Wraps <tgt> in its own session bus and compiles in the case that says so.
-    # The suite name carries the target's name because every bus-backed binary
-    # gets this case, and ctest entries are named after the case alone.
-    function(librelinux_private_session_bus tgt)
-        set_target_properties(${tgt} PROPERTIES
-            CROSSCOMPILING_EMULATOR "${DBUS_RUN_SESSION};--")
-        target_sources(${tgt} PRIVATE "${LIBRELINUX_PRIVATE_BUS_SOURCE}")
-        target_compile_definitions(${tgt} PRIVATE
-            LIBRESCRS_PRIVATE_BUS_SUITE=${tgt}PrivateSessionBus)
-    endfunction()
+    # Each bus-backed suite runs on its own session bus through the agent
+    # library's libreagent_private_session_bus() and LIBREAGENT_PRIVATE_BUS_ENV
+    # (LibreAgentGTest.cmake), which also compile in the case asserting that the
+    # wrapper ran.
 endif()
 
 # Header-only utilities shared across the daemon, prompter, and module (pure
 # POSIX, no Qt/sdbus/LM): the sealed-memfd creator, the pidfd-pinned /proc
 # readers, and the agent/prompter wire vocabularies.
 add_library(librelinux-common INTERFACE)
-target_include_directories(librelinux-common INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/common)
+# The agent library's include directory comes along for the standard-library
+# only vocabulary headers common/ names (prompter kinds and reply status,
+# reader-interface tokens). Only the directory: linking the core would hand
+# the prompter and the PKCS#11 module the middleware it depends on.
+target_include_directories(librelinux-common INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/common
+    $<TARGET_PROPERTY:LibreAgent::Core,INTERFACE_INCLUDE_DIRECTORIES>)
 target_compile_features(librelinux-common INTERFACE cxx_std_23)
 
 add_subdirectory(agent)

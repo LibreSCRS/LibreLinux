@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 // SPDX-FileCopyrightText: 2026 hirashix0
 #pragma once
-#include <LibreSCRS/Agent/backend/Logging.h>          // log::warn (post-seal emit-throw diagnostic)
+#include <LibreSCRS/Logging.h>                        // log::warn (post-seal emit-throw diagnostic)
 #include <LibreSCRS/Agent/backend/OperationChannel.h> // SignedArtifact, PhotoResult, CardReadSnapshot, CertSnapshot
 #include <cstdint>
 #include <exception>

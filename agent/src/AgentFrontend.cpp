@@ -1,53 +1,38 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 // SPDX-FileCopyrightText: 2026 hirashix0
 #include "AgentFrontend.h"
-#include "AgentCoreSeams.h"      // isContactSlotOfDualInterfaceUnit (the hold gate)
 #include "AgentInterfaceNames.h" // LibreLinux::AgentWire::kRootPath
 #include "AgentObjectPath.h"     // agentObjectPath / objectIdFromPath (ObjectId <-> wire path)
 #include "AuthMethodName.h"      // authMethodName (PreReadAuthMethod -> wire string)
-#include <LibreSCRS/Agent/operations/CardTypeArbitration.h> // arbitrateCardType (candidate list -> Card1.CardType)
-#include <LibreSCRS/Agent/CryptoWorkerContext.h>
-#include <LibreSCRS/Agent/cache/CardReadCache.h>
-#include <LibreSCRS/Agent/cache/CredentialCache.h>
-#include <LibreSCRS/Agent/backend/Logging.h>
-#include <LibreSCRS/Agent/config/ConfigStore.h>
+#include <LibreSCRS/Agent/AgentCore.h>
+#include <LibreSCRS/Logging.h>
 #include "dbus/CardObject.h"
 #include "dbus/ManagerObject.h"
-#include <LibreSCRS/Agent/pkcs11/Pkcs11Broker.h>
 #include "dbus/ReaderObject.h"
-#include <LibreSCRS/Agent/operations/CardSessionHolder.h>
-#include <LibreSCRS/Agent/operations/FlowPrelude.h>
-#include <LibreSCRS/Agent/operations/LmSeams.h>
-#include <LibreSCRS/Agent/operations/OperationManager.h>
-#include <LibreSCRS/Agent/backend/PrompterClientBase.h>
+#include <LibreSCRS/Agent/wire/ReaderInterface.h> // readerInterfaceToken (Reader1.Interface)
 #include <sdbus-c++/Types.h>
 #include <chrono>
-#include <cstdint>
 #include <functional>
 #include <mutex>
-#include <optional>
 #include <utility>
-#include <vector>
 
 namespace LibreSCRS::Agent {
 
-AgentFrontend::AgentFrontend(BusExporter& transport, std::shared_ptr<sdbus::IConnection> connection,
-                             Operations::OperationManager& opManager,
-                             std::shared_ptr<CryptoWorkerContext> cryptoContext, CardReadCache& readCache,
-                             Operations::SigningEngineProvider& signingEngine, Authorizer& authorizer,
-                             Operations::RateLimiter& rateLimiter, Config::ConfigStore& config, Pkcs11Broker* pkcs11,
+AgentFrontend::AgentFrontend(BusExporter& transport, std::shared_ptr<sdbus::IConnection> connection, AgentCore& core,
                              std::string version, LibreSCRS::Plugin::CardPluginService* pluginService)
-    : m_transport(transport), m_connection(std::move(connection)), m_opManager(opManager),
-      m_cryptoCtx(std::move(cryptoContext)), m_readCache(readCache), m_signingEngine(signingEngine),
-      m_authorizer(authorizer), m_rateLimiter(rateLimiter), m_config(config), m_version(std::move(version)),
-      m_pluginService(pluginService), m_pkcs11(pkcs11)
+    : m_transport(transport), m_connection(std::move(connection)), m_core(core), m_version(std::move(version)),
+      // Every launched operation co-owns the bus connection its channel is
+      // exported on, so one abandoned past this frontend's teardown still emits
+      // and unregisters on a live connection.
+      m_launcher(core, Operations::OperationSeams::production(core, pluginService), m_connection)
 {
     // Root: Manager1 + Config1 + Pkcs11_1 + ObjectManager on one path. Children
     // the frontend materialises under this path are picked up by sdbus-c++'s
     // ObjectManager natively. The Pkcs11_1 surface forwards to the AgentCore-owned
-    // broker this frontend borrows.
+    // broker.
     m_manager = std::make_unique<ManagerObject>(*m_connection, sdbus::ObjectPath{LibreLinux::AgentWire::kRootPath},
-                                                m_version, m_config, m_authorizer, m_rateLimiter, m_pkcs11);
+                                                m_version, m_core.configStore(), m_core.authorizer(),
+                                                m_core.rateLimiter(), &m_core.pkcs11());
 
     // Register the materialization callbacks on the transport: each typed presence
     // delta forwarded here CREATES / DESTROYS the real exported sdbus object.
@@ -56,6 +41,7 @@ AgentFrontend::AgentFrontend(BusExporter& transport, std::shared_ptr<sdbus::ICon
         .onCard = [this](const CardState& card) { materializeCard(card); },
         .onWithdraw = [this](ObjectId id) { withdrawObject(id); },
         .onUpdate = [this](ObjectId reader, const PropertyDelta& delta) { updateReaderProperties(reader, delta); },
+        .onRelabel = [this](const ReaderState& reader) { relabelReader(reader); },
     });
 }
 
@@ -71,20 +57,25 @@ AgentFrontend::~AgentFrontend()
 
 Pkcs11Broker* AgentFrontend::pkcs11() noexcept
 {
-    return m_pkcs11;
+    return &m_core.pkcs11();
 }
 
 void AgentFrontend::onCardRemovedForLease(ObjectId cardKey)
 {
-    if (m_pkcs11) {
-        m_pkcs11->onCardRemoved(cardKey);
-    }
+    m_core.pkcs11().onCardRemoved(cardKey);
 }
 
 void AgentFrontend::emitConfigChanged(const std::string& key) noexcept
 {
     if (m_manager) {
         m_manager->emitConfigChanged(key);
+    }
+}
+
+void AgentFrontend::emitQuiesced(QuiesceReason reason) noexcept
+{
+    if (m_manager) {
+        m_manager->announceQuiesced(reason);
     }
 }
 
@@ -99,96 +90,7 @@ CardOperationDeps AgentFrontend::buildDepsForCard(const std::string& cardPath, c
     // makeCardTypeResolvedCallback's doc comment for why capturing `this` is
     // safe despite running on a foreign thread at an arbitrary later time.
     deps.onCardTypeResolved = const_cast<AgentFrontend*>(this)->makeCardTypeResolvedCallback(cardPath);
-
-    // The read/sign seams are stateless routers — they resolve the signing/read
-    // plugin from the per-operation candidate list (from the holder) at op time,
-    // so no plugin is bound here. Pre-read auth is derived from that same held
-    // session inside the flow, so no per-card plugin handle is needed here.
-    deps.ownedReader = std::make_shared<Operations::LmCardReader>();
-    // The deposit seam is the one read-path seam that DOES need the registry: a
-    // renegotiated read hands the chosen passport MRZ to the candidate plugins,
-    // and only the registry holds mutable handles to them. Resolution there is
-    // registry-only and card-free by construction (see the seam's own contract).
-    if (m_pluginService != nullptr) {
-        deps.ownedDepositor = std::make_shared<Operations::LmCredentialDepositor>(*m_pluginService);
-    }
-    deps.ownedCertReader = std::make_shared<Operations::LmCertificateReader>();
-    // Reuses m_signingEngine's already-built TrustStoreService (see
-    // SigningEngineProvider::trustSnapshot()) -- no separate trust store, no
-    // new LM API.
-    deps.ownedTrustVerifier = std::make_shared<Operations::LmTrustVerifier>(m_signingEngine);
-    deps.ownedSigner = std::make_shared<Operations::LmSigner>(m_signingEngine);
-    // The PIN-lifecycle seam driving the Credentials1 flows. Stateless router over
-    // the plugin list (like the read/cert seams); co-owned for keep-alive.
-    deps.ownedCredentials = std::make_shared<Operations::LmCredentialManager>();
-
-    // The prompter / prompt gate / credential cache the flows want by `&` all live
-    // in the crypto-worker context. Hand each op the bare handles for its flow Deps
-    // AND a shared copy of the WHOLE context to co-own for abandoned-worker
-    // keep-alive, plus the context's shutdown-cancel token. An op whose worker is
-    // abandoned mid-prompt then keeps every core member its unwind touches alive
-    // through the one co-owned context (the cache for a nested CAN/MRZ prompt's
-    // putCan/putMrz past the flow gate) and bails + skips completion on teardown. A
-    // conformance test may leave the context null (no real prompt driven).
-    if (m_cryptoCtx) {
-        deps.prompter = m_cryptoCtx->prompter.get();
-        deps.serializer = m_cryptoCtx->serializer.get();
-        deps.credentials = m_cryptoCtx->credentials.get();
-        // The per-card ListCredentials snapshot store is co-owned by the crypto
-        // context (so an abandoned credential worker keeps it alive on unblock); the
-        // op borrows the bare pointer for its flow deps. Same instance the removal
-        // hook + AgentCore::credentialSnapshotCache() address.
-        deps.snapshotCache = m_cryptoCtx->snapshotCache.get();
-        deps.cryptoContext = m_cryptoCtx;
-        deps.shutdownToken = m_cryptoCtx->shutdown;
-    }
-    // Co-own the agent bus connection: every typed op the CardObject spawns
-    // keepAlives this share (attachLifetimeGuards), so a typed op abandoned to the
-    // zombie list keeps the connection alive until it drains — its channel adaptor's
-    // emit + unregister then touch a LIVE connection, not one freed with the host.
-    deps.connectionKeepAlive = m_connection;
-    deps.readCache = &m_readCache;
-    deps.authorizer = &m_authorizer;
-    deps.rateLimiter = &m_rateLimiter;
-    deps.config = &m_config;
     return deps;
-}
-
-std::function<void(Operations::CardSessionHolder&)> AgentFrontend::makeCardResolver(const std::string& cardPath,
-                                                                                    const std::string& readerPath,
-                                                                                    const std::string& readerName)
-{
-    // Obtain the loop-post sink HERE (on the enqueueing thread) and VALUE-CAPTURE it
-    // into the worker closure. The returned closure runs ON THE WORKER THREAD and may
-    // touch ONLY the holder + the captured sink — it never dereferences the transport
-    // (nor any concrete backend pointer) off the loop thread. The sink shared-owns its
-    // backing poster, so a worker stuck in fullResolution() that is abandoned
-    // (detached, NOT joined) and resumes AFTER this frontend is freed still posts into
-    // live (leaked) memory. `this` is captured only to build the loop-thread
-    // continuation (never dereferenced on the worker), which the stopped loop discards
-    // without running — destroying that lambda does not touch the freed frontend.
-    auto sink = m_transport.loopPostSink();
-    return [this, sink, cardPath, readerPath, readerName](Operations::CardSessionHolder& holder) {
-        const auto resolved = holder.fullResolution();
-        // An open that failed says nothing about the card, so the loop may ask
-        // again; a resolution, even an empty one, is the answer.
-        const bool opened = resolved.has_value();
-        const CapabilityResolver::CardResolution resolution = opened ? *resolved : CapabilityResolver::CardResolution{};
-        const std::uint32_t caps = resolution.capabilities;
-        const std::string wire{authMethodName(resolution.preReadAuth)};
-        // Card1.CardType: arbitrated over the SAME held-session candidate list
-        // preReadAuth/capabilities were just resolved from -- the strictly
-        // highest-priority candidate names the card. A tie at that priority, or
-        // no candidate at all, means "not yet known" -- stays empty; a later
-        // real read resolves it authoritatively via the property-update path
-        // (onCardTypeResolved).
-        const std::string cardType = arbitrateCardType(resolution.candidates);
-        // loopPostSink() always hands out a valid callable (it guards its own
-        // captured poster internally), so the sink is dereferenced unconditionally.
-        sink(std::chrono::microseconds{0}, [this, cardPath, readerPath, readerName, opened, caps, wire, cardType] {
-            applyCardResolution(cardPath, readerPath, readerName, opened, caps, wire, cardType);
-        });
-    };
 }
 
 void AgentFrontend::scheduleCardResolve(const std::string& cardPath, const std::string& readerPath,
@@ -203,25 +105,41 @@ void AgentFrontend::scheduleCardResolve(const std::string& cardPath, const std::
         // card always proceeds through the deferred resolve.
         return;
     }
-    const bool queued = m_opManager.enqueueOnReaderWorker(objectIdFromPath(readerPath), readerName,
-                                                          makeCardResolver(cardPath, readerPath, readerName));
+    // Obtain the loop-post sink HERE (on the enqueueing thread) and VALUE-CAPTURE it
+    // into the worker continuation, which runs ON THE WORKER THREAD and touches only
+    // the probe + the captured sink -- never the transport (nor any concrete backend
+    // pointer) off the loop thread. The sink shared-owns its backing poster, so a
+    // worker stuck in the probe that is abandoned (detached, NOT joined) and resumes
+    // AFTER this frontend is freed still posts into live (leaked) memory. `this` is
+    // captured only to build the loop-thread continuation (never dereferenced on the
+    // worker), which the stopped loop discards without running.
+    auto sink = m_transport.loopPostSink();
+    const bool queued = CardResolutionPolicy::probeOnWorker(
+        m_core.operationManager(), objectIdFromPath(readerPath), readerName,
+        [this, sink, cardPath, readerPath, readerName](CardProbe probe) {
+            // loopPostSink() always hands out a valid callable (it guards its own
+            // captured poster internally), so the sink is called unconditionally.
+            sink(std::chrono::microseconds{0}, [this, cardPath, readerPath, readerName, probe = std::move(probe)] {
+                applyCardResolution(cardPath, readerPath, readerName, probe);
+            });
+        });
     if (queued) {
-        return; // the worker will resolve + marshal the result
+        return; // the worker will probe + marshal the result
     }
     // Backpressure: the reader's worker queue is momentarily at its cap. Do NOT
     // drop the resolve — reschedule it on the loop thread after a short delay so it
     // retries once the backlog drains.
-    rescheduleCardResolve(cardPath, readerPath, readerName);
+    rescheduleCardResolve(cardPath, readerPath, readerName, m_resolution.budget().firstDelay);
 }
 
 void AgentFrontend::rescheduleCardResolve(const std::string& cardPath, const std::string& readerPath,
-                                          const std::string& readerName)
+                                          const std::string& readerName, std::chrono::milliseconds delay)
 {
     // postAfter hops onto the loop thread itself, so this is safe to call from the
     // monitor thread (materializeCard's scheduleCardResolve) and from a prior
     // loop-thread retry alike. Re-run only if the card is still pending (a withdraw
     // may have dropped it while we waited).
-    m_transport.postAfter(kResolveRetryDelay, [this, cardPath, readerPath, readerName] {
+    m_transport.postAfter(delay, [this, cardPath, readerPath, readerName] {
         bool stillPending = false;
         {
             std::lock_guard lock(m_cardsMutex);
@@ -234,8 +152,7 @@ void AgentFrontend::rescheduleCardResolve(const std::string& cardPath, const std
 }
 
 void AgentFrontend::applyCardResolution(const std::string& cardPath, const std::string& readerPath,
-                                        const std::string& readerName, bool opened, std::uint32_t caps,
-                                        const std::string& preReadAuth, const std::string& cardType)
+                                        const std::string& readerName, const CardProbe& probe)
 {
     // Event-loop thread (posted by the worker via the loop poster). This is the
     // deferred publish: the CardObject is CREATED here, with the held-session
@@ -243,19 +160,18 @@ void AgentFrontend::applyCardResolution(const std::string& cardPath, const std::
     // correct values from the start.
     enum class Action { Drop, Retry, Claim };
     Action action = Action::Drop;
+    std::chrono::milliseconds retryDelay{0};
     std::string atrHex;
     {
         std::lock_guard lock(m_cardsMutex);
         auto it = m_pendingCards.find(cardPath);
         if (it == m_pendingCards.end()) {
             action = Action::Drop; // removed while resolving (or already claimed)
-        } else if (!opened && it->second.resolveAttempts < kMaxResolveAttempts) {
-            // The session could not open: retry a bounded number of times before
-            // giving up. Leave the card pending. A card no plugin serves is not
-            // retried -- that is an answer, and each repeat would connect to a
-            // card that belongs to someone else, probe it and let it go.
-            ++it->second.resolveAttempts;
+        } else if (const auto wait = m_resolution.retryAfter(probe, it->second.attempts)) {
+            // The probe could not open the card and the budget allows another
+            // try. Leave the card pending.
             action = Action::Retry;
+            retryDelay = *wait;
         } else {
             // Claim for export. Leave the entry in m_pendingCards as the
             // "still-wanted" marker across the off-lock CardObject construction
@@ -269,18 +185,18 @@ void AgentFrontend::applyCardResolution(const std::string& cardPath, const std::
         return;
     }
     if (action == Action::Retry) {
-        rescheduleCardResolve(cardPath, readerPath, readerName);
+        rescheduleCardResolve(cardPath, readerPath, readerName, retryDelay);
         return;
     }
     // Build the per-card deps + create the CardObject OUTSIDE m_cardsMutex
     // (registerAdaptor is a bus call). At most one resolve is ever in flight per
     // card, so there is no competing claim here.
     auto deps = buildDepsForCard(cardPath, readerName);
-    deps.preReadAuth = preReadAuth;
-    deps.cardType = cardType;
+    deps.preReadAuth = std::string{authMethodName(probe.preReadAuth)};
+    deps.cardType = probe.cardType;
     deps.atrHex = atrHex;
-    auto card = std::make_shared<CardObject>(*m_connection, sdbus::ObjectPath{cardPath}, caps,
-                                             sdbus::ObjectPath{readerPath}, m_opManager, std::move(deps));
+    auto card = std::make_shared<CardObject>(*m_connection, sdbus::ObjectPath{cardPath}, probe.capabilities,
+                                             sdbus::ObjectPath{readerPath}, m_core, m_launcher, std::move(deps));
     std::shared_ptr<CardObject> dyingCard;
     {
         std::lock_guard lock(m_cardsMutex);
@@ -301,17 +217,13 @@ void AgentFrontend::applyCardResolution(const std::string& cardPath, const std::
     }
     log::infof("exported card {}", cardPath);
 
-    // Power hold: a card a plugin serves on the CONTACT slot of a
-    // dual-interface unit keeps its reader powered -- the reader's one session,
-    // parked with no secrets while no operation uses it -- so the same
-    // single-chip card's contactless twin stops flapping in and out of the CL
-    // slot. A card no plugin serves is not held: the probe has just let it go,
-    // and a hold would take the reader back for a card the agent cannot use.
-    // Classified from the exporter's presence roster, the same lookup the
-    // prompt dialog uses; a single-interface reader is never held. Released by
+    // Power hold: the policy's verdict over the exporter's presence roster (the
+    // same lookup the prompt dialog uses). The held reader keeps the probe's
+    // session parked with no secrets while no operation uses it, so the same
+    // single-chip card's contactless twin stops flapping. Released by
     // AgentService's card-removed hook.
-    if (caps != 0 && isContactSlotOfDualInterfaceUnit(m_transport.presenceRoster(), cardPath)) {
-        m_opManager.setReaderHold(objectIdFromPath(readerPath), true);
+    if (CardResolutionPolicy::holdsReader(probe, m_transport.presenceRoster(), cardPath)) {
+        m_core.operationManager().setReaderHold(objectIdFromPath(readerPath), true);
         log::infof("reader {}: holding the contact interface to quiet its contactless twin", readerName);
     }
 }
@@ -321,7 +233,8 @@ void AgentFrontend::materializeReader(const ReaderState& reader)
     const std::string readerPath = agentObjectPath("reader", reader.id);
     auto readerObj = std::make_unique<ReaderObject>(
         *m_connection, sdbus::ObjectPath{readerPath}, reader.name, reader.hasCard,
-        sdbus::ObjectPath{reader.card.valid() ? agentObjectPath("card", reader.card) : "/"});
+        sdbus::ObjectPath{reader.card.valid() ? agentObjectPath("card", reader.card) : "/"}, reader.model,
+        Wire::readerInterfaceToken(reader.iface));
     // The ReaderObject is constructed (registerAdaptor, sd-bus lock) OUTSIDE
     // m_readersMutex; only the map mutation is guarded.
     {
@@ -356,7 +269,7 @@ void AgentFrontend::materializeCard(const CardState& card)
         deps.cardType = card.cardType;
         deps.atrHex = card.atrHex;
         auto cardObj = std::make_shared<CardObject>(*m_connection, sdbus::ObjectPath{cardPath}, card.capabilities,
-                                                    sdbus::ObjectPath{readerPath}, m_opManager, std::move(deps));
+                                                    sdbus::ObjectPath{readerPath}, m_core, m_launcher, std::move(deps));
         {
             std::lock_guard lock(m_cardsMutex);
             m_cards.insert_or_assign(cardPath, std::move(cardObj));
@@ -376,7 +289,7 @@ void AgentFrontend::materializeCard(const CardState& card)
     // correction a snapshot-only client would miss).
     {
         std::lock_guard lock(m_cardsMutex);
-        m_pendingCards.insert_or_assign(cardPath, PendingCard{readerPath, readerName, 0, card.atrHex});
+        m_pendingCards.insert_or_assign(cardPath, PendingCard{readerPath, readerName, {}, card.atrHex});
     }
     scheduleCardResolve(cardPath, readerPath, readerName);
 }
@@ -385,7 +298,7 @@ std::function<void(const std::string&)> AgentFrontend::makeCardTypeResolvedCallb
 {
     // Value-captured now (on whichever thread builds this card's deps), so the
     // callback itself never dereferences the transport off the loop thread —
-    // the same worker->loop marshal discipline as makeCardResolver.
+    // the same worker->loop marshal discipline as scheduleCardResolve.
     auto sink = m_transport.loopPostSink();
     return [this, sink, cardPath](const std::string& cardType) {
         sink(std::chrono::microseconds{0}, [this, cardPath, cardType] { applyCardTypeUpdate(cardPath, cardType); });
@@ -456,6 +369,23 @@ void AgentFrontend::updateReaderProperties(ObjectId reader, const PropertyDelta&
                                   sdbus::ObjectPath{delta.card.valid() ? agentObjectPath("card", delta.card) : "/"});
 }
 
+void AgentFrontend::relabelReader(const ReaderState& reader)
+{
+    // Same serialisation and lock discipline as updateReaderProperties: the
+    // registry fires this under MonitorBridge::m_stateMutex, and the
+    // PropertiesChanged emission stays outside m_readersMutex.
+    ReaderObject* readerObj = nullptr;
+    {
+        const std::lock_guard guard(m_readersMutex);
+        auto it = m_readers.find(agentObjectPath("reader", reader.id));
+        if (it == m_readers.end() || !it->second) {
+            return;
+        }
+        readerObj = it->second.get();
+    }
+    readerObj->updateLabel(reader.model, Wire::readerInterfaceToken(reader.iface));
+}
+
 void AgentFrontend::withdrawObject(ObjectId id)
 {
     // The ObjectId is a single per-process counter, so a reader path and a card
@@ -478,7 +408,7 @@ void AgentFrontend::withdrawObject(ObjectId id)
         // spins a fresh worker. removeReader + ~ReaderObject (unregisterAdaptor
         // takes the sd-bus lock) run OUTSIDE m_readersMutex; the map entry is
         // already gone, so a concurrent read sees no reader.
-        m_opManager.removeReader(id);
+        m_core.operationManager().removeReader(id);
         dyingReader.reset();
         log::infof("unexported reader {}", readerPath);
         return;

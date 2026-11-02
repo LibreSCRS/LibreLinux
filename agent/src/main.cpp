@@ -3,7 +3,7 @@
 #include "AgentService.h"
 #include "ConfigPaths.h"
 #include "PluginDirectory.h"
-#include <LibreSCRS/Agent/backend/Logging.h>
+#include <LibreSCRS/Logging.h>
 #include <LibreSCRS/Agent/presence/PluginCapabilityResolver.h>
 #include <LibreSCRS/Plugin/CardPluginService.h>
 #include <LibreSCRS/Trust/TrustStoreService.h>
@@ -35,10 +35,11 @@ int main(int /*argc*/, char** /*argv*/)
     // that filter and is out of scope for this hardening step.
     ::prctl(PR_SET_DUMPABLE, 0, 0, 0, 0);
 
-    // Wire the logging facade at the composition root. An empty sink selects the
+    // Wire the one logging facade at the composition root: the middleware, the
+    // agent core and this host all write through it. An empty sink selects the
     // built-in journald (syslog-priority-prefixed std::clog) sink; the category
     // is passed explicitly so the librescrs form is owner-visible here.
-    LibreSCRS::Agent::log::init({}, "rs.librescrs.agent");
+    LibreSCRS::log::init({}, "rs.librescrs.agent");
 
     // Resolve the plugin directory and SAY SO. A directory that yields no
     // plugins makes every card report as unusable, which is indistinguishable
@@ -61,8 +62,7 @@ int main(int /*argc*/, char** /*argv*/)
     if (auto trustResult = LibreSCRS::Trust::TrustStoreService::create({}); trustResult) {
         cardTrust = std::move(*trustResult);
     } else {
-        LibreSCRS::Agent::log::warnf("card verification anchors unavailable: {}",
-                                     trustResult.error().userMessage.defaultText);
+        LibreSCRS::log::warnf("card verification anchors unavailable: {}", trustResult.error().userMessage.defaultText);
     }
 
     auto pluginService = std::make_shared<LibreSCRS::Plugin::CardPluginService>(

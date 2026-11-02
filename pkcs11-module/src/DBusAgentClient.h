@@ -45,9 +45,9 @@ public:
 
     /// @brief Cached: re-enumerates from the bus only when the cache is dirty
     ///        (first call, or after an ObjectManager InterfacesAdded/Removed
-    ///        signal flipped a reader/card). Live presence changes therefore
-    ///        surface on the next C_GetSlotList without a per-call
-    ///        ReadCertificates.
+    ///        signal flipped a reader/card, or the last enumeration failed
+    ///        somewhere). Live presence changes therefore surface on the next
+    ///        C_GetSlotList without a per-call ReadCertificates.
     [[nodiscard]] AgentSnapshot snapshot() override;
 
     [[nodiscard]] BytesResult certDer(const std::string& reader, const std::string& certId) override;
@@ -78,7 +78,8 @@ public:
 
 private:
     /// @brief Do the actual ObjectManager + ReadCertificates enumeration (no cache).
-    [[nodiscard]] AgentSnapshot enumerate();
+    ///        @p complete is false when any part of it failed.
+    [[nodiscard]] AgentSnapshot enumerate(bool& complete);
 
     struct Impl;
     std::unique_ptr<Impl> m_impl;

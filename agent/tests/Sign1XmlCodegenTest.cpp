@@ -20,7 +20,7 @@ using MetaMap = std::map<std::string, sdbus::Variant>;
 // Result(h signedArtifact, a{sv} meta).
 static_assert(std::is_invocable_v<decltype(&Adaptor::emitResult), Adaptor&, const sdbus::UnixFd&, const MetaMap&>,
               "Sign1.Result wire shape frozen as (h, a{sv}); the generated emitResult signature drifted from the shape "
-              "declared in dbus/org.librescrs.Agent.Operation.Sign1.xml");
+              "declared in org.librescrs.Agent.Operation.Sign1.xml");
 
 // GetResult() -> (h, a{sv}) is a private pure-virtual per sdbus-c++ convention;
 // verify it exists with the documented return shape by overriding it.
@@ -33,7 +33,7 @@ private:
     }
 };
 static_assert(!std::is_abstract_v<Sign1Probe>, "Sign1 adaptor must expose GetResult() -> (h, a{sv}) as declared in "
-                                               "dbus/org.librescrs.Agent.Operation.Sign1.xml");
+                                               "org.librescrs.Agent.Operation.Sign1.xml");
 } // namespace
 
 TEST(Sign1Xml, ResultAndGetResultWireShapesFrozen)

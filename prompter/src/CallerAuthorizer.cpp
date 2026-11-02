@@ -82,7 +82,15 @@ bool CallerAuthorizer::isAuthorizedCaller(pid_t pid, const std::filesystem::path
     if (ec) {
         expectedCanonical = expectedPeer;
     }
-    return *callerExe == expectedCanonical;
+    if (*callerExe == expectedCanonical) {
+        return true;
+    }
+    // A package upgrade replaces the binary of an agent that keeps running, and
+    // the kernel then reports its executable as "<path> (deleted)". That is
+    // still the agent installed at the expected path, which only root can
+    // write; refusing it would fail every prompt until the session ends. The
+    // exact suffix on the exact path, nothing looser.
+    return callerExe->native() == expectedCanonical.native() + " (deleted)";
 }
 
 } // namespace LibreLinux::Prompter

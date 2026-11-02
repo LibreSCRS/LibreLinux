@@ -22,6 +22,22 @@ for f in \
     [[ -f "$f" ]] || { echo "MISSING: $f (build the project first)" >&2; exit 1; }
 done
 
+# The agent library's vocabulary headers common/PrompterWire.h names (prompter
+# kinds, reply status, the secret bound; standard library only). The configured
+# tree records the agent library's checkout when it built it from source; an
+# installed agent library's include directory is passed as LIBREAGENT_INCLUDE_DIR.
+LA_INCLUDE="${LIBREAGENT_INCLUDE_DIR:-}"
+if [[ -z "${LA_INCLUDE}" && -f "${REPO}/build/CMakeCache.txt" ]]; then
+    LA_SRC="$(sed -n 's/^LibreAgent_SOURCE_DIR:STATIC=//p' "${REPO}/build/CMakeCache.txt")"
+    if [[ -n "${LA_SRC}" ]]; then
+        LA_INCLUDE="${LA_SRC}/include"
+    fi
+fi
+[[ -f "${LA_INCLUDE}/LibreSCRS/Agent/backend/PrompterWire.h" ]] || {
+    echo "MISSING: the agent library's headers (set LIBREAGENT_INCLUDE_DIR)" >&2
+    exit 1
+}
+
 CXX="${CXX:-g++}"
 SDBUS_CFLAGS="$(pkg-config --cflags sdbus-c++)"
 SDBUS_LIBS="$(pkg-config --libs sdbus-c++)"
@@ -30,7 +46,7 @@ STD="${STD:--std=c++23}"
 echo "[build] auto-prompter ..."
 # shellcheck disable=SC2086
 "${CXX}" ${STD} -O2 -Wall -Wextra \
-    -I"${GEN_ADAPTOR}" -I"${COMMON}" \
+    -I"${GEN_ADAPTOR}" -I"${COMMON}" -I"${LA_INCLUDE}" \
     ${SDBUS_CFLAGS} \
     "${HERE}/auto-prompter.cpp" -o "${HERE}/auto-prompter" \
     ${SDBUS_LIBS} -pthread
@@ -38,17 +54,22 @@ echo "[build] auto-prompter ..."
 echo "[build] validate-prompter ..."
 # shellcheck disable=SC2086
 "${CXX}" ${STD} -O2 -Wall -Wextra \
-    -I"${GEN_PROXY}" -I"${COMMON}" \
+    -I"${GEN_PROXY}" -I"${COMMON}" -I"${LA_INCLUDE}" \
     ${SDBUS_CFLAGS} \
     "${HERE}/validate-prompter.cpp" -o "${HERE}/validate-prompter" \
     ${SDBUS_LIBS} -pthread
 
 echo "[build] sign-proof ..."
-# A pure D-Bus client: it needs neither the generated headers nor common/, only
-# sdbus-c++. Built here anyway so one command produces every binary the runners
-# expect, and so a compile break surfaces without a card in the reader.
+# A pure D-Bus client: no generated headers, only sdbus-c++ and the PKCS#11
+# module's header-only certificate read (pkcs11-module/src/CertificateRead.h,
+# which takes the interface names from common/ and the operation outcome words
+# from the agent library's headers), so the proof reads certificates exactly
+# as the module does. Built here anyway so one command
+# produces every binary the runners expect, and so a compile break surfaces
+# without a card in the reader.
 # shellcheck disable=SC2086
 "${CXX}" ${STD} -O2 -Wall -Wextra \
+    -I"${REPO}/pkcs11-module/src" -I"${COMMON}" -I"${LA_INCLUDE}" \
     ${SDBUS_CFLAGS} \
     "${HERE}/sign-proof.cpp" -o "${HERE}/sign-proof" \
     ${SDBUS_LIBS} -pthread

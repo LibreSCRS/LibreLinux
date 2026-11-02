@@ -6,6 +6,8 @@
 // designs would fail the second assertion. Runs under dbus-run-session so the
 // session bus is private; uses a fake resolver so no PC/SC is required.
 
+#include "TestAgentCore.h"
+#include "AllowAllAuthorizer.h" // test support: grants every action
 #include <LibreSCRS/Agent/backend/Authorizer.h>
 #include <LibreSCRS/Agent/AgentCore.h>
 #include <LibreSCRS/Agent/FeatureTokens.h>
@@ -59,7 +61,7 @@ class StubPlugin final : public LibreSCRS::Plugin::CardPlugin
 public:
     StubPlugin(std::string id, LibreSCRS::Plugin::CardCapabilities caps) : m_caps(caps)
     {
-        setIdentity(std::move(id), "stub", 0);
+        setIdentity(std::move(id), 0);
     }
     LibreSCRS::Plugin::CardCapabilities capabilities() const override
     {
@@ -146,20 +148,12 @@ TEST(DBusService, ExportsRealObjectsOverObjectManager)
     ObjectRegistry registry;
     FakeResolver resolver;
     PresenceModel model(registry, resolver);
-    LibreSCRS::Agent::Operations::OperationManager opManager; // bus-less; no ReadIdentity issued
     auto prompter = std::make_shared<NopPrompter>();
-    auto serializer = std::make_shared<LibreSCRS::Agent::Operations::PromptSerializer>();
-    auto credCache = std::make_shared<CredentialCache>();
-    CardReadCache readCache;
-    Config::ConfigStore cfg(testCfgDir("dbus1") / "agent.conf", testCfgDir("dbus1") / "cache");
-    LibreSCRS::Agent::Operations::SigningEngineProvider signingEngine(cfg);
     AllowAllAuthorizer authz;
-    LibreSCRS::Agent::Operations::RateLimiter rateLimiter;
+    Testing::SilentTransport coreTransport;
+    AgentCore core = Testing::makeTestCore("dbus1", resolver, coreTransport, authz, prompter);
     BusExporter exporter(*serverConn, registry);
-    auto cryptoCtx = std::make_shared<CryptoWorkerContext>(
-        CryptoWorkerContext{.prompter = prompter, .serializer = serializer, .credentials = credCache});
-    AgentFrontend frontend(exporter, serverConn, opManager, cryptoCtx, readCache, signingEngine, authz, rateLimiter,
-                           cfg, nullptr, "test-version");
+    AgentFrontend frontend(exporter, serverConn, core, "test-version");
 
     model.onReaderAdded("R0");
     model.onCardInserted("R0", {0x3B, 0x01});
@@ -221,20 +215,12 @@ TEST(DBusService, OnAddDoesNotProbeTransientOpen)
     ObjectRegistry registry;
     FakeResolver resolver;
     PresenceModel model(registry, resolver);
-    LibreSCRS::Agent::Operations::OperationManager opManager;
     auto prompter = std::make_shared<NopPrompter>();
-    auto serializer = std::make_shared<LibreSCRS::Agent::Operations::PromptSerializer>();
-    auto credCache = std::make_shared<CredentialCache>();
-    CardReadCache readCache;
-    Config::ConfigStore cfg(testCfgDir("dbus-noprobe") / "agent.conf", testCfgDir("dbus-noprobe") / "cache");
-    LibreSCRS::Agent::Operations::SigningEngineProvider signingEngine(cfg);
     AllowAllAuthorizer authz;
-    LibreSCRS::Agent::Operations::RateLimiter rateLimiter;
+    Testing::SilentTransport coreTransport;
+    AgentCore core = Testing::makeTestCore("dbus-noprobe", resolver, coreTransport, authz, prompter);
     BusExporter exporter(*serverConn, registry);
-    auto cryptoCtx = std::make_shared<CryptoWorkerContext>(
-        CryptoWorkerContext{.prompter = prompter, .serializer = serializer, .credentials = credCache});
-    AgentFrontend frontend(exporter, serverConn, opManager, cryptoCtx, readCache, signingEngine, authz, rateLimiter,
-                           cfg, nullptr, "test");
+    AgentFrontend frontend(exporter, serverConn, core, "test");
 
     // Card materialization fires synchronously inside m_registry.addCard() during onCardInserted.
     model.onReaderAdded("R0");                // reader id 1
@@ -255,20 +241,12 @@ TEST(DBusService, ManagerVersionReadableOverProperties)
     ObjectRegistry registry;
     FakeResolver resolver;
     PresenceModel model(registry, resolver);
-    LibreSCRS::Agent::Operations::OperationManager opManager;
     auto prompter = std::make_shared<NopPrompter>();
-    auto serializer = std::make_shared<LibreSCRS::Agent::Operations::PromptSerializer>();
-    auto credCache = std::make_shared<CredentialCache>();
-    CardReadCache readCache;
-    Config::ConfigStore cfg(testCfgDir("dbus2") / "agent.conf", testCfgDir("dbus2") / "cache");
-    LibreSCRS::Agent::Operations::SigningEngineProvider signingEngine(cfg);
     AllowAllAuthorizer authz;
-    LibreSCRS::Agent::Operations::RateLimiter rateLimiter;
+    Testing::SilentTransport coreTransport;
+    AgentCore core = Testing::makeTestCore("dbus2", resolver, coreTransport, authz, prompter);
     BusExporter exporter(*serverConn, registry);
-    auto cryptoCtx = std::make_shared<CryptoWorkerContext>(
-        CryptoWorkerContext{.prompter = prompter, .serializer = serializer, .credentials = credCache});
-    AgentFrontend frontend(exporter, serverConn, opManager, cryptoCtx, readCache, signingEngine, authz, rateLimiter,
-                           cfg, nullptr, "9.9.9-test");
+    AgentFrontend frontend(exporter, serverConn, core, "9.9.9-test");
 
     serverConn->enterEventLoopAsync();
 
@@ -300,20 +278,12 @@ TEST(DBusService, ManagerFeaturesReadableOverProperties)
     ObjectRegistry registry;
     FakeResolver resolver;
     PresenceModel model(registry, resolver);
-    LibreSCRS::Agent::Operations::OperationManager opManager;
     auto prompter = std::make_shared<NopPrompter>();
-    auto serializer = std::make_shared<LibreSCRS::Agent::Operations::PromptSerializer>();
-    auto credCache = std::make_shared<CredentialCache>();
-    CardReadCache readCache;
-    Config::ConfigStore cfg(testCfgDir("dbus-features") / "agent.conf", testCfgDir("dbus-features") / "cache");
-    LibreSCRS::Agent::Operations::SigningEngineProvider signingEngine(cfg);
     AllowAllAuthorizer authz;
-    LibreSCRS::Agent::Operations::RateLimiter rateLimiter;
+    Testing::SilentTransport coreTransport;
+    AgentCore core = Testing::makeTestCore("dbus-features", resolver, coreTransport, authz, prompter);
     BusExporter exporter(*serverConn, registry);
-    auto cryptoCtx = std::make_shared<CryptoWorkerContext>(
-        CryptoWorkerContext{.prompter = prompter, .serializer = serializer, .credentials = credCache});
-    AgentFrontend frontend(exporter, serverConn, opManager, cryptoCtx, readCache, signingEngine, authz, rateLimiter,
-                           cfg, nullptr, "9.9.9-test");
+    AgentFrontend frontend(exporter, serverConn, core, "9.9.9-test");
 
     serverConn->enterEventLoopAsync();
 
@@ -344,20 +314,12 @@ TEST(DBusService, HostsPkcs11InterfaceOnManagerPath)
     ObjectRegistry registry;
     FakeResolver resolver;
     PresenceModel model(registry, resolver);
-    LibreSCRS::Agent::Operations::OperationManager opManager;
     auto prompter = std::make_shared<NopPrompter>();
-    auto serializer = std::make_shared<LibreSCRS::Agent::Operations::PromptSerializer>();
-    auto credCache = std::make_shared<CredentialCache>();
-    CardReadCache readCache;
-    Config::ConfigStore cfg(testCfgDir("dbus-pkcs11") / "agent.conf", testCfgDir("dbus-pkcs11") / "cache");
-    LibreSCRS::Agent::Operations::SigningEngineProvider signingEngine(cfg);
     AllowAllAuthorizer authz;
-    LibreSCRS::Agent::Operations::RateLimiter rateLimiter;
+    Testing::SilentTransport coreTransport;
+    AgentCore core = Testing::makeTestCore("dbus-pkcs11", resolver, coreTransport, authz, prompter);
     BusExporter exporter(*serverConn, registry);
-    auto cryptoCtx = std::make_shared<CryptoWorkerContext>(
-        CryptoWorkerContext{.prompter = prompter, .serializer = serializer, .credentials = credCache});
-    AgentFrontend frontend(exporter, serverConn, opManager, cryptoCtx, readCache, signingEngine, authz, rateLimiter,
-                           cfg, nullptr, "t");
+    AgentFrontend frontend(exporter, serverConn, core, "t");
 
     serverConn->enterEventLoopAsync();
 
@@ -386,30 +348,21 @@ struct ManagerHarness
     ObjectRegistry registry;
     FakeResolver resolver;
     PresenceModel model{registry, resolver}; // unused directly (no card in this corpus); mirrors every sibling test
-    LibreSCRS::Agent::Operations::OperationManager opManager;
     std::shared_ptr<NopPrompter> prompter = std::make_shared<NopPrompter>();
-    std::shared_ptr<LibreSCRS::Agent::Operations::PromptSerializer> serializer =
-        std::make_shared<LibreSCRS::Agent::Operations::PromptSerializer>();
-    std::shared_ptr<CredentialCache> credCache = std::make_shared<CredentialCache>();
-    CardReadCache readCache;
-    Config::ConfigStore cfg;
-    LibreSCRS::Agent::Operations::SigningEngineProvider signingEngine;
     AllowAllAuthorizer authz;
-    LibreSCRS::Agent::Operations::RateLimiter rateLimiter;
+    Testing::SilentTransport coreTransport;
+    std::optional<AgentCore> core;
     std::unique_ptr<BusExporter> exporter;
-    std::shared_ptr<CryptoWorkerContext> cryptoCtx;
     std::unique_ptr<AgentFrontend> frontend;
 
     explicit ManagerHarness(const std::string& serviceName, const char* cfgDirName)
-        : serverConn(sdbus::createSessionBusConnection()),
-          cfg(testCfgDir(cfgDirName) / "agent.conf", testCfgDir(cfgDirName) / "cache"), signingEngine(cfg)
+        : serverConn(sdbus::createSessionBusConnection())
     {
         serverConn->requestName(sdbus::ServiceName{serviceName});
+        core.emplace(resolver, coreTransport, authz, prompter, Testing::testCoreDir(cfgDirName) / "agent.conf",
+                     Testing::testCoreDir(cfgDirName) / "cache", Testing::noReaderCard(), Testing::noCardKey());
         exporter = std::make_unique<BusExporter>(*serverConn, registry);
-        cryptoCtx = std::make_shared<CryptoWorkerContext>(
-            CryptoWorkerContext{.prompter = prompter, .serializer = serializer, .credentials = credCache});
-        frontend = std::make_unique<AgentFrontend>(*exporter, serverConn, opManager, cryptoCtx, readCache,
-                                                   signingEngine, authz, rateLimiter, cfg, nullptr, "t");
+        frontend = std::make_unique<AgentFrontend>(*exporter, serverConn, *core, "t");
         serverConn->enterEventLoopAsync();
     }
 };
@@ -563,10 +516,10 @@ TEST(DBusService, Pkcs11AsyncCertDerFulfilsDeferredErrorReply)
     ASSERT_NE(serverConn, nullptr);
     serverConn->requestName(sdbus::ServiceName{"org.librescrs.Agent.Test.AsyncReply"});
 
-    // This test drives the real Pkcs11_1 -> broker -> UnknownCard path, so it wires
-    // a FUNCTIONAL AgentCore-owned broker (the neutral aggregate builds the
-    // production worker-hop seams from the transport's presence snapshot) rather
-    // than the null broker the presence-only suites pass. CertDer on a card-less
+    // This test drives the real Pkcs11_1 -> broker -> UnknownCard path, so its core
+    // resolves readers from the transport's presence snapshot (the production
+    // worker-hop seams) rather than answering "no reader" as the presence-only
+    // suites' cores do. CertDer on a card-less
     // reader must reach the broker's certDer seam, which resolves no card and
     // fulfils the deferred reply with UnknownCard.
     FakeResolver resolver;
@@ -576,9 +529,7 @@ TEST(DBusService, Pkcs11AsyncCertDerFulfilsDeferredErrorReply)
     AgentCore core(resolver, exporter, authz, prompter, testCfgDir("dbus-async") / "agent.conf",
                    testCfgDir("dbus-async") / "cache", makeResolveReaderCard(exporter), makeResolveCardKey(exporter));
     exporter.observePresenceFrom(core.objectRegistry());
-    AgentFrontend frontend(exporter, serverConn, core.operationManager(), core.sharedCryptoContext(),
-                           core.cardReadCache(), core.signingEngineProvider(), core.authorizer(), core.rateLimiter(),
-                           core.configStore(), &core.pkcs11(), "t");
+    AgentFrontend frontend(exporter, serverConn, core, "t");
 
     serverConn->enterEventLoopAsync();
 
@@ -626,9 +577,7 @@ std::string pkcs11ErrorName(const char* service, const char* cfg, Call call)
     AgentCore core(resolver, exporter, authz, prompter, testCfgDir(cfg) / "agent.conf", testCfgDir(cfg) / "cache",
                    makeResolveReaderCard(exporter), makeResolveCardKey(exporter));
     exporter.observePresenceFrom(core.objectRegistry());
-    AgentFrontend frontend(exporter, serverConn, core.operationManager(), core.sharedCryptoContext(),
-                           core.cardReadCache(), core.signingEngineProvider(), core.authorizer(), core.rateLimiter(),
-                           core.configStore(), &core.pkcs11(), "t");
+    AgentFrontend frontend(exporter, serverConn, core, "t");
 
     serverConn->enterEventLoopAsync();
 
@@ -762,20 +711,12 @@ TEST(DBusService, MultipleReadersAndCardsAllExported)
     ObjectRegistry registry;
     FakeResolver resolver;
     PresenceModel model(registry, resolver);
-    LibreSCRS::Agent::Operations::OperationManager opManager;
     auto prompter = std::make_shared<NopPrompter>();
-    auto serializer = std::make_shared<LibreSCRS::Agent::Operations::PromptSerializer>();
-    auto credCache = std::make_shared<CredentialCache>();
-    CardReadCache readCache;
-    Config::ConfigStore cfg(testCfgDir("dbus3") / "agent.conf", testCfgDir("dbus3") / "cache");
-    LibreSCRS::Agent::Operations::SigningEngineProvider signingEngine(cfg);
     AllowAllAuthorizer authz;
-    LibreSCRS::Agent::Operations::RateLimiter rateLimiter;
+    Testing::SilentTransport coreTransport;
+    AgentCore core = Testing::makeTestCore("dbus3", resolver, coreTransport, authz, prompter);
     BusExporter exporter(*serverConn, registry);
-    auto cryptoCtx = std::make_shared<CryptoWorkerContext>(
-        CryptoWorkerContext{.prompter = prompter, .serializer = serializer, .credentials = credCache});
-    AgentFrontend frontend(exporter, serverConn, opManager, cryptoCtx, readCache, signingEngine, authz, rateLimiter,
-                           cfg, nullptr, "test");
+    AgentFrontend frontend(exporter, serverConn, core, "test");
 
     model.onReaderAdded("R0");
     model.onReaderAdded("R1");
@@ -854,20 +795,12 @@ TEST(DBusService, EmitsInterfacesAddedWhenReaderMaterialises)
     ObjectRegistry registry;
     FakeResolver resolver;
     PresenceModel model(registry, resolver);
-    LibreSCRS::Agent::Operations::OperationManager opManager;
     auto prompter = std::make_shared<NopPrompter>();
-    auto serializer = std::make_shared<LibreSCRS::Agent::Operations::PromptSerializer>();
-    auto credCache = std::make_shared<CredentialCache>();
-    CardReadCache readCache;
-    Config::ConfigStore cfg(testCfgDir("dbus-ifadd-reader") / "agent.conf", testCfgDir("dbus-ifadd-reader") / "cache");
-    LibreSCRS::Agent::Operations::SigningEngineProvider signingEngine(cfg);
     AllowAllAuthorizer authz;
-    LibreSCRS::Agent::Operations::RateLimiter rateLimiter;
+    Testing::SilentTransport coreTransport;
+    AgentCore core = Testing::makeTestCore("dbus-ifadd-reader", resolver, coreTransport, authz, prompter);
     BusExporter exporter(*serverConn, registry);
-    auto cryptoCtx = std::make_shared<CryptoWorkerContext>(
-        CryptoWorkerContext{.prompter = prompter, .serializer = serializer, .credentials = credCache});
-    AgentFrontend frontend(exporter, serverConn, opManager, cryptoCtx, readCache, signingEngine, authz, rateLimiter,
-                           cfg, nullptr, "test");
+    AgentFrontend frontend(exporter, serverConn, core, "test");
     serverConn->enterEventLoopAsync();
 
     auto clientConn = sdbus::createSessionBusConnection();
@@ -913,20 +846,12 @@ TEST(DBusService, EmitsInterfacesAddedWhenCardMaterialises)
     ObjectRegistry registry;
     FakeResolver resolver;
     PresenceModel model(registry, resolver);
-    LibreSCRS::Agent::Operations::OperationManager opManager;
     auto prompter = std::make_shared<NopPrompter>();
-    auto serializer = std::make_shared<LibreSCRS::Agent::Operations::PromptSerializer>();
-    auto credCache = std::make_shared<CredentialCache>();
-    CardReadCache readCache;
-    Config::ConfigStore cfg(testCfgDir("dbus-ifadd-card") / "agent.conf", testCfgDir("dbus-ifadd-card") / "cache");
-    LibreSCRS::Agent::Operations::SigningEngineProvider signingEngine(cfg);
     AllowAllAuthorizer authz;
-    LibreSCRS::Agent::Operations::RateLimiter rateLimiter;
+    Testing::SilentTransport coreTransport;
+    AgentCore core = Testing::makeTestCore("dbus-ifadd-card", resolver, coreTransport, authz, prompter);
     BusExporter exporter(*serverConn, registry);
-    auto cryptoCtx = std::make_shared<CryptoWorkerContext>(
-        CryptoWorkerContext{.prompter = prompter, .serializer = serializer, .credentials = credCache});
-    AgentFrontend frontend(exporter, serverConn, opManager, cryptoCtx, readCache, signingEngine, authz, rateLimiter,
-                           cfg, nullptr, "test");
+    AgentFrontend frontend(exporter, serverConn, core, "test");
     serverConn->enterEventLoopAsync();
 
     auto clientConn = sdbus::createSessionBusConnection();
@@ -977,21 +902,12 @@ TEST(DBusService, EmitsInterfacesRemovedWhenCardWithdrawn)
     ObjectRegistry registry;
     FakeResolver resolver;
     PresenceModel model(registry, resolver);
-    LibreSCRS::Agent::Operations::OperationManager opManager;
     auto prompter = std::make_shared<NopPrompter>();
-    auto serializer = std::make_shared<LibreSCRS::Agent::Operations::PromptSerializer>();
-    auto credCache = std::make_shared<CredentialCache>();
-    CardReadCache readCache;
-    Config::ConfigStore cfg(testCfgDir("dbus-ifremove-card") / "agent.conf",
-                            testCfgDir("dbus-ifremove-card") / "cache");
-    LibreSCRS::Agent::Operations::SigningEngineProvider signingEngine(cfg);
     AllowAllAuthorizer authz;
-    LibreSCRS::Agent::Operations::RateLimiter rateLimiter;
+    Testing::SilentTransport coreTransport;
+    AgentCore core = Testing::makeTestCore("dbus-ifremove-card", resolver, coreTransport, authz, prompter);
     BusExporter exporter(*serverConn, registry);
-    auto cryptoCtx = std::make_shared<CryptoWorkerContext>(
-        CryptoWorkerContext{.prompter = prompter, .serializer = serializer, .credentials = credCache});
-    AgentFrontend frontend(exporter, serverConn, opManager, cryptoCtx, readCache, signingEngine, authz, rateLimiter,
-                           cfg, nullptr, "test");
+    AgentFrontend frontend(exporter, serverConn, core, "test");
     serverConn->enterEventLoopAsync();
 
     auto clientConn = sdbus::createSessionBusConnection();

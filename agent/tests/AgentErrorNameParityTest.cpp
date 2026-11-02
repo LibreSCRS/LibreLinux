@@ -2,10 +2,11 @@
 // SPDX-FileCopyrightText: 2026 hirashix0
 //
 // The D-Bus error-name table in common/AgentErrorNames.h and the agent wire's
-// own SyncError vocabulary are two spellings of one set of refusals. Moving
-// the backend onto the wire's spelling would mean the Qt-free PKCS#11 module
-// linking LibreAgent::Wire — and qcbor with it — for the sake of twelve
-// strings. So the table stays where it is, and this pins it instead.
+// own SyncError vocabulary are two spellings of one set of refusals. The agent
+// names a refusal from the wire's spelling (syncErrorBusName); the Qt-free
+// PKCS#11 module, which does not link LibreAgent::Wire -- and qcbor with it --
+// recognises it by the table. So the table stays for the module, and this pins
+// it to what the agent raises.
 //
 // A drift here is not cosmetic: the module maps these names back to a Status,
 // and a name that stops matching degrades silently to the generic error.

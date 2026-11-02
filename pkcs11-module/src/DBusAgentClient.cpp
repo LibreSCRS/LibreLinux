@@ -5,6 +5,7 @@
 
 #include "AgentInterfaceNames.h" // shared service/path/interface names
 #include "CertResultWire.h"
+#include "CertificateRead.h" // the one way a certificate read is collected
 
 #include "AgentErrorNames.h" // shared wire error-name table (LibreLinux::AgentWire)
 
@@ -12,11 +13,13 @@
 
 #include <atomic>
 #include <chrono>
-#include <condition_variable>
+#include <cstdint>
 #include <map>
 #include <mutex>
+#include <set>
 #include <string>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace LibreSCRS::Pkcs11Agent {
@@ -26,31 +29,32 @@ namespace {
 // Service / path / interface names live in common/AgentInterfaceNames.h (shared
 // with the agent producer and the test fake so none can drift).
 using LibreLinux::AgentWire::kCardIface;
-using LibreLinux::AgentWire::kCertificatesIface;
 using LibreLinux::AgentWire::kObjectManagerIface;
-using LibreLinux::AgentWire::kOperation1Iface;
 using LibreLinux::AgentWire::kPkcs11Iface;
 using LibreLinux::AgentWire::kReaderIface;
 using LibreLinux::AgentWire::kRootPath;
 using LibreLinux::AgentWire::kServiceName;
 
-// sd-bus's default method-call timeout is ~25s. A human-paced PIN prompt (and
-// the on-card op behind it) routinely exceeds that, and a timeout surfaces as
-// org.freedesktop.DBus.Error.NoReply -> CKR_DEVICE_REMOVED while the agent is
-// still prompting. Give the human-interactive calls (Login/SignRaw/Decrypt/
-// Derive) a very generous budget; the public-data fetches (CertDer/PublicKey/
-// EcPublicKey) a smaller one (mirrors the 60s readCerts wait).
-constexpr std::chrono::seconds kInteractiveTimeout{600}; // PIN prompt + on-card op
-constexpr std::chrono::seconds kPublicDataTimeout{60};   // CertDer / PublicKey / EcPublicKey
-// LoginState: asked about once a second by a loader that is about to sign, so
-// an agent that does not answer must not hold the loader for long.
-constexpr std::chrono::seconds kLoginStateTimeout{2};
+// sd-bus's default method-call timeout is ~25s, which a human-paced PIN prompt
+// routinely exceeds; a timeout would surface as NoReply -> CKR_DEVICE_REMOVED
+// while the agent is still prompting. The budgets are the module's, the same
+// on every transport (pkcs11/AgentClient.h).
+constexpr std::chrono::seconds kInteractiveTimeout{kInteractiveTimeoutSecs};
+constexpr std::chrono::seconds kPublicDataTimeout{kPublicDataTimeoutSecs};
+constexpr std::chrono::seconds kLoginStateTimeout{kLoginStateTimeoutSecs};
 
-// RFC 5280 §4.2.1.3 KeyUsage bit ordinals (== the agent's frozen
-// Certificates1 keyUsageBits mask). Decrypt needs keyEncipherment OR
-// dataEncipherment.
-constexpr std::uint32_t kKeyEnciphermentBit = 1U << 2;
-constexpr std::uint32_t kDataEnciphermentBit = 1U << 3;
+// Card1.PreReadAuthMethod as the agent spells it. A method this module does
+// not know asks for a secret before reading, like an MRZ: no key on such a card
+// signs or decrypts through this module (certEntryFrom decides what does).
+LibreSCRS::Agent::Wire::PreReadAuth preReadAuthFromToken(const std::string& token) noexcept
+{
+    using LibreSCRS::Agent::Wire::PreReadAuth;
+    if (token == "None")
+        return PreReadAuth::None;
+    if (token == "Can")
+        return PreReadAuth::Can;
+    return PreReadAuth::Mrz;
+}
 
 // The ObjectManager GetManagedObjects return type.
 using ManagedObjects = std::map<sdbus::ObjectPath, std::map<std::string, std::map<std::string, sdbus::Variant>>>;
@@ -98,12 +102,21 @@ struct DBusAgentClient::Impl
     AgentSnapshot cached;
     std::atomic<bool> dirty{true}; // first snapshot() always enumerates
 
+    // Cards whose last read ended in a way asking again would repeat
+    // (CertificateRead::settled), kept until the next ObjectManager signal.
+    // Another card's failed read re-enumerates; it must not re-read these,
+    // or a CAN window the holder cancelled comes back on every slot query.
+    // A read started before a signal is not recorded after it (generation).
+    std::mutex settledMtx;
+    std::set<std::string> settledCards;
+    std::uint64_t generation = 0;
+
     // Public-key cache keyed by certId. A cert's public key is immutable, so
     // once fetched it is served from here (ssh/NSS read CKA_MODULUS /
     // CKA_PUBLIC_EXPONENT or CKA_EC_POINT repeatedly). Only successful fetches
     // are cached; an error is retried on the next call.
     std::mutex pubKeyMtx;
-    std::map<std::string, PublicKeyResult> pubKeyCache;
+    std::map<std::string, LibreSCRS::Agent::Operations::CertPublicKey> pubKeyCache;
 
     Impl()
     {
@@ -118,11 +131,13 @@ struct DBusAgentClient::Impl
                 .onInterface(sdbus::InterfaceName{kObjectManagerIface})
                 .call([this](const sdbus::ObjectPath&,
                              const std::map<std::string, std::map<std::string, sdbus::Variant>>&) {
+                    forgetSettled();
                     dirty.store(true, std::memory_order_release);
                 });
             rootProxy->uponSignal(sdbus::SignalName{"InterfacesRemoved"})
                 .onInterface(sdbus::InterfaceName{kObjectManagerIface})
                 .call([this](const sdbus::ObjectPath&, const std::vector<std::string>&) {
+                    forgetSettled();
                     dirty.store(true, std::memory_order_release);
                     // Hygiene: a card-remove invalidates the per-certId public
                     // keys too. Public data, so no leak, but a removed card's key
@@ -165,56 +180,50 @@ struct DBusAgentClient::Impl
         }
     }
 
+    void forgetSettled()
+    {
+        const std::lock_guard lk(settledMtx);
+        settledCards.clear();
+        ++generation;
+    }
+    [[nodiscard]] std::uint64_t currentGeneration()
+    {
+        const std::lock_guard lk(settledMtx);
+        return generation;
+    }
+    [[nodiscard]] bool isSettled(const std::string& card)
+    {
+        const std::lock_guard lk(settledMtx);
+        return settledCards.contains(card);
+    }
+    void settle(const std::string& card, std::uint64_t readGeneration)
+    {
+        const std::lock_guard lk(settledMtx);
+        if (readGeneration == generation)
+            settledCards.insert(card);
+    }
+
+    enum class ReadOutcome {
+        Read,     // the certificates are in out
+        Settled,  // no certificates, and asking again would end the same way
+        AskAgain, // failed on the way to the card; the snapshot is not kept
+    };
+
     // Drive a per-card ReadCertificates operation and collect its
-    // Certificates1.Result entries (waits for Operation1.Finished). Returns
-    // false on any failure (the snapshot then carries no certs for that card).
-    bool readCerts(const sdbus::ObjectPath& cardPath, std::vector<CertResultEntry>& out)
+    // certificates once it has finished.
+    ReadOutcome readCerts(const sdbus::ObjectPath& cardPath, std::vector<CertResultEntry>& out)
     {
         try {
-            auto cardProxy = sdbus::createProxy(*conn, sdbus::ServiceName{kServiceName}, cardPath);
-            sdbus::ObjectPath opPath;
-            cardProxy->callMethod("ReadCertificates")
-                .onInterface(sdbus::InterfaceName{kCardIface})
-                .storeResultsTo(opPath);
-
-            // State BEFORE the proxy that owns the handlers, so the proxy dies
-            // FIRST and no signal can be delivered into a dead frame. sdbus-c++
-            // keeps a handler armed for as long as its proxy lives and runs it
-            // on the event-loop thread; with the proxy declared first it
-            // outlived the mutex and condition variable its handlers lock, and
-            // a Result or Finished arriving in that window locked a destroyed
-            // std::mutex. The correctly ordered exemplar is e2e/sign-proof.cpp.
-            std::mutex mtx;
-            std::condition_variable cv;
-            bool finished = false;
-            std::uint32_t status = 2; // default Error
-            std::vector<CertResultEntry> entries;
-
-            auto opProxy = sdbus::createProxy(*conn, sdbus::ServiceName{kServiceName}, opPath);
-
-            opProxy->uponSignal(sdbus::SignalName{"Result"})
-                .onInterface(sdbus::InterfaceName{kCertificatesIface})
-                .call([&](const std::vector<CertResultEntry>& certs) {
-                    std::lock_guard lk(mtx);
-                    entries = certs;
-                });
-            opProxy->uponSignal(sdbus::SignalName{"Finished"})
-                .onInterface(sdbus::InterfaceName{kOperation1Iface})
-                .call([&](std::uint32_t st, std::uint32_t, const std::string&, const std::string&) {
-                    std::lock_guard lk(mtx);
-                    status = st;
-                    finished = true;
-                    cv.notify_all();
-                });
-
-            std::unique_lock lk(mtx);
-            const bool done = cv.wait_for(lk, std::chrono::seconds(60), [&] { return finished; });
-            if (!done || status != 0 /*Ok*/)
-                return false;
-            out = std::move(entries);
-            return true;
+            auto read = readCertificates(*conn, cardPath);
+            if (read.ok()) {
+                out = std::move(read.certificates);
+                return ReadOutcome::Read;
+            }
+            return read.settled() ? ReadOutcome::Settled : ReadOutcome::AskAgain;
+        } catch (const sdbus::Error& e) {
+            return refusalSettles(e.getName()) ? ReadOutcome::Settled : ReadOutcome::AskAgain;
         } catch (...) {
-            return false;
+            return ReadOutcome::AskAgain;
         }
     }
 };
@@ -240,20 +249,29 @@ AgentSnapshot DBusAgentClient::snapshot()
         return m_impl->cached;
     }
 
-    AgentSnapshot snap = enumerate();
+    bool complete = false;
+    AgentSnapshot snap = enumerate(complete);
     {
         std::lock_guard lk(m_impl->cacheMtx);
         m_impl->cached = snap;
     }
+    // A snapshot that failed on the way anywhere -- the agent restarting, a
+    // read that timed out or was refused as busy -- is served this once and
+    // asked for again next time, not kept until a reader or card happens to
+    // change. A read that ended for good does not make it incomplete.
+    if (!complete)
+        m_impl->dirty.store(true, std::memory_order_release);
     return snap;
 }
 
-AgentSnapshot DBusAgentClient::enumerate()
+AgentSnapshot DBusAgentClient::enumerate(bool& complete)
 {
     AgentSnapshot snap;
+    complete = false;
     if (!connected())
         return snap;
 
+    const auto readGeneration = m_impl->currentGeneration();
     ManagedObjects managed;
     try {
         m_impl->rootProxy->callMethod("GetManagedObjects")
@@ -262,6 +280,7 @@ AgentSnapshot DBusAgentClient::enumerate()
     } catch (...) {
         return snap; // agent gone -> empty snapshot (no slots)
     }
+    complete = true;
 
     // First pass: collect readers (one slot each) and their card path / pre-read.
     for (const auto& [path, ifaces] : managed) {
@@ -290,13 +309,8 @@ AgentSnapshot DBusAgentClient::enumerate()
         }
 
         if (reader.hasCard && haveCardPath) {
-            // PreReadAuthMethod is the capability signal the wire surface
-            // exposes to distinguish the two signing families: "None"
-            // (opensc/PKS — the agent supplies the signing PIN and the card
-            // signs a caller-built DigestInfo) from "Can" (NAM/IAS-ECC SSCD
-            // — the card hashes on-card and the agent drives the eSign PIN
-            // through the pkcs15 plugin). It is a behavioural capability gate,
-            // not a card-name check.
+            // PreReadAuthMethod tells the two signing families apart; what the
+            // module may do with each key is decided once, by certEntryFrom().
             std::string preRead = "None";
             try {
                 auto cardIt = managed.find(cardPath);
@@ -309,56 +323,34 @@ AgentSnapshot DBusAgentClient::enumerate()
                 }
             } catch (...) {
             }
-            // Sign is now driveable for BOTH families: "None" (opensc/PKS:
-            // agent supplies the PIN, card signs a caller-built DigestInfo) and
-            // "Can" (NAM/IAS-ECC SSCD: card hashes on-card and signs the RAW
-            // message, agent drives the eSign PIN through the pkcs15 plugin).
-            // Decrypt stays gated to "None" only — the pkcs15 plugin has no
-            // decipher primitive, so advertising decrypt for NAM would be
-            // advertise-and-fail. cardHashesOnCard selects the advertised
-            // mechanism (CKM_SHA256_RSA_PKCS vs CKM_RSA_PKCS).
-            const bool agentCanDriveSigningCredential = (preRead == "None" || preRead == "Can");
-            const bool agentCanDriveDecryptCredential = (preRead == "None");
-            const bool cardHashesOnCard = (preRead == "Can");
+            const auto preAuth = preReadAuthFromToken(preRead);
 
             std::vector<CertResultEntry> certs;
-            if (m_impl->readCerts(cardPath, certs)) {
+            const std::string card{cardPath};
+            const auto outcome =
+                m_impl->isSettled(card) ? Impl::ReadOutcome::Settled : m_impl->readCerts(cardPath, certs);
+            if (outcome == Impl::ReadOutcome::AskAgain) {
+                complete = false;
+            } else if (outcome == Impl::ReadOutcome::Settled) {
+                m_impl->settle(card, readGeneration);
+            } else {
                 for (const auto& e : certs) {
-                    CertEntry ce;
-                    ce.certId = e.get<0>();
-                    ce.signingCapable = e.get<1>();
-                    ce.keyType = LibreSCRS::Agent::keyTypeFromToken(e.get<9>());
-                    // The agent derives with EC keys only; an Other key is
-                    // never modelled, so its flag is not believed either.
-                    ce.canDerive = e.get<11>() && ce.keyType == LibreSCRS::Agent::KeyType::Ec;
-                    // A cert enters the model when its key signs or derives.
-                    if (!ce.signingCapable && !ce.canDerive)
-                        continue;
-                    // The key's own CKA_ID, as the card -- or, failing that,
-                    // the agent -- names it.
-                    ce.ckaId = e.get<8>();
-                    ce.keyBits = e.get<10>();
-                    ce.alwaysAuthenticate = e.get<7>();
-                    // Label: prefer the subject CN field if present.
-                    ce.label = ce.certId;
+                    NeutralCert cert;
+                    cert.certId = e.get<0>();
+                    cert.signingCapable = e.get<1>();
+                    cert.keyUsageBits = e.get<3>();
+                    cert.alwaysAuthenticate = e.get<7>();
+                    cert.keyId = e.get<8>();
+                    cert.keyType = LibreSCRS::Agent::keyTypeFromToken(e.get<9>());
+                    cert.keyBits = e.get<10>();
+                    cert.canDerive = e.get<11>();
                     const auto& fields = e.get<2>();
                     if (auto sg = fields.find("subject"); sg != fields.end()) {
-                        if (auto cn = sg->second.find("cn"); cn != sg->second.end()) {
-                            ce.holderName = cn->second.get<2>().get<std::string>();
-                            ce.label = ce.holderName;
-                        }
+                        if (auto cn = sg->second.find("cn"); cn != sg->second.end())
+                            cert.subjectCn = cn->second.get<2>().get<std::string>();
                     }
-                    const bool isRsa = ce.keyType == LibreSCRS::Agent::KeyType::Rsa;
-                    const std::uint32_t keyUsage = e.get<3>();
-                    const bool keyUsagePermitsDecrypt = (keyUsage & (kKeyEnciphermentBit | kDataEnciphermentBit)) != 0;
-
-                    // Decrypt and hash-on-card are RSA matters: an EC key never
-                    // decrypts, and a hash-on-card card offers an EC key
-                    // CKM_ECDSA like any other.
-                    ce.canSign = ce.signingCapable && agentCanDriveSigningCredential;
-                    ce.canDecrypt = isRsa && agentCanDriveDecryptCredential && keyUsagePermitsDecrypt;
-                    ce.signsHashOnCard = isRsa && cardHashesOnCard;
-                    reader.certs.push_back(std::move(ce));
+                    if (auto entry = certEntryFrom(cert, preAuth))
+                        reader.certs.push_back(std::move(*entry));
                 }
             }
             // What a loader shows for the token, and what tells two of them
@@ -410,10 +402,9 @@ PublicKeyResult DBusAgentClient::publicKey(const std::string& reader, const std:
                                            LibreSCRS::Agent::KeyType keyType)
 {
     using LibreSCRS::Agent::KeyType;
-    PublicKeyResult r;
+    namespace Ops = LibreSCRS::Agent::Operations;
     if (!connected()) {
-        r.status = Status::DeviceRemoved;
-        return r;
+        return std::unexpected(Status::DeviceRemoved);
     }
 
     // Serve a cached success without another round-trip. The cache holds the
@@ -422,45 +413,46 @@ PublicKeyResult DBusAgentClient::publicKey(const std::string& reader, const std:
     {
         std::lock_guard lk(m_impl->pubKeyMtx);
         if (auto it = m_impl->pubKeyCache.find(certId); it != m_impl->pubKeyCache.end()) {
-            const KeyType cached = it->second.x.empty() ? KeyType::Rsa : KeyType::Ec;
+            const KeyType cached = std::holds_alternative<Ops::EcPublicKey>(it->second) ? KeyType::Ec : KeyType::Rsa;
             if (cached != keyType) {
-                r.status = Status::NotSupported;
-                return r;
+                return std::unexpected(Status::NotSupported);
             }
             return it->second;
         }
     }
 
+    Ops::CertPublicKey key;
     try {
         auto proxy = pkcs11Proxy(*m_impl->conn);
         if (keyType == KeyType::Rsa) {
+            Ops::RsaPublicKey rsa;
             proxy->callMethod("PublicKey")
                 .onInterface(sdbus::InterfaceName{kPkcs11Iface})
                 .withTimeout(kPublicDataTimeout)
                 .withArguments(sdbus::ObjectPath{reader}, certId)
-                .storeResultsTo(r.modulus, r.exponent);
+                .storeResultsTo(rsa.modulus, rsa.exponent);
+            key = std::move(rsa);
         } else if (keyType == KeyType::Ec) {
+            Ops::EcPublicKey ec;
             proxy->callMethod("EcPublicKey")
                 .onInterface(sdbus::InterfaceName{kPkcs11Iface})
                 .withTimeout(kPublicDataTimeout)
                 .withArguments(sdbus::ObjectPath{reader}, certId)
-                .storeResultsTo(r.crv, r.x, r.y);
+                .storeResultsTo(ec.crv, ec.x, ec.y);
+            key = std::move(ec);
         } else {
             // No wire method serves an Other key, and none is modelled.
-            r.status = Status::NotSupported;
-            return r;
+            return std::unexpected(Status::NotSupported);
         }
-        r.status = Status::Ok;
     } catch (...) {
-        r.status = Impl::statusFromException();
-        return r; // do NOT cache errors
+        return std::unexpected(Impl::statusFromException()); // do NOT cache errors
     }
 
     {
         std::lock_guard lk(m_impl->pubKeyMtx);
-        m_impl->pubKeyCache[certId] = r;
+        m_impl->pubKeyCache[certId] = key;
     }
-    return r;
+    return key;
 }
 
 LoginResult DBusAgentClient::login(const std::string& reader)

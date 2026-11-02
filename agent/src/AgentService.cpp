@@ -4,10 +4,11 @@
 #include "AgentCoreSeams.h" // makeResolveReaderCard / makeResolveCardKey (transport seams)
 #include "AgentFrontend.h"
 #include "AgentInterfaceNames.h"
-#include "AgentObjectPath.h"                         // agentObjectPath (card ObjectId -> cache-key path)
-#include <LibreSCRS/Agent/cache/CardRemovalCaches.h> // invalidateCardRemovalCaches (shared with the removal test)
+#include "AgentObjectPath.h"                               // agentObjectPath (card ObjectId -> cache-key path)
+#include <LibreSCRS/Agent/cache/CardRemovalCaches.h>       // invalidateCardRemovalCaches (shared with the removal test)
+#include <LibreSCRS/Agent/presence/CardResolutionPolicy.h> // releaseReaderOnCardRemoved
 #include "EventLoopPoster.h"
-#include <LibreSCRS/Agent/backend/Logging.h>
+#include <LibreSCRS/Logging.h>
 #include "PolkitAuthorizer.h"
 #include <LibreSCRS/Agent/pkcs11/Pkcs11Broker.h>
 #include <LibreSCRS/Agent/trust/CscaAnchorImport.h> // publishAnchorDirectory (where the anchors a person imported live)
@@ -74,6 +75,9 @@ void AgentService::quiesce() noexcept
     // step is guarded because registerOnBus may have failed partway. The event loop
     // is already stopped here (run() has returned), so no bus thread is dispatching.
 
+    // 0) Drop the lifecycle watch: no sleep, lock or session switch reaches the
+    //    core from here on.
+    m_lifecycle.reset();
     // 1) Stop the inbound presence SOURCE first. Drains any in-flight monitor
     //    dispatch and releases the poll thread, so no further registry mutation can
     //    fire a presence observer during the rest of teardown. This is the
@@ -183,6 +187,12 @@ bool AgentService::installEventLoop()
         log::errorf("failed to create the event-loop poster: {}", e.what());
         return false;
     }
+    // polkit answers on the authorizer's own system-bus thread; a deferred
+    // method resumes on this loop thread, which owns the objects it touches.
+    if (auto* polkit = dynamic_cast<PolkitAuthorizer*>(m_authorizer.get()); polkit != nullptr) {
+        polkit->deliverAnswersThrough(
+            [poster = m_loopPoster](std::function<void()> answer) { poster->post(std::move(answer)); });
+    }
     if (m_exporter) {
         // Attach the poster by shared_ptr: the transport shared-owns it and hands out
         // a sink (loopPostSink) that the resolver closure value-captures, so a detached
@@ -209,6 +219,13 @@ void AgentService::teardownEventLoop() noexcept
     if (m_connection && m_event) {
         try {
             m_connection->detachSdEventLoop();
+        } catch (...) {
+            // Best-effort during teardown.
+        }
+    }
+    if (m_systemBus && m_event) {
+        try {
+            m_systemBus->detachSdEventLoop();
         } catch (...) {
             // Best-effort during teardown.
         }
@@ -246,21 +263,23 @@ bool AgentService::registerOnBus()
     }
 
     // Choose the client-authorization gate now that the session bus is live.
-    // Prefer polkit (its own system-bus connection + caller pid resolution via
-    // this session bus); fall back to the file-seeded DefaultAuthorizer if no
-    // system bus / no polkit is reachable.
+    // polkit is a hard dependency of every package; the authorizer opens its
+    // own system-bus connection here and asks polkitd nothing until a client
+    // calls. So the fallback below covers only a host with NO system bus at
+    // all. On a host whose system bus runs without polkitd, every
+    // CheckAuthorization fails later and each gated call answers that the
+    // authorization service did not answer -- nothing is allowed by default.
     try {
         m_authorizer = std::make_unique<PolkitAuthorizer>(*m_connection);
         log::info("client authorization gated through polkit (CheckAuthorization)");
     } catch (const sdbus::Error& e) {
-        log::warnf("polkit unavailable ({}); falling back to the default authorizer: sign and low-tier config "
+        log::warnf("no system bus ({}); falling back to the default authorizer: sign and low-tier config "
                    "stay allowed (PIN is the human-presence proof), but the trust/timestamping tier is "
                    "fail-closed and configurable only via the agent config file",
                    e.getMessage());
         m_authorizer = std::make_unique<DefaultAuthorizer>();
     } catch (const std::exception& e) {
-        log::warnf("polkit unavailable ({}); falling back to the default authorizer (trust tier fail-closed)",
-                   e.what());
+        log::warnf("no system bus ({}); falling back to the default authorizer (trust tier fail-closed)", e.what());
         m_authorizer = std::make_unique<DefaultAuthorizer>();
     }
 
@@ -327,14 +346,10 @@ bool AgentService::registerOnBus()
         m_exporter->observePresenceFrom(m_core->objectRegistry());
 
         // [4] The inbound frontend owns the exported Reader1/Card1 objects + the
-        // root ManagerObject (Manager1 + Config1 + Pkcs11_1 + ObjectManager). It
-        // re-sources every core dependency it needs from m_core accessors and
-        // borrows the core-owned PKCS#11 broker for the Pkcs11_1 surface. Built
-        // AFTER the core it borrows.
-        m_frontend = std::make_unique<AgentFrontend>(
-            *m_exporter, m_connection, m_core->operationManager(), m_core->sharedCryptoContext(),
-            m_core->cardReadCache(), m_core->signingEngineProvider(), m_core->authorizer(), m_core->rateLimiter(),
-            m_core->configStore(), &m_core->pkcs11(), m_version, m_pluginService);
+        // root ManagerObject (Manager1 + Config1 + Pkcs11_1 + ObjectManager) and the
+        // launcher every card operation goes through. It borrows the core and its
+        // PKCS#11 broker for the Pkcs11_1 surface. Built AFTER the core it borrows.
+        m_frontend = std::make_unique<AgentFrontend>(*m_exporter, m_connection, *m_core, m_version, m_pluginService);
 
         // Card-removal events from the monitor reach the core CardKeyTracker via
         // MonitorBridge; the tracker fires this callback with the dropped card's
@@ -361,15 +376,10 @@ bool AgentService::registerOnBus()
             if (m_frontend) {
                 m_frontend->onCardRemovedForLease(cardKey);
             }
-            const ObjectId readerId = m_core->presenceModel().readerIdFor(readerName);
-            // Release the power hold first (a no-op for a reader that was never
-            // held), then invalidate the session: with the card gone there is
-            // nothing left to keep powered, and the next op must re-open against
-            // whatever comes next. The worker drops the hold handle on the
-            // invalidate as well; clearing the flag here keeps a later sweep
-            // from re-acquiring one on an empty reader.
-            m_core->operationManager().setReaderHold(readerId, false);
-            m_core->operationManager().invalidateReaderSession(readerId);
+            // Release the reader's power hold and invalidate its session: with
+            // the card gone there is nothing left to keep powered, and the next
+            // op must re-open against whatever comes next.
+            releaseReaderOnCardRemoved(m_core->operationManager(), m_core->presenceModel().readerIdFor(readerName));
         });
 
         // A successful config mutation (over D-Bus or agent-internal, e.g. a
@@ -415,6 +425,22 @@ bool AgentService::registerOnBus()
     // only begins in run(), so attaching the loop here (not last) is harmless.
     if (!installEventLoop()) {
         return false;
+    }
+    // Answer sleep, screen lock and session switch the way every platform does
+    // (AgentCore::quiesce, then Manager1.Quiesced). logind talks on the system
+    // bus, so the agent opens a connection of its own there and pumps it from
+    // this loop. Without a system bus the agent still runs; it then forgets
+    // nothing on those events, which the log says.
+    try {
+        m_systemBus = sdbus::createSystemBusConnection();
+        m_lifecycle = watchSessionLifecycle(*m_systemBus, *m_core, m_stateMutex, *m_frontend);
+        m_systemBus->attachSdEventLoop(m_event);
+    } catch (const std::exception& e) {
+        log::warnf("no system bus for session lifecycle events ({}); sleep, screen lock and session switch "
+                   "leave cached secrets and PKCS#11 logins in place",
+                   e.what());
+        m_lifecycle.reset();
+        m_systemBus.reset();
     }
     try {
         // Monitor -> core presence model + key tracker -> registry -> transport ->

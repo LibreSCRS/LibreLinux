@@ -364,7 +364,7 @@ private:
 // the shutdown token is cancelled (requestCryptoShutdown analogue) and the worker
 // is abandoned while still blocked (the prompter ignores CancelCurrent). Dropping
 // the composition's prompter + prompt-gate shares leaves only the op's co-owned
-// shares (attached exactly as CardObject::attachLifetimeGuards does); the delayed
+// shares (attached exactly as the OperationLauncher does); the delayed
 // unblock then runs the SlotGuard release() + the prompter read against live
 // memory (TSan-clean), and the op skips its completion because the shutdown token
 // fired. A missing keepAlive(serializer) (the pre-fix bug) traps in release().
@@ -387,7 +387,7 @@ TEST(AgentQuiesce, AbandonedTypedOpKeepsGateAndPrompterAliveThroughCoOwnedShares
         auto op = std::make_unique<PromptingOp>(std::make_unique<RecordingChannel>(slots),
                                                 std::make_shared<OperationState>(), *serializer, *prompter);
         // Co-own the two members + bind the shutdown token, exactly as
-        // CardObject::attachLifetimeGuards does for every production typed op.
+        // the OperationLauncher does for every production typed op.
         op->keepAlive(serializer);
         op->keepAlive(prompter);
         op->bindShutdownToken(shutdown.token());
@@ -442,7 +442,7 @@ namespace {
 // blocks on a latch (the nested CAN/MRZ prompt), then writes putCan to the cache
 // the instant it "returns" — exactly what a ReadIdentity/ReadCertificates flow does
 // inside CredentialCache::requestCredential. The op holds the cache by reference
-// (the flow's `&` Deps) but the CardObject co-owns the SAME cache via a keepAlive
+// (the flow's `&` Deps) but the op co-owns the SAME cache via a keepAlive
 // share, so an abandoned read op keeps the cache alive for this write.
 class CredentialTouchingOp final : public OperationBase
 {
@@ -461,7 +461,7 @@ protected:
         // Past-the-gate write of the (co-owned) credential cache — a UAF if the
         // cache were freed with the composition and NOT co-owned by this op.
         m_cache.putCan("card-A", LibreSCRS::Secure::String{"123456"});
-        if (m_cache.hasCan("card-A")) {
+        if (m_cache.getCan("card-A").has_value()) {
             m_observed.store(kMarker, std::memory_order_release);
         }
         if (shutdownRequested()) {
@@ -481,7 +481,7 @@ private:
 
 // A typed read op is driven to its nested CAN/MRZ credential prompt, then abandoned
 // while blocked. Dropping the composition's credential-cache share leaves only the
-// op's co-owned share (attached exactly as CardObject::attachLifetimeGuards does);
+// op's co-owned share (attached exactly as the OperationLauncher does);
 // the delayed unblock then runs putCan against live memory (TSan-clean). Removing
 // the keepAlive(credentials) (the pre-fix bug) traps in putCan.
 TEST(AgentQuiesce, AbandonedTypedReadOpKeepsCredentialCacheAliveThroughCoOwnedShare)
@@ -501,7 +501,7 @@ TEST(AgentQuiesce, AbandonedTypedReadOpKeepsCredentialCacheAliveThroughCoOwnedSh
                                                          std::make_shared<OperationState>(), *credentials, latch,
                                                          entered, observedMarker);
         // Co-own the credential-cache share + bind the shutdown token, exactly as
-        // CardObject::attachLifetimeGuards does for every production typed op.
+        // the OperationLauncher does for every production typed op.
         op->keepAlive(credentials);
         op->bindShutdownToken(shutdown.token());
         mgr.enqueueForTest(kTypedReader, std::move(op));

@@ -4,6 +4,7 @@
 #include <LibreSCRS/Agent/backend/PromptTypes.h>
 #include <LibreSCRS/Agent/backend/PrompterClientBase.h>
 #include <chrono>
+#include <cstdint>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -80,11 +81,19 @@ private:
     // wrappers forward the kind discriminator unchanged.
     [[nodiscard]] PromptResult request(std::string_view kind, const PromptOptions& options);
 
-    // True iff the prompter on the bus implements a contract this agent can
-    // drive. Read ONCE and remembered: a property round trip in front of every
-    // dialog would put a synchronous call between the holder and their prompt,
-    // and the answer cannot change without the helper being replaced.
-    [[nodiscard]] bool prompterIsUsable();
+    // Whether the prompter on the bus implements a contract this agent can
+    // drive. A definite answer -- the version it reports, or that it reports
+    // none -- is read ONCE and remembered: a property round trip in front of
+    // every dialog would put a synchronous call between the holder and their
+    // prompt, and that answer cannot change without the helper being replaced.
+    // A helper that could not be reached at all gave no answer; nothing is
+    // remembered and the next prompt asks again.
+    enum class Usability : std::uint8_t { Usable, TooOld, Unreachable };
+    [[nodiscard]] Usability prompterUsability();
+    // Fill @p result with the refusal and return true unless the prompter is
+    // usable.
+    template <typename Result>
+    [[nodiscard]] bool refuseUnlessUsable(Result& result);
 
     std::mutex m_capabilityMutex;
     std::optional<bool> m_capability;

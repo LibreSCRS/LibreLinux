@@ -12,8 +12,10 @@
 
 #include <sdbus-c++/Error.h>
 #include <sdbus-c++/IConnection.h>
+#include <sdbus-c++/IProxy.h>
 
 #include <gtest/gtest.h>
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <vector>
@@ -64,7 +66,7 @@ TEST(Operation1Adaptor, ConstructsAndUnregistersCleanly)
     state->terminalStatus.store(2u);
     state->terminalErrorCode.store(1u);
     {
-        IdentityProbeAdaptor adaptor(*conn, sdbus::ObjectPath{"/org/librescrs/Agent/op/0"}, state);
+        IdentityProbeAdaptor adaptor(*conn, sdbus::ObjectPath{"/org/librescrs/Agent/op/0"}, state, {});
         EXPECT_EQ(adaptor.phase(), 4u);
         EXPECT_DOUBLE_EQ(adaptor.progress(), 0.75);
         EXPECT_TRUE(adaptor.isIndeterminate());
@@ -76,22 +78,30 @@ TEST(Operation1Adaptor, ConstructsAndUnregistersCleanly)
     conn->leaveEventLoop();
 }
 
-TEST(Operation1Adaptor, CancelFlagFlipsOnInvocation)
+TEST(Operation1Adaptor, CancelRunsTheRouteOnlyForTheLaunchingClient)
 {
     auto conn = sdbus::createSessionBusConnection();
     ASSERT_NE(conn, nullptr);
     conn->requestName(sdbus::ServiceName{"org.librescrs.Agent.Test.OpCancel"});
     conn->enterEventLoopAsync();
+    auto owner = sdbus::createSessionBusConnection();
+    ASSERT_NE(owner, nullptr);
+    auto other = sdbus::createSessionBusConnection();
+    ASSERT_NE(other, nullptr);
 
-    auto state = std::make_shared<OperationState>();
-    IdentityProbeAdaptor adaptor(*conn, sdbus::ObjectPath{"/org/librescrs/Agent/op/1"}, state);
+    std::atomic<int> runs{0};
+    const sdbus::ObjectPath path{"/org/librescrs/Agent/op/1"};
+    IdentityProbeAdaptor adaptor(*conn, path, std::make_shared<OperationState>(),
+                                 {.owner = owner->getUniqueName(), .run = [&runs] { ++runs; }});
+    const auto cancelFrom = [&path](sdbus::IConnection& bus) {
+        auto proxy = sdbus::createProxy(bus, sdbus::ServiceName{"org.librescrs.Agent.Test.OpCancel"}, path);
+        proxy->callMethod("Cancel").onInterface(sdbus::InterfaceName{"org.librescrs.Agent.Operation1"});
+    };
 
-    EXPECT_FALSE(state->cancelled.load());
-    adaptor.invokeCancelForTest();
-    EXPECT_TRUE(state->cancelled.load());
-    // Idempotent.
-    adaptor.invokeCancelForTest();
-    EXPECT_TRUE(state->cancelled.load());
+    cancelFrom(*other);
+    EXPECT_EQ(runs.load(), 0) << "a client that did not launch the operation ended it";
+    cancelFrom(*owner);
+    EXPECT_EQ(runs.load(), 1) << "Cancel from the launching client did not reach the operation";
 
     conn->leaveEventLoop();
 }
@@ -104,7 +114,7 @@ TEST(Operation1Adaptor, EmitWrappersAreNoexceptAndCompleteWithoutSubscribers)
     conn->enterEventLoopAsync();
 
     auto state = std::make_shared<OperationState>();
-    IdentityProbeAdaptor adaptor(*conn, sdbus::ObjectPath{"/org/librescrs/Agent/op/2"}, state);
+    IdentityProbeAdaptor adaptor(*conn, sdbus::ObjectPath{"/org/librescrs/Agent/op/2"}, state, {});
 
     // Compile-time noexcept contract.
     static_assert(noexcept(adaptor.emitFinishedNx(0u, 0u, std::string{}, std::string{})));

@@ -1,11 +1,14 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 // SPDX-FileCopyrightText: 2026 hirashix0
 #include "SecretMemfdReader.h"
+#include <LibreSCRS/Agent/SecureZero.h>
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #include <cerrno>
+#include <cstdint>
 #include <cstring>
+#include <span>
 #include <string>
 #include <utility>
 
@@ -13,18 +16,10 @@ namespace LibreSCRS::Agent {
 
 namespace {
 
-// Best-effort in-place scrub of a std::string's underlying bytes.
-// A volatile pointer prevents the compiler from optimising the loop away,
-// matching the strategy of OPENSSL_cleanse for plain byte buffers we own.
+// Zero a std::string's bytes in place with the agent's one zeroization routine.
 void scrubString(std::string& s) noexcept
 {
-    if (s.empty()) {
-        return;
-    }
-    volatile char* p = const_cast<volatile char*>(s.data());
-    for (std::size_t i = 0; i < s.size(); ++i) {
-        p[i] = 0;
-    }
+    secureZero(std::span<std::uint8_t>{reinterpret_cast<std::uint8_t*>(s.data()), s.size()});
 }
 
 void setError(std::string* out, const char* message)

@@ -7,11 +7,17 @@
 | `librescrs-agent`        | headless D-Bus session agent           | no  |
 | `librescrs-pinentry-kde` | KDE secure PIN/CAN entry prompter      | yes |
 
-The split keeps the agent Qt-free: installing only `librescrs-agent` pulls
-**no** Qt/KF6 into the closure. `librescrs-pinentry-kde` depends on the agent,
+The split keeps the agent's own binary Qt-free; the Qt/KF6 code lives in the
+prompter. The agent depends on the prompter (the exact same build), as the deb
+and rpm packages do: an agent with no prompter installs, activates over D-Bus,
+enumerates a card and then fails on the first PIN, because the interface it
+calls has no implementation. `librescrs-pinentry-kde` depends on
 `librescrs-middleware>=5.0` (it links `LibreSCRS::Secure` =
 `libLibreSCRS_Auth.so` for secure input handling), plus
-`qt6-base kcoreaddons ki18n`.
+`qt6-base kcoreaddons ki18n`, and not on the agent.
+
+The agent links `pcsclite`, so it is a dependency; the `pcscd` daemon must
+also be running for any card to be seen (`systemctl enable --now pcscd.socket`).
 
 The `PKGBUILD` is **release-shaped**: its one source is this repository's
 signed release tag, fetched with git (`#tag=$pkgver?signed`), and makepkg

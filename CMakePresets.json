@@ -37,7 +37,7 @@
       "displayName": "Release + warnings as errors",
       "inherits": "release",
       "cacheVariables": {
-        "LIBRELINUX_WERROR": "ON"
+        "LIBRESCRS_WERROR": "ON"
       }
     },
     {

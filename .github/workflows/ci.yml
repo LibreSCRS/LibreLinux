@@ -170,23 +170,22 @@ jobs:
       # dogfooding. CI builds the packaging layout (system prefix), which is
       # what distro packages ship.
       - name: Configure (Release, warnings as errors)
-        # LIBRELINUX_WERROR mirrors what the `release-strict` preset sets, but
+        # LIBRESCRS_WERROR mirrors what the `release-strict` preset sets, but
         # spelled out here because that preset also pins CMAKE_PREFIX_PATH to a
         # developer's ~/.local prefix, which is not where this job installs the
         # middleware. Keep the two in step.
         #
-        # The option is not only a severity switch: pkcs11-module/CMakeLists.txt
-        # gives librescrs-pkcs11-agent its -Wall -Wextra inside the same
-        # condition, so with it off that target is built with no warning flags
-        # at all and nothing about it is checked. The three targets it covers
-        # (LibreLinuxAgentCore, librescrs-pkcs11-agent, librescrs-pinentry-kde)
-        # are the shipped ones; test executables keep warning-only builds.
+        # It covers the three shipped targets (LibreLinuxAgentCore,
+        # librescrs-pkcs11-agent, librescrs-pinentry-kde), which all compile
+        # with the one warning set librelinux_strict_warnings() gives them, and
+        # the agent library built from source beneath them, which reads the same
+        # option; test executables keep warning-only builds.
         working-directory: LibreLinux
         run: |
           cmake -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=RelWithDebInfo \
             -DCMAKE_PREFIX_PATH="$LM_PREFIX" \
-            -DLIBRELINUX_WERROR=ON
+            -DLIBRESCRS_WERROR=ON
 
       - name: Build (agent + prompter)
         working-directory: LibreLinux
@@ -293,7 +292,7 @@ jobs:
             -DCMAKE_BUILD_TYPE=RelWithDebInfo \
             -DCMAKE_PREFIX_PATH="$LM_PREFIX" \
             -DLIBRELINUX_BUILD_PROMPTER_KDE=OFF \
-            -DLIBRELINUX_WERROR=OFF \
+            -DLIBRESCRS_WERROR=OFF \
             -DCMAKE_CXX_FLAGS="-fsanitize=address -fno-omit-frame-pointer -g" \
             -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address"
           cmake --build build-asan-p11 --target DBusAgentClientTest DBusAgentClientContractTest -j4
@@ -327,7 +326,7 @@ jobs:
             -DCMAKE_BUILD_TYPE=RelWithDebInfo \
             -DCMAKE_PREFIX_PATH="$LM_PREFIX" \
             -DLIBRELINUX_BUILD_PROMPTER_KDE=OFF \
-            -DLIBRELINUX_WERROR=OFF \
+            -DLIBRESCRS_WERROR=OFF \
             -DCMAKE_CXX_FLAGS="-fsanitize=thread -g" \
             -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=thread"
           # One spelling of the selection, used by the build, by the run and by
@@ -486,7 +485,7 @@ jobs:
           cmake -B build-packaging -G Ninja \
             -DCMAKE_BUILD_TYPE=RelWithDebInfo \
             -DCMAKE_PREFIX_PATH="$LM_PREFIX;$LA_PREFIX" \
-            -DLIBRELINUX_USE_INSTALLED_AGENT_CORE=ON
+            -DLIBRESCRS_AGENT_FROM_SOURCE=OFF
 
       - name: The build declared every source it needs
         working-directory: LibreLinux

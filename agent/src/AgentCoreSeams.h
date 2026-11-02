@@ -18,10 +18,7 @@
 #include <LibreSCRS/Agent/AgentCore.h>                   // ReaderCard, ResolveReaderCard
 #include <LibreSCRS/Agent/operations/PromptSerializer.h> // ReaderIdentityForCard
 #include <LibreSCRS/Agent/pkcs11/Pkcs11Broker.h>         // Pkcs11Broker::ResolveCardKeySeam
-#include <LibreSCRS/Agent/value/ReaderLabels.h>          // ReaderIdentity, readerIdentities
-#include <algorithm>
-#include <cstddef>
-#include <iterator>
+#include <LibreSCRS/Agent/value/ReaderLabels.h>          // identityForCardIn
 #include <optional>
 #include <string>
 
@@ -59,41 +56,9 @@ namespace LibreSCRS::Agent {
     };
 }
 
-// Card object path -> the identity of the reader holding it, or an empty
-// identity when no reader in @p roster holds that card. The LABELLING is the
-// neutral core's (readerIdentities, roster-aware because a dual-interface unit
-// is only distinguishable across the whole set); all this adds is the inverse
-// only the host can compute, since the host mints the card path.
-[[nodiscard]] inline ReaderIdentity identityForCardIn(const BusExporter::PresenceRoster& roster,
-                                                      const std::string& cardKey)
-{
-    // An empty key must not match a reader that holds no card, or every
-    // unresolvable prompt would borrow the first empty reader's name.
-    if (cardKey.empty()) {
-        return {};
-    }
-    const auto it = std::ranges::find(roster.cardPaths, cardKey);
-    if (it == roster.cardPaths.end()) {
-        return {};
-    }
-    const auto index = static_cast<std::size_t>(std::distance(roster.cardPaths.begin(), it));
-    const auto identities = readerIdentities(roster.readerNames);
-    return index < identities.size() ? identities[index] : ReaderIdentity{};
-}
-
-// The hold gate: whether the reader holding @p cardKey is the CONTACT slot of a
-// dual-interface unit. That is the one slot the agent keeps powered (a bare
-// power hold on the reader) so the same single-chip card's contactless twin
-// stops flapping. A single-interface reader classifies as Unknown and a CL
-// slot as Contactless, so neither is ever held. Same snapshot semantics as
-// identityForCardIn: one roster read, no per-entry locking.
-[[nodiscard]] inline bool isContactSlotOfDualInterfaceUnit(const BusExporter::PresenceRoster& roster,
-                                                           const std::string& cardKey)
-{
-    return identityForCardIn(roster, cardKey).iface == ReaderInterface::Contact;
-}
-
-// The seam the prompt gate stamps every dialog from. Takes a fresh snapshot per
+// The seam the prompt gate stamps every dialog from: the agent library's
+// identityForCardIn over the exporter's roster (the host mints the card path, so
+// only the host's roster can invert it to a reader). Takes a fresh snapshot per
 // call: a reader unplugged mid-operation must not leave a stale name on the next
 // prompt.
 [[nodiscard]] inline Operations::ReaderIdentityForCard makeResolveReaderIdentity(const BusExporter& transport)

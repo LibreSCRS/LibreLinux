@@ -20,6 +20,8 @@
 
 #include "AgentErrorNames.h"
 #include "AgentInterfaceNames.h"
+#include "AllowAllAuthorizer.h" // test support: grants every action
+#include <LibreSCRS/Agent/OperationPhase.h>
 #include <LibreSCRS/Agent/backend/Authorizer.h>
 #include <LibreSCRS/Agent/cache/CardRemovalCaches.h> // invalidateCardRemovalCaches (the production removal-invalidation code)
 #include "dbus/CardObject.h"
@@ -28,9 +30,10 @@
 #include <LibreSCRS/Agent/cache/CredentialSnapshotCache.h>
 #include "PrompterClient.h"
 #include "PrompterWire.h"
+#include "TestAgentCore.h"
 #include <LibreSCRS/Agent/operations/CardPluginRouting.h> // CandidateList
+#include <LibreSCRS/Agent/operations/OperationLauncher.h>
 #include <LibreSCRS/Agent/operations/OperationManager.h>
-#include <LibreSCRS/Agent/operations/PromptSerializer.h>
 #include <LibreSCRS/Agent/operations/RateLimiter.h>
 #include <LibreSCRS/Agent/operations/Seams.h> // CredentialManager
 #include <LibreSCRS/Agent/value/CredentialRecord.h>
@@ -41,6 +44,7 @@
 #include <LibreSCRS/Plugin/PinStatusEntry.h>
 #include <LibreSCRS/Plugin/PluginTypes.h>
 #include <LibreSCRS/SmartCard/CardSession.h>
+#include <LibreSCRS/SmartCard/testing/CardSessionTesting.h>
 #include <LibreSCRS/Secure/String.h>
 
 #include <sdbus-c++/sdbus-c++.h>
@@ -50,10 +54,13 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <condition_variable>
 #include <expected>
+#include <future>
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <span>
 #include <string>
 #include <thread>
@@ -83,10 +90,13 @@ int makeSealedMemfd(std::string_view bytes)
 
 // Hosts org.librescrs.Prompter1: RequestSecrets (change_pin) returns current
 // "111111" + new "222222" as sealed memfds, so the change flow gets deterministic
-// secrets. RequestSecret is present for wire-realism.
+// secrets. RequestSecret answers "111111" at once, or -- with holdPinWindow() --
+// stands like an open window until a Cancel names it.
 class FakePrompterService final : public sdbus::AdaptorInterfaces<org::librescrs::Prompter1_adaptor>
 {
 public:
+    using SecretResult = sdbus::Result<std::string, sdbus::UnixFd, std::string>;
+
     FakePrompterService(sdbus::IConnection& connection, sdbus::ObjectPath path)
         : AdaptorInterfaces(connection, std::move(path))
     {
@@ -101,12 +111,64 @@ public:
     FakePrompterService(FakePrompterService&&) = delete;
     FakePrompterService& operator=(FakePrompterService&&) = delete;
 
-private:
-    // Asynchronous on the server side (the production prompter returns while
-    // its window stands); this fake raises none, so it answers at once.
-    void RequestSecret(sdbus::Result<std::string, sdbus::UnixFd, std::string>&& result, std::string,
-                       std::map<std::string, sdbus::Variant>) override
+    // The next RequestSecret is left unanswered, as a window the user has not
+    // dealt with yet.
+    void holdPinWindow()
     {
+        const std::lock_guard lock{m_mutex};
+        m_holdNext = true;
+    }
+    // The prompt id of the window being held, once one is.
+    std::optional<std::string> waitForHeldWindow(std::chrono::milliseconds timeout)
+    {
+        std::unique_lock lock{m_mutex};
+        if (!m_cv.wait_for(lock, timeout, [this] { return m_held.has_value(); })) {
+            return std::nullopt;
+        }
+        return m_heldId;
+    }
+    std::vector<std::string> cancelledIds()
+    {
+        const std::lock_guard lock{m_mutex};
+        return m_cancelledIds;
+    }
+    // Answers a window still held as dismissed, so no request outlives the test.
+    void dismissHeldWindow()
+    {
+        std::optional<SecretResult> held;
+        {
+            const std::lock_guard lock{m_mutex};
+            held = std::exchange(m_held, std::nullopt);
+        }
+        if (held) {
+            answerDismissed(std::move(*held));
+        }
+    }
+
+private:
+    static void answerDismissed(SecretResult&& result)
+    {
+        result.returnResults(std::string{LibreLinux::PrompterWire::replyStatusToken(
+                                 LibreLinux::PrompterWire::PromptReplyStatus::Cancelled)},
+                             sdbus::UnixFd{makeSealedMemfd(""), sdbus::adopt_fd}, std::string{});
+    }
+
+    // Asynchronous on the server side (the production prompter returns while
+    // its window stands); unless told to hold, this fake raises none, so it
+    // answers at once.
+    void RequestSecret(SecretResult&& result, std::string, std::map<std::string, sdbus::Variant> options) override
+    {
+        {
+            const std::lock_guard lock{m_mutex};
+            if (m_holdNext) {
+                m_holdNext = false;
+                const auto id = options.find(LibreLinux::PrompterWire::kOptPromptId);
+                m_heldId = id != options.end() ? id->second.get<std::string>() : std::string{};
+                m_held.emplace(std::move(result));
+                m_cv.notify_all();
+                return;
+            }
+        }
         result.returnResults(std::string{"ok"}, sdbus::UnixFd{makeSealedMemfd("111111"), sdbus::adopt_fd},
                              std::string{});
     }
@@ -126,10 +188,29 @@ private:
         return LibreLinux::PrompterWire::kProtocolVersion;
     }
 
+    // Closes the held window when the dismissal names it, the way the
+    // production prompter answers a request whose window it took down.
     void Cancel(const std::string& promptId) override
     {
-        (void)promptId;
+        std::optional<SecretResult> held;
+        {
+            const std::lock_guard lock{m_mutex};
+            m_cancelledIds.push_back(promptId);
+            if (m_held && promptId == m_heldId) {
+                held = std::exchange(m_held, std::nullopt);
+            }
+        }
+        if (held) {
+            answerDismissed(std::move(*held));
+        }
     }
+
+    std::mutex m_mutex;
+    std::condition_variable m_cv;
+    bool m_holdNext = false;
+    std::optional<SecretResult> m_held;
+    std::string m_heldId;
+    std::vector<std::string> m_cancelledIds;
 };
 
 // Scriptable CredentialManager seam (test double). Ignores the session/candidates
@@ -211,11 +292,41 @@ public:
     }
 };
 
+// An authority that keeps its answer: authorizeAsync() parks the completion
+// for the test to answer -- or to drop, as an authorizer torn down while a
+// question is outstanding does.
+class HoldingAuthorizer final : public Authorizer
+{
+public:
+    [[nodiscard]] AuthorizationOutcome authorize(std::string_view, const CallerToken&) override
+    {
+        return AuthorizationOutcome::Granted;
+    }
+    void authorizeAsync(std::string_view, const CallerToken&, Completion done) override
+    {
+        const std::lock_guard lock{m_mutex};
+        m_held = std::move(done);
+        m_cv.notify_all();
+    }
+    // The completion of the question asked, once one is.
+    Completion waitForQuestion(std::chrono::milliseconds timeout)
+    {
+        std::unique_lock lock{m_mutex};
+        m_cv.wait_for(lock, timeout, [this] { return static_cast<bool>(m_held); });
+        return std::exchange(m_held, {});
+    }
+
+private:
+    std::mutex m_mutex;
+    std::condition_variable m_cv;
+    Completion m_held;
+};
+
 SessionFactory fakeSessionFactory()
 {
     return [](const std::string& r)
                -> std::expected<std::shared_ptr<LibreSCRS::SmartCard::CardSession>, LibreSCRS::SmartCard::OpenError> {
-        return LibreSCRS::SmartCard::detail::makeDetachedCardSession(r);
+        return LibreSCRS::SmartCard::Testing::makeDetachedCardSession(r);
     };
 }
 
@@ -238,29 +349,30 @@ CredentialRecord makeRecord(std::string id, std::string kind, bool canChange, bo
 // The whole agent-side composition for one test: three connections (agent bus
 // [async, hosts the CardObject], prompter bus [async, hosts the fake prompter],
 // and a dedicated prompter-client connection the worker pumps inline for its
-// blocking RequestSecrets), a client connection, and the CardObject with the
-// credential seams wired.
+// blocking RequestSecrets), a client connection, the agent core over the
+// prompter client and the authorizer the test asks for, and the CardObject
+// launching through a launcher whose credential seam is the fake.
 struct Harness
 {
     std::shared_ptr<sdbus::IConnection> agentBus;
     std::shared_ptr<sdbus::IConnection> prompterBus;
     std::shared_ptr<sdbus::IConnection> prompterClientConn;
     std::unique_ptr<FakePrompterService> prompterHost;
-    std::unique_ptr<PrompterClient> prompterClient;
-    FakeCredentialManager credMgr;
-    CredentialCache credCache;
-    CardReadCache readCache;
-    CredentialSnapshotCache snapshotCache;
-    PromptSerializer serializer;
+    std::shared_ptr<FakeCredentialManager> credMgrShare = std::make_shared<FakeCredentialManager>();
+    FakeCredentialManager& credMgr = *credMgrShare;
     AllowAllAuthorizer authorizer;
     DenyAllAuthorizer denyAuthorizer;
-    RateLimiter rateLimiter;
-    OperationManager mgr{nullptr};
+    HoldingAuthorizer holdingAuthorizer;
+    Testing::NoCandidates resolver;
+    Testing::SilentTransport transport;
+    std::optional<AgentCore> core;
+    std::optional<OperationLauncher> launcher;
     std::unique_ptr<CardObject> card;
     std::shared_ptr<sdbus::IConnection> client;
     std::string agentName;
 
-    Harness(const std::string& suffix, std::uint32_t capabilities, bool denyMutations = false)
+    Harness(const std::string& suffix, std::uint32_t capabilities, bool denyMutations = false,
+            bool holdAuthorization = false)
     {
         agentName = "org.librescrs.Agent.Test.Cred." + suffix;
         const std::string prompterName = "org.librescrs.Prompter1.Test.Cred." + suffix;
@@ -272,22 +384,22 @@ struct Harness
         agentBus->enterEventLoopAsync();
         prompterBus->enterEventLoopAsync();
         prompterClientConn = sdbus::createSessionBusConnection(); // no async loop: worker pumps it inline
-        prompterClient = std::make_unique<PrompterClient>(prompterName, kPrompterObject);
-        mgr.setSessionFactoryForTest(fakeSessionFactory());
+        Authorizer& authority = denyMutations       ? static_cast<Authorizer&>(denyAuthorizer)
+                                : holdAuthorization ? static_cast<Authorizer&>(holdingAuthorizer)
+                                                    : static_cast<Authorizer&>(authorizer);
+        const auto dir = Testing::testCoreDir("cred-" + suffix);
+        core.emplace(resolver, transport, authority, std::make_shared<PrompterClient>(prompterName, kPrompterObject),
+                     dir / "agent.conf", dir / "cache", Testing::noReaderCard(), Testing::noCardKey());
+        core->operationManager().setSessionFactoryForTest(fakeSessionFactory());
+        auto seams = Testing::unusedSeams();
+        seams.credentials = credMgrShare;
+        launcher.emplace(*core, std::move(seams));
 
         CardOperationDeps deps;
-        deps.credentialManager = &credMgr;
-        deps.prompter = prompterClient.get();
-        deps.serializer = &serializer;
-        deps.credentials = &credCache;
-        deps.snapshotCache = &snapshotCache;
-        deps.readCache = &readCache;
-        deps.authorizer = denyMutations ? static_cast<Authorizer*>(&denyAuthorizer) : &authorizer;
-        deps.rateLimiter = &rateLimiter;
         deps.cardKey = kCardPath;
         deps.readerName = "FakeReader";
         card = std::make_unique<CardObject>(*agentBus, sdbus::ObjectPath{kCardPath}, capabilities,
-                                            sdbus::ObjectPath{kReaderPath}, mgr, std::move(deps));
+                                            sdbus::ObjectPath{kReaderPath}, *core, *launcher, std::move(deps));
 
         client = sdbus::createSessionBusConnection();
         client->enterEventLoopAsync();
@@ -383,7 +495,8 @@ TEST(CredentialsDbus, IntrospectionExposesCredentials1OnCardPath)
 TEST(CredentialsDbus, ManagePinUnknownVerbRejectedAtEntry)
 {
     Harness h("BadVerb", kPinMgmtBit);
-    h.snapshotCache.put(kCardPath, CredentialSnapshot{.records = {makeRecord("user:0x01", "user", true, false)}});
+    h.core->credentialSnapshotCache().put(
+        kCardPath, CredentialSnapshot{.records = {makeRecord("user:0x01", "user", true, false)}});
     auto card = h.cardProxy();
     try {
         static_cast<void>(callManagePin(*card, "user:0x01", "frobnicate", {}));
@@ -396,7 +509,8 @@ TEST(CredentialsDbus, ManagePinUnknownVerbRejectedAtEntry)
 TEST(CredentialsDbus, ManagePinStrayOptionsKeyRejectedAtEntry)
 {
     Harness h("StrayOption", kPinMgmtBit);
-    h.snapshotCache.put(kCardPath, CredentialSnapshot{.records = {makeRecord("user:0x01", "user", true, false)}});
+    h.core->credentialSnapshotCache().put(
+        kCardPath, CredentialSnapshot{.records = {makeRecord("user:0x01", "user", true, false)}});
     auto card = h.cardProxy();
     std::map<std::string, sdbus::Variant> options;
     options.emplace("nonsenseKey", sdbus::Variant{true});
@@ -420,7 +534,8 @@ TEST(CredentialsDbus, ManagePinBadPinIdRejectedAtEntry)
         EXPECT_EQ(e.getName(), std::string{LibreLinux::AgentWire::kErrUnknownCredential});
     }
     // Snapshot present but the id is absent -> still UnknownCredential.
-    h.snapshotCache.put(kCardPath, CredentialSnapshot{.records = {makeRecord("user:0x01", "user", true, false)}});
+    h.core->credentialSnapshotCache().put(
+        kCardPath, CredentialSnapshot{.records = {makeRecord("user:0x01", "user", true, false)}});
     try {
         static_cast<void>(callManagePin(*card, "sign:0xFF", "change", {}));
         FAIL() << "an unlisted pinId must be rejected at entry";
@@ -432,7 +547,8 @@ TEST(CredentialsDbus, ManagePinBadPinIdRejectedAtEntry)
 TEST(CredentialsDbus, MissingCapabilityRejectedAtEntry)
 {
     Harness h("NoCap", 0u); // capabilities = 0: no PinManagement bit
-    h.snapshotCache.put(kCardPath, CredentialSnapshot{.records = {makeRecord("user:0x01", "user", true, false)}});
+    h.core->credentialSnapshotCache().put(
+        kCardPath, CredentialSnapshot{.records = {makeRecord("user:0x01", "user", true, false)}});
     auto card = h.cardProxy();
     for (const char* method : {"ManagePin", "ActivateSigningKey", "ListCredentials"}) {
         try {
@@ -455,7 +571,8 @@ TEST(CredentialsDbus, MissingCapabilityRejectedAtEntry)
 TEST(CredentialsDbus, ManagePinChangeHappyPathEmitsOkResultBeforeFinished)
 {
     Harness h("ChangeOk", kPinMgmtBit);
-    h.snapshotCache.put(kCardPath, CredentialSnapshot{.records = {makeRecord("user:0x01", "user", true, false)}});
+    h.core->credentialSnapshotCache().put(
+        kCardPath, CredentialSnapshot{.records = {makeRecord("user:0x01", "user", true, false)}});
     h.credMgr.changePinResult.outcome = LibreSCRS::Plugin::PINResultOutcome::Ok;
     h.credMgr.changePinResult.retriesLeft = 3;
     h.credMgr.seamDelay = 250ms; // let the client subscribe before Result fires
@@ -507,7 +624,8 @@ TEST(CredentialsDbus, ManagePinChangeUnsupportedSeamYieldsUnsupportedResult)
     // Capability present but the seam advertises nothing -> the Operation IS
     // created and the Result carries outcome=unsupported (NOT an entry error).
     Harness h("ChangeUnsupported", kPinMgmtBit);
-    h.snapshotCache.put(kCardPath, CredentialSnapshot{.records = {makeRecord("user:0x02", "user", false, false)}});
+    h.core->credentialSnapshotCache().put(
+        kCardPath, CredentialSnapshot{.records = {makeRecord("user:0x02", "user", false, false)}});
     h.credMgr.changePinResult.outcome = LibreSCRS::Plugin::PINResultOutcome::Unsupported;
 
     auto card = h.cardProxy();
@@ -582,7 +700,7 @@ TEST(CredentialsDbus, ListCredentialsReturnsRecordsWithWireKeys)
     EXPECT_EQ(rec.at("min_length").get<int>(), 4);
 
     // The listing was cached under the card path so ManagePin can address it.
-    const auto cached = h.snapshotCache.get(kCardPath);
+    const auto cached = h.core->credentialSnapshotCache().get(kCardPath);
     ASSERT_TRUE(cached);
     ASSERT_EQ(cached->records.size(), 1u);
     EXPECT_EQ(cached->records.front().id, "user:0x01");
@@ -591,7 +709,8 @@ TEST(CredentialsDbus, ListCredentialsReturnsRecordsWithWireKeys)
 TEST(CredentialsDbus, ActivateSigningKeyHappyPathReportsKeyActivated)
 {
     Harness h("ActivateOk", kPinMgmtBit);
-    h.snapshotCache.put(kCardPath, CredentialSnapshot{.records = {makeRecord("sign:0x92", "sign", false, true)}});
+    h.core->credentialSnapshotCache().put(
+        kCardPath, CredentialSnapshot{.records = {makeRecord("sign:0x92", "sign", false, true)}});
     h.credMgr.activateSigningKeyResult.outcome = LibreSCRS::Plugin::PINResultOutcome::Ok;
 
     auto card = h.cardProxy();
@@ -610,12 +729,52 @@ TEST(CredentialsDbus, ActivateSigningKeyHappyPathReportsKeyActivated)
     EXPECT_TRUE(result.at("key_activated").get<bool>());
 }
 
+// Operation1.Cancel while the PIN window stands: the window the operation
+// raised is closed by name, the operation ends Cancelled, and the card is
+// never asked to activate anything.
+TEST(CredentialsDbus, CancelWhileThePinWindowStandsClosesItAndEndsTheOp)
+{
+    Harness h("CancelAtPrompt", kPinMgmtBit);
+    h.core->credentialSnapshotCache().put(
+        kCardPath, CredentialSnapshot{.records = {makeRecord("sign:0x92", "sign", false, true)}});
+    h.credMgr.activateSigningKeyResult.outcome = LibreSCRS::Plugin::PINResultOutcome::Ok;
+    h.prompterHost->holdPinWindow();
+
+    auto card = h.cardProxy();
+    sdbus::ObjectPath opPath;
+    card->callMethod("ActivateSigningKey")
+        .onInterface(sdbus::InterfaceName{LibreLinux::AgentWire::kCredentialsIface})
+        .storeResultsTo(opPath);
+    ASSERT_FALSE(std::string{opPath}.empty());
+
+    const auto promptId = h.prompterHost->waitForHeldWindow(3s);
+    ASSERT_TRUE(promptId.has_value()) << "the operation never asked for the PIN";
+    ASSERT_FALSE(promptId->empty()) << "a window with no id cannot be dismissed by name";
+    auto op = h.opProxy(opPath);
+    sdbus::Variant phase;
+    op->callMethod("Get")
+        .onInterface(sdbus::InterfaceName{"org.freedesktop.DBus.Properties"})
+        .withArguments(std::string{LibreLinux::AgentWire::kOperation1Iface}, std::string{"Phase"})
+        .storeResultsTo(phase);
+    ASSERT_EQ(phase.get<std::uint32_t>(), static_cast<std::uint32_t>(OperationPhase::AwaitingConsent));
+
+    op->callMethod("Cancel").onInterface(sdbus::InterfaceName{LibreLinux::AgentWire::kOperation1Iface});
+
+    const int status = waitCompleted(*op);
+    const auto cancelled = h.prompterHost->cancelledIds();
+    h.prompterHost->dismissHeldWindow(); // a no-op once the Cancel closed it
+    EXPECT_EQ(cancelled, std::vector<std::string>{*promptId}) << "the standing window was not closed";
+    EXPECT_EQ(status, static_cast<int>(OperationStatus::Cancelled));
+    EXPECT_EQ(h.credMgr.activateCalls.load(), 0) << "a cancelled activation must not reach the card";
+}
+
 TEST(CredentialsDbus, ActivateSigningKeyNotActivatableIsUnsupportedNotEntryError)
 {
     // Card WITH the bit but no activatable key in the listing -> op created,
     // Result outcome=unsupported, seam never driven (capability short-circuit).
     Harness h("ActivateUnsupported", kPinMgmtBit);
-    h.snapshotCache.put(kCardPath, CredentialSnapshot{.records = {makeRecord("sign:0x92", "sign", false, false)}});
+    h.core->credentialSnapshotCache().put(
+        kCardPath, CredentialSnapshot{.records = {makeRecord("sign:0x92", "sign", false, false)}});
     auto card = h.cardProxy();
     sdbus::ObjectPath opPath;
     card->callMethod("ActivateSigningKey")
@@ -637,7 +796,7 @@ TEST(CredentialsDbus, MutationRateLimitedBeforePrompt)
     // 5, so five accepted attempts leave the sixth (the real ActivateSigningKey) denied.
     const CallerToken caller{std::string{h.client->getUniqueName()}};
     for (int i = 0; i < 5; ++i) {
-        ASSERT_TRUE(h.rateLimiter.allow(caller));
+        ASSERT_TRUE(h.core->rateLimiter().allow(caller));
     }
     auto card = h.cardProxy();
     try {
@@ -670,6 +829,58 @@ TEST(CredentialsDbus, ManagePinUnauthorizedBeforeValidation)
     }
 }
 
+// A card pulled while the authority is still deciding (a password dialog
+// open): the grant that arrives afterwards runs nothing on the withdrawn card,
+// and the caller is told that nothing was changed.
+TEST(CredentialsDbus, ACardPulledWhileTheAuthorityDecidesChangesNothing)
+{
+    Harness h("PulledMidAuth", kPinMgmtBit, /*denyMutations=*/false, /*holdAuthorization=*/true);
+    h.core->credentialSnapshotCache().put(
+        kCardPath, CredentialSnapshot{.records = {makeRecord("user:0x01", "user", true, false)}});
+    auto card = h.cardProxy();
+    auto pending = std::async(std::launch::async, [&card]() -> std::pair<std::string, std::string> {
+        try {
+            static_cast<void>(callManagePin(*card, "user:0x01", "change", {}));
+            return {};
+        } catch (const sdbus::Error& e) {
+            return {e.getName(), e.getMessage()};
+        }
+    });
+    auto answer = h.holdingAuthorizer.waitForQuestion(5s);
+    ASSERT_TRUE(answer) << "the authority was never asked";
+    h.card.reset(); // the reader monitor withdraws the card
+    answer(AuthorizationOutcome::Granted);
+    const auto [name, message] = pending.get();
+    EXPECT_EQ(name, std::string{LibreLinux::AgentWire::kErrCommunication});
+    EXPECT_NE(message.find("went away"), std::string::npos) << message;
+    EXPECT_EQ(h.credMgr.changeCalls.load(), 0);
+}
+
+// An authorizer torn down with a question outstanding (the agent stopping)
+// drops its completion unanswered. The caller still hears that nothing was
+// changed, at once, instead of nothing until its own timeout.
+TEST(CredentialsDbus, AQuestionTheAuthorizerDropsIsStillAnswered)
+{
+    Harness h("DroppedQuestion", kPinMgmtBit, /*denyMutations=*/false, /*holdAuthorization=*/true);
+    auto card = h.cardProxy();
+    const auto start = std::chrono::steady_clock::now();
+    auto pending = std::async(std::launch::async, [&card]() -> std::string {
+        try {
+            static_cast<void>(callManagePin(*card, "user:0x01", "change", {}));
+            return {};
+        } catch (const sdbus::Error& e) {
+            return e.getName();
+        }
+    });
+    {
+        auto answer = h.holdingAuthorizer.waitForQuestion(5s);
+        ASSERT_TRUE(answer) << "the authority was never asked";
+    } // dropped unanswered
+    const auto name = pending.get();
+    EXPECT_EQ(name, std::string{LibreLinux::AgentWire::kErrCommunication});
+    EXPECT_LT(std::chrono::steady_clock::now() - start, 5s) << "the caller waited for its own timeout";
+}
+
 // The rate limit shares the pre-validation posture: an over-cap caller is
 // answered RateLimited, not with a validation verdict computed on its behalf.
 TEST(CredentialsDbus, ManagePinRateLimitedBeforeValidation)
@@ -677,7 +888,7 @@ TEST(CredentialsDbus, ManagePinRateLimitedBeforeValidation)
     Harness h("RateLimitOrder", kPinMgmtBit);
     const CallerToken caller{std::string{h.client->getUniqueName()}};
     for (int i = 0; i < 5; ++i) {
-        ASSERT_TRUE(h.rateLimiter.allow(caller));
+        ASSERT_TRUE(h.core->rateLimiter().allow(caller));
     }
     auto card = h.cardProxy();
     try {
@@ -694,7 +905,8 @@ TEST(CredentialsDbus, ManagePinRateLimitedBeforeValidation)
 TEST(CredentialsDbus, ManagePinMistypedActivateKeyRejectedAtEntry)
 {
     Harness h("MistypedOption", kPinMgmtBit);
-    h.snapshotCache.put(kCardPath, CredentialSnapshot{.records = {makeRecord("user:0x01", "user", true, false)}});
+    h.core->credentialSnapshotCache().put(
+        kCardPath, CredentialSnapshot{.records = {makeRecord("user:0x01", "user", true, false)}});
     auto card = h.cardProxy();
     std::map<std::string, sdbus::Variant> options;
     options.emplace("activateKey", sdbus::Variant{std::string{"true"}}); // string, not bool
@@ -714,7 +926,7 @@ TEST(CredentialsDbus, ManagePinAmbiguousLabelRejectedAtEntry)
     Harness h("AmbiguousLabel", kPinMgmtBit);
     auto first = makeRecord("user:0x01:0", "user", true, false);
     auto second = makeRecord("user:0x01:1", "user", true, false); // same "test-pin" label
-    h.snapshotCache.put(kCardPath, CredentialSnapshot{.records = {first, second}});
+    h.core->credentialSnapshotCache().put(kCardPath, CredentialSnapshot{.records = {first, second}});
     auto card = h.cardProxy();
     try {
         static_cast<void>(callManagePin(*card, "user:0x01:0", "change", {}));

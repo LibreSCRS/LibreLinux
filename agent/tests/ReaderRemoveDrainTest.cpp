@@ -8,6 +8,8 @@
 // ops with errorCode=CardRemoved, so a queued op never strands a worker
 // thread on a torn-down reader.
 
+#include "TestAgentCore.h"
+#include "AllowAllAuthorizer.h" // test support: grants every action
 #include <LibreSCRS/Agent/backend/Authorizer.h>
 #include "AgentFrontend.h"
 #include <LibreSCRS/Agent/CryptoWorkerContext.h>
@@ -159,25 +161,15 @@ TEST(ReaderRemoveDrain, ExporterRemovalDrainsOperationManagerWorker)
     ObjectRegistry registry;
     NopResolver resolver;
     PresenceModel model(registry, resolver);
-    OperationManager mgr; // bus-less: workers + enqueueForTest + removeReader only
     auto prompter = std::make_shared<NopPrompter>();
-    auto serializer = std::make_shared<PromptSerializer>();
-    auto creds = std::make_shared<CredentialCache>();
-    CardReadCache readCache;
-    Config::ConfigStore cfg(std::filesystem::temp_directory_path() / "librescrs-test-readerdrain" / "agent.conf",
-                            std::filesystem::temp_directory_path() / "librescrs-test-readerdrain" / "cache");
-    Operations::SigningEngineProvider signingEngine(cfg);
     AllowAllAuthorizer authz;
-    Operations::RateLimiter rateLimiter;
+    Testing::SilentTransport coreTransport;
+    AgentCore core = Testing::makeTestCore("librescrs-test-readerdrain", resolver, coreTransport, authz, prompter);
     BusExporter exporter(*bus, registry);
     // The frontend owns the exported objects + the reader-removal drain (its
     // withdraw path calls OperationManager::removeReader before dropping the
-    // ReaderObject). This suite drives only the presence/drain path, so the
-    // Pkcs11_1 broker is null.
-    auto cryptoCtx = std::make_shared<CryptoWorkerContext>(
-        CryptoWorkerContext{.prompter = prompter, .serializer = serializer, .credentials = creds});
-    AgentFrontend frontend(exporter, bus, mgr, cryptoCtx, readCache, signingEngine, authz, rateLimiter, cfg, nullptr,
-                           "test");
+    // ReaderObject).
+    AgentFrontend frontend(exporter, bus, core, "test");
 
     // Publish reader -> the frontend materializes a ReaderObject on the bus.
     model.onReaderAdded(kReaderName);
@@ -192,10 +184,10 @@ TEST(ReaderRemoveDrain, ExporterRemovalDrainsOperationManagerWorker)
 
     auto pollingState = std::make_shared<OperationState>();
     auto stagedState = std::make_shared<OperationState>();
-    mgr.enqueueForTest(kReaderId,
-                       std::make_unique<PollingOp>(std::make_unique<CapturingChannel>(pollingSlots), pollingState));
-    mgr.enqueueForTest(kReaderId,
-                       std::make_unique<StagedOp>(std::make_unique<CapturingChannel>(stagedSlots), stagedState));
+    core.operationManager().enqueueForTest(
+        kReaderId, std::make_unique<PollingOp>(std::make_unique<CapturingChannel>(pollingSlots), pollingState));
+    core.operationManager().enqueueForTest(
+        kReaderId, std::make_unique<StagedOp>(std::make_unique<CapturingChannel>(stagedSlots), stagedState));
 
     // Give the worker a moment to pick up the polling op.
     std::this_thread::sleep_for(50ms);

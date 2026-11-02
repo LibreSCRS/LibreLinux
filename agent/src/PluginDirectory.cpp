@@ -179,6 +179,8 @@ void reportPluginLoad(const PluginDirResolution& resolution, const LibreSCRS::Pl
         case log::Level::Error:
             log::error(line);
             break;
+        case log::Level::Trace: // the report carries no diagnostic-only lines
+            break;
         }
     }
 }

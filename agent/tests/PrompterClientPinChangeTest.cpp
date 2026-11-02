@@ -304,6 +304,23 @@ TEST_F(PrompterClientPinChangeTest, UnauthorizedMapsToErrorAndZeroBytePairIsTole
     EXPECT_EQ(result.userMessage, "not authorized");
 }
 
+// The MRZ success word answers only a CAN request that offered the MRZ form. A
+// PIN change offers nothing of the kind, so the word is an error here -- and so
+// is a word no prompter is meant to send: neither may read as a granted pair.
+TEST_F(PrompterClientPinChangeTest, AWordThePinChangeNeverInvitedIsAnError)
+{
+    for (const char* word : {"ok_mrz", "okay"}) {
+        m_mock->setBehavior(
+            MultiBehavior{.status = word, .primaryBytes = "1234", .secondaryBytes = "5678", .userMessage = ""});
+
+        const auto result = m_client->requestPinChange(PromptOptions{});
+
+        EXPECT_EQ(result.status, PromptStatus::Error) << word;
+        EXPECT_FALSE(result.current.has_value()) << word;
+        EXPECT_FALSE(result.newPin.has_value()) << word;
+    }
+}
+
 TEST_F(PrompterClientPinChangeTest, ErrorStatusYieldsNoSecrets)
 {
     m_mock->setBehavior(

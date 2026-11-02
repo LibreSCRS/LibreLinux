@@ -36,9 +36,12 @@
 #include <LibreSCRS/SmartCard/MonitorService.h>
 #include <gtest/gtest.h>
 
+#include <chrono>
+#include <condition_variable>
 #include <cstdlib>
 #include <filesystem>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <vector>
@@ -68,6 +71,49 @@ bool hwEnabled()
     return env("LIBRESCRS_HW").has_value();
 }
 
+// The attached PC/SC readers, as a fresh MonitorService reports them: one
+// ReaderAdded per reader once the first poll runs. nullopt when the smart-card
+// subsystem refuses the process (an Error event).
+std::optional<std::vector<std::string>> attachedReaders()
+{
+    using LibreSCRS::SmartCard::MonitorEvent;
+    LibreSCRS::SmartCard::MonitorService monitor;
+    std::mutex mtx;
+    std::condition_variable cv;
+    std::vector<std::string> names;
+    bool refused = false;
+    std::size_t seen = 0;
+    const auto id = monitor.subscribe([&](const MonitorEvent& event) {
+        std::lock_guard lock(mtx);
+        if (event.kind == MonitorEvent::Kind::ReaderAdded) {
+            names.push_back(event.readerName);
+        } else if (event.kind == MonitorEvent::Kind::Error) {
+            refused = true;
+        } else {
+            return;
+        }
+        ++seen;
+        cv.notify_all();
+    });
+    {
+        std::unique_lock lock(mtx);
+        cv.wait_for(lock, std::chrono::seconds(2), [&] { return seen > 0; });
+        while (seen > 0 && !refused) {
+            const auto before = seen;
+            if (!cv.wait_for(lock, std::chrono::milliseconds(300), [&] { return seen != before; })) {
+                break;
+            }
+        }
+    }
+    // Drain: the callback refers to this frame.
+    monitor.unsubscribe(id, LibreSCRS::SmartCard::MonitorService::DrainPolicy::Drain);
+    std::lock_guard lock(mtx);
+    if (refused) {
+        return std::nullopt;
+    }
+    return names;
+}
+
 struct LiveCard
 {
     std::string readerName;
@@ -86,8 +132,7 @@ std::shared_ptr<LibreSCRS::Plugin::CardPluginService> pluginService()
 std::vector<LiveCard> discoverCards(PluginCapabilityResolver& resolver)
 {
     std::vector<LiveCard> cards;
-    LibreSCRS::SmartCard::MonitorService mon{LibreSCRS::SmartCard::MonitorService::Config::fromEnv()};
-    auto readers = mon.listReaders();
+    auto readers = attachedReaders();
     if (!readers) {
         return cards;
     }
@@ -183,8 +228,7 @@ TEST(SignHwSmokeCertRead, CandidateDetectionWithoutPace)
         GTEST_SKIP() << "set LIBRESCRS_HW=1";
     }
     auto svc = pluginService();
-    LibreSCRS::SmartCard::MonitorService mon{LibreSCRS::SmartCard::MonitorService::Config::fromEnv()};
-    auto readers = mon.listReaders();
+    auto readers = attachedReaders();
     ASSERT_TRUE(readers.has_value());
     for (const auto& name : *readers) {
         auto opened = LibreSCRS::SmartCard::CardSession::open(name);
@@ -273,8 +317,7 @@ TEST(SignHwSmokeSign, SignFirstSigningCapableCert)
     ASSERT_TRUE(target.has_value()) << "set LIBRESCRS_SIGN_READER (reader-name substring) to pick the card to sign";
 
     auto svc = pluginService();
-    LibreSCRS::SmartCard::MonitorService mon{LibreSCRS::SmartCard::MonitorService::Config::fromEnv()};
-    auto readers = mon.listReaders();
+    auto readers = attachedReaders();
     ASSERT_TRUE(readers.has_value());
     std::string readerName;
     for (const auto& r : *readers) {
@@ -374,8 +417,7 @@ TEST(SignHwSmokeSign, SignBaselineTWithRealTsa)
     ASSERT_TRUE(target.has_value()) << "set LIBRESCRS_SIGN_READER (reader-name substring) to pick the card to sign";
 
     auto svc = pluginService();
-    LibreSCRS::SmartCard::MonitorService mon{LibreSCRS::SmartCard::MonitorService::Config::fromEnv()};
-    auto readers = mon.listReaders();
+    auto readers = attachedReaders();
     ASSERT_TRUE(readers.has_value());
     std::string readerName;
     for (const auto& r : *readers) {
@@ -481,8 +523,7 @@ TEST(SignHwSmokeSign, SignBaselineLtWithTrustedList)
     ASSERT_TRUE(target.has_value()) << "set LIBRESCRS_SIGN_READER (reader-name substring) to pick the card to sign";
 
     auto svc = pluginService();
-    LibreSCRS::SmartCard::MonitorService mon{LibreSCRS::SmartCard::MonitorService::Config::fromEnv()};
-    auto readers = mon.listReaders();
+    auto readers = attachedReaders();
     ASSERT_TRUE(readers.has_value());
     std::string readerName;
     for (const auto& r : *readers) {
@@ -590,8 +631,7 @@ TEST(SignHwSmokeSign, SignBaselineTExpiredCertIsHardBlockedBeforePin)
     }
 
     auto svc = pluginService();
-    LibreSCRS::SmartCard::MonitorService mon{LibreSCRS::SmartCard::MonitorService::Config::fromEnv()};
-    auto readers = mon.listReaders();
+    auto readers = attachedReaders();
     ASSERT_TRUE(readers.has_value());
     std::string readerName;
     for (const auto& r : *readers) {
@@ -681,8 +721,7 @@ TEST(SignHwSmokeSign, OneSessionMultiOpSharedPace)
     ASSERT_TRUE(target.has_value()) << "set LIBRESCRS_SIGN_READER (reader-name substring) to pick the card";
     SKIP_IF_PIN_FAILED();
 
-    LibreSCRS::SmartCard::MonitorService mon{LibreSCRS::SmartCard::MonitorService::Config::fromEnv()};
-    auto readers = mon.listReaders();
+    auto readers = attachedReaders();
     ASSERT_TRUE(readers.has_value());
     std::string readerName;
     for (const auto& r : *readers) {
@@ -694,9 +733,9 @@ TEST(SignHwSmokeSign, OneSessionMultiOpSharedPace)
     ASSERT_FALSE(readerName.empty()) << "no reader matches LIBRESCRS_SIGN_READER=" << *target;
 
     // Build the production-style holder for this reader: the SAME SessionFactory
-    // (CardSession::open -> shared_ptr), CandidateResolver (forwards to the
-    // plugin resolver's resolveCandidates), and a fresh CardMap that
-    // OperationManager::workerFor uses. This exercises the REAL holder, so the
+    // (CardSession::open -> shared_ptr) and CandidateResolver (forwards to the
+    // plugin resolver's resolveCandidates) that OperationManager::workerFor
+    // hands its per-reader holder. This exercises the REAL holder, so the
     // open-once / resolve-once semantics under test are the production ones.
     PluginCapabilityResolver resolver{pluginService()};
     SessionFactory factory = [](const std::string& r)
@@ -711,8 +750,7 @@ TEST(SignHwSmokeSign, OneSessionMultiOpSharedPace)
                                                  LibreSCRS::SmartCard::CardSession& s) -> CandidateList {
         return resolver.resolveCandidates(atr, s);
     };
-    CardSessionHolder holder{readerName, std::move(factory), std::move(candResolver),
-                             std::make_shared<LibreSCRS::SmartCard::CardMap>()};
+    CardSessionHolder holder{readerName, std::move(factory), std::move(candResolver)};
 
     auto acq = holder.acquire();
     ASSERT_TRUE(acq.has_value()) << "holder.acquire failed on " << readerName;

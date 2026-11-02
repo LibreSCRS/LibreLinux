@@ -24,7 +24,7 @@ find_package(sdbus-c++ 2.0 CONFIG REQUIRED)
 # agent consumes as a proxy, so both sides stay in lock-step at the build
 # layer (a stale rebuild can only break compile, never wire-protocol skew).
 find_program(SDBUS_CPP_XML2CPP sdbus-c++-xml2cpp REQUIRED)
-set(_xml ${CMAKE_CURRENT_SOURCE_DIR}/../agent/dbus/org.librescrs.Prompter1.xml)
+set(_xml ${LIBREAGENT_DBUS_XML_DIR}/org.librescrs.Prompter1.xml)
 set(_gen_dir ${CMAKE_CURRENT_BINARY_DIR}/generated)
 file(MAKE_DIRECTORY ${_gen_dir})
 set(_gen_header ${_gen_dir}/org.librescrs.Prompter1_adaptor.h)
@@ -91,16 +91,8 @@ target_compile_definitions(librescrs-pinentry-kde PRIVATE
     # KLocalizedString::setApplicationDomain() in main.cpp.
     TRANSLATION_DOMAIN="librescrs-pinentry-kde")
 
-# Strict warnings, mirroring the agent. Generated sdbus-c++ headers have
-# unavoidable -Wsign-conversion noise; gate -Werror behind the same opt-in.
-target_compile_options(librescrs-pinentry-kde PRIVATE
-    -Wall -Wextra -Wpedantic
-    -Wshadow -Wnon-virtual-dtor -Wold-style-cast -Wcast-align
-    -Woverloaded-virtual -Wnull-dereference
-    -Wdouble-promotion -Wformat=2)
-if(LIBRELINUX_WERROR)
-    target_compile_options(librescrs-pinentry-kde PRIVATE -Werror)
-endif()
+# Generated sdbus-c++ headers have unavoidable -Wsign-conversion noise.
+librelinux_strict_warnings(librescrs-pinentry-kde NO_CONVERSION)
 
 # --- Install -------------------------------------------------------------
 # libexec — the prompter is internal infrastructure invoked by the agent

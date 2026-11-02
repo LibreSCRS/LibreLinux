@@ -12,7 +12,7 @@
 //   (b) the adaptor unregister when the zombie finally drains (op.reset()).
 // The fix: gate finish()'s emit on the shutdown token, stop the watchdog on the
 // abandon path, and CO-OWN the connection (shared_ptr, keepAlive'd into the typed
-// op exactly as CardObject::attachLifetimeGuards does) so both touches land on
+// op exactly as the OperationLauncher does) so both touches land on
 // LIVE memory. The existing drain tests use FAKE channels and structurally cannot
 // see this; this one uses the real adaptor.
 //
@@ -101,7 +101,7 @@ class RealTypedChannel final : public OperationChannel
 public:
     RealTypedChannel(sdbus::IConnection& bus, sdbus::ObjectPath path, std::shared_ptr<OperationState> state,
                      std::shared_ptr<ChannelSlots> slots)
-        : m_inner(bus, std::move(path), std::move(state)), m_slots(std::move(slots))
+        : m_inner(bus, std::move(path), std::move(state), {}), m_slots(std::move(slots))
     {}
     void emitPropertiesChanged() noexcept override
     {
@@ -159,7 +159,7 @@ private:
 
 // A typed op with a REAL bus-bound channel is wedged, abandoned, and the backend
 // connection share is dropped while it is still wedged. Only the op's co-owned
-// connection share (attached exactly as CardObject::attachLifetimeGuards does)
+// connection share (attached exactly as the OperationLauncher does)
 // keeps the connection alive; the delayed drain then unregisters the adaptor
 // against LIVE memory (TSan-clean) and the op skips its completion because the
 // shutdown token fired.
@@ -186,7 +186,7 @@ TEST(TypedChannelWedgeDrain, AbandonedTypedOpKeepsItsBusConnectionAliveThroughCo
             std::make_unique<RealTypedChannel>(*conn, sdbus::ObjectPath{"/org/librescrs/Agent/op/0"}, state, slots);
         auto op = std::make_unique<WedgingTypedOp>(std::move(channel), state, latch, entered, drained);
         // Co-own the bus connection + bind the shutdown token, EXACTLY as
-        // CardObject::attachLifetimeGuards does for every production typed op.
+        // the OperationLauncher does for every production typed op.
         // Removing this keepAlive is the RED-proof: the connection is then freed at
         // conn.reset() below and the zombie's adaptor unregister traps under TSan.
         op->keepAlive(conn);

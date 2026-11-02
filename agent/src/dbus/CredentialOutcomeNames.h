@@ -10,7 +10,7 @@ namespace LibreSCRS::Agent {
 // "outcome" key. The strings ARE the wire contract (== the vocabulary documented
 // in org.librescrs.Agent.Credentials1.xml); CredentialOutcomeNamesTest pins every
 // value so an enum edit cannot silently drop or rename a token. Sibling of
-// dbus/Pkcs11OutcomeNames — the outcome crosses the wire as this STRING, never as
+// dbus/SyncErrorBusName — the outcome crosses the wire as this STRING, never as
 // an integer.
 [[nodiscard]] const char* credentialOutcomeToken(CredentialOutcome outcome) noexcept;
 

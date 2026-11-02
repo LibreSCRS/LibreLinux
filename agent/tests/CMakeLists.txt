@@ -36,15 +36,6 @@ target_link_libraries(CallerIdentityTest PRIVATE
     GTest::gtest_main)
 gtest_discover_tests(CallerIdentityTest)
 
-# The card-path -> reader inverse behind a prompt's reader label. Pure: drives
-# the seam over a hand-built presence snapshot, no bus and no reader.
-add_executable(ReaderIdentitySeamTest ReaderIdentitySeamTest.cpp)
-target_link_libraries(ReaderIdentitySeamTest PRIVATE
-    LibreLinuxAgentCore
-    GTest::gtest
-    GTest::gtest_main)
-gtest_discover_tests(ReaderIdentitySeamTest)
-
 # The version guard in front of every prompt: pure policy over a single read.
 add_executable(PrompterCapabilityTest PrompterCapabilityTest.cpp)
 target_link_libraries(PrompterCapabilityTest PRIVATE
@@ -61,20 +52,30 @@ target_link_libraries(PolkitAuthorizerTest PRIVATE
     GTest::gtest_main)
 gtest_discover_tests(PolkitAuthorizerTest)
 
+# The gate a grant runs under after an asynchronous authorization: the
+# object's destructor waits for a running grant, and a late one runs nothing.
+add_executable(GrantGateTest GrantGateTest.cpp)
+target_link_libraries(GrantGateTest PRIVATE
+    LibreLinuxAgentCore
+    GTest::gtest
+    GTest::gtest_main)
+gtest_discover_tests(GrantGateTest)
+
 # AgentTransport backend interface: a fake records the typed presence deltas +
 # loop-post + disconnect handler, and a bus-backed case drives the real
 # BusExporter loop-marshaling impl (needs a private session bus).
 add_executable(AgentTransportTest AgentTransportTest.cpp)
 target_link_libraries(AgentTransportTest PRIVATE
     LibreLinuxAgentCore
+    LibreAgent::TestSupport # AllowAllAuthorizer
     PkgConfig::Systemd # the post/postAfter marshal test drives an sd-event loop directly
     GTest::gtest
     GTest::gtest_main)
-librelinux_private_session_bus(AgentTransportTest)
+libreagent_private_session_bus(AgentTransportTest)
 # A wedged test under dbus-run-session must fail in minutes, not consume the
 # runner's whole wall: every bus-backed test below carries an explicit timeout.
 libreagent_gtest_discover_tests(AgentTransportTest
-    ENVIRONMENT "${LIBRELINUX_PRIVATE_BUS_ENV}"
+    ENVIRONMENT "${LIBREAGENT_PRIVATE_BUS_ENV}"
     PROPERTIES TIMEOUT 120)
 
 # Static/source guard: the deferred-publish worker hop must marshal back through the
@@ -134,28 +135,17 @@ target_link_libraries(TypedChannelWedgeDrainTest PRIVATE
     LibreLinuxAgentCore
     GTest::gtest
     GTest::gtest_main)
-librelinux_private_session_bus(TypedChannelWedgeDrainTest)
+libreagent_private_session_bus(TypedChannelWedgeDrainTest)
 libreagent_gtest_discover_tests(TypedChannelWedgeDrainTest
-    ENVIRONMENT "${LIBRELINUX_PRIVATE_BUS_ENV}"
+    ENVIRONMENT "${LIBREAGENT_PRIVATE_BUS_ENV}"
     PROPERTIES TIMEOUT 120)
 
-# Cross-stack wire-contract drift guard: static_asserts tying the canonical
-# Card1.Capabilities + ErrorCode wire literals to the upstream LM symbol (links
-# LM::Plugin via AgentCore). Its LM-free twin is
-# LibreKDE/tests/agentclient/WireContractGuardTest.cpp.
-add_executable(WireContractGuardTest WireContractGuardTest.cpp)
-target_link_libraries(WireContractGuardTest PRIVATE
-    LibreLinuxAgentCore
-    GTest::gtest
-    GTest::gtest_main)
-gtest_discover_tests(WireContractGuardTest)
-
 # The bus error-NAME table against the agent wire's own SyncError vocabulary.
-# Two spellings of one set of refusals: moving the backend onto the wire's
-# would put LibreAgent::Wire, and qcbor with it, inside the Qt-free PKCS#11
-# module for the sake of twelve strings. The table stays; this pins it, so a
-# name that stops matching fails here instead of degrading to the generic
-# error at run time.
+# The agent spells a refusal from the wire (syncErrorBusName); the Qt-free
+# PKCS#11 module maps the name back without LibreAgent::Wire, and qcbor with
+# it, so it reads the table in common/AgentErrorNames.h. This pins the table to
+# the vocabulary the agent raises, so a name the module would stop recognising
+# fails here instead of degrading to the generic error at run time.
 add_executable(AgentErrorNameParityTest AgentErrorNameParityTest.cpp)
 target_link_libraries(AgentErrorNameParityTest PRIVATE
     librelinux-common
@@ -166,13 +156,13 @@ gtest_discover_tests(AgentErrorNameParityTest)
 
 # Machine gate for the errorCode taxonomy: pins the agent ErrorCode enum,
 # value-for-value and count, against the enumeration documented in
-# dbus/org.librescrs.Agent.Operation1.xml (the canonical wire contract — new
+# the agent library's org.librescrs.Agent.Operation1.xml (the canonical wire contract — new
 # codes land there first). -Werror=switch turns an upstream enum append into a
 # compile failure here; the runtime half then forces the XML edit clients key
-# off. Reads the XML from the source tree (TransportCaptureGuardTest pattern).
+# off. Reads the XML from LIBREAGENT_DBUS_XML_DIR (TransportCaptureGuardTest pattern).
 add_executable(Operation1ErrorCodeXmlGuardTest Operation1ErrorCodeXmlGuardTest.cpp)
 target_compile_definitions(Operation1ErrorCodeXmlGuardTest PRIVATE
-    LIBRELINUX_OPERATION1_XML="${CMAKE_CURRENT_SOURCE_DIR}/../dbus/org.librescrs.Agent.Operation1.xml")
+    LIBRELINUX_OPERATION1_XML="${LIBREAGENT_DBUS_XML_DIR}/org.librescrs.Agent.Operation1.xml")
 target_compile_options(Operation1ErrorCodeXmlGuardTest PRIVATE -Werror=switch)
 target_link_libraries(Operation1ErrorCodeXmlGuardTest PRIVATE
     LibreLinuxAgentCore
@@ -181,16 +171,16 @@ target_link_libraries(Operation1ErrorCodeXmlGuardTest PRIVATE
 gtest_discover_tests(Operation1ErrorCodeXmlGuardTest)
 
 # Machine gate for the Config1 property surface: the <property> elements of
-# dbus/org.librescrs.Agent.Config1.xml against ConfigStore's key set, BOTH
+# the agent library's org.librescrs.Agent.Config1.xml against ConfigStore's key set, BOTH
 # ways. Nothing else compares the two -- a key added to the store without a
 # property, or a property naming no key, passes every other test here. The
 # file-only keys are exempted by asking ConfigStore::mutability(), never by a
 # list of spellings kept in the test. Bus-free: it reads the XML from the
-# source tree (same pattern as the guard above) and queries the store's static
+# agent library's XML (same pattern as the guard above) and queries the store's static
 # key metadata.
 add_executable(Config1PropertyKeyMirrorTest Config1PropertyKeyMirrorTest.cpp)
 target_compile_definitions(Config1PropertyKeyMirrorTest PRIVATE
-    LIBRELINUX_CONFIG1_XML="${CMAKE_CURRENT_SOURCE_DIR}/../dbus/org.librescrs.Agent.Config1.xml")
+    LIBRELINUX_CONFIG1_XML="${LIBREAGENT_DBUS_XML_DIR}/org.librescrs.Agent.Config1.xml")
 target_link_libraries(Config1PropertyKeyMirrorTest PRIVATE
     LibreLinuxAgentCore
     GTest::gtest
@@ -255,9 +245,9 @@ target_link_libraries(Operation1AdaptorTest PRIVATE
     GTest::gtest
     GTest::gtest_main)
 target_compile_definitions(Operation1AdaptorTest PRIVATE LIBRELINUX_TESTING)
-librelinux_private_session_bus(Operation1AdaptorTest)
+libreagent_private_session_bus(Operation1AdaptorTest)
 libreagent_gtest_discover_tests(Operation1AdaptorTest
-    ENVIRONMENT "${LIBRELINUX_PRIVATE_BUS_ENV}"
+    ENVIRONMENT "${LIBREAGENT_PRIVATE_BUS_ENV}"
     PROPERTIES TIMEOUT 120)
 
 # Certificates1.Result wire-shape conformance (compile-only static_assert).
@@ -288,20 +278,21 @@ target_link_libraries(OperationManagerNameOwnerChangedTest PRIVATE
     LibreLinuxAgentCore
     GTest::gtest
     GTest::gtest_main)
-librelinux_private_session_bus(OperationManagerNameOwnerChangedTest)
+libreagent_private_session_bus(OperationManagerNameOwnerChangedTest)
 libreagent_gtest_discover_tests(OperationManagerNameOwnerChangedTest
-    ENVIRONMENT "${LIBRELINUX_PRIVATE_BUS_ENV}"
+    ENVIRONMENT "${LIBREAGENT_PRIVATE_BUS_ENV}"
     PROPERTIES TIMEOUT 120)
 
 # D-Bus integration test — needs a private session bus + dbus-run-session.
 add_executable(ReaderRemoveDrainTest ReaderRemoveDrainTest.cpp)
 target_link_libraries(ReaderRemoveDrainTest PRIVATE
     LibreLinuxAgentCore
+    LibreAgent::TestSupport # AllowAllAuthorizer
     GTest::gtest
     GTest::gtest_main)
-librelinux_private_session_bus(ReaderRemoveDrainTest)
+libreagent_private_session_bus(ReaderRemoveDrainTest)
 libreagent_gtest_discover_tests(ReaderRemoveDrainTest
-    ENVIRONMENT "${LIBRELINUX_PRIVATE_BUS_ENV}"
+    ENVIRONMENT "${LIBREAGENT_PRIVATE_BUS_ENV}"
     PROPERTIES TIMEOUT 120)
 
 # Reader map + ReaderObject-field concurrency guard: resolveReaderCard (loop
@@ -312,30 +303,32 @@ target_link_libraries(BusExporterReaderRaceTest PRIVATE
     LibreLinuxAgentCore
     GTest::gtest
     GTest::gtest_main)
-librelinux_private_session_bus(BusExporterReaderRaceTest)
+libreagent_private_session_bus(BusExporterReaderRaceTest)
 libreagent_gtest_discover_tests(BusExporterReaderRaceTest
-    ENVIRONMENT "${LIBRELINUX_PRIVATE_BUS_ENV}"
+    ENVIRONMENT "${LIBREAGENT_PRIVATE_BUS_ENV}"
     PROPERTIES TIMEOUT 120)
 
 add_executable(DBusServiceTest DBusServiceTest.cpp)
 target_link_libraries(DBusServiceTest PRIVATE
     LibreLinuxAgentCore
+    LibreAgent::TestSupport # AllowAllAuthorizer
     GTest::gtest
     GTest::gtest_main)
-librelinux_private_session_bus(DBusServiceTest)
+libreagent_private_session_bus(DBusServiceTest)
 libreagent_gtest_discover_tests(DBusServiceTest
-    ENVIRONMENT "${LIBRELINUX_PRIVATE_BUS_ENV}"
+    ENVIRONMENT "${LIBREAGENT_PRIVATE_BUS_ENV}"
     PROPERTIES TIMEOUT 120)
 
 # Config1 end-to-end (Get/SetValue/Reset/Changed + mutability + polkit gate).
 add_executable(Config1Test Config1Test.cpp)
 target_link_libraries(Config1Test PRIVATE
     LibreLinuxAgentCore
+    LibreAgent::TestSupport # AllowAllAuthorizer
     GTest::gtest
     GTest::gtest_main)
-librelinux_private_session_bus(Config1Test)
+libreagent_private_session_bus(Config1Test)
 libreagent_gtest_discover_tests(Config1Test
-    ENVIRONMENT "${LIBRELINUX_PRIVATE_BUS_ENV}"
+    ENVIRONMENT "${LIBREAGENT_PRIVATE_BUS_ENV}"
     PROPERTIES TIMEOUT 120)
 
 # Real PolkitAuthorizer against a fake polkit authority: asserts the D-Bus
@@ -343,22 +336,38 @@ libreagent_gtest_discover_tests(Config1Test
 add_executable(PolkitAuthorizerOutcomeTest PolkitAuthorizerOutcomeTest.cpp)
 target_link_libraries(PolkitAuthorizerOutcomeTest PRIVATE
     LibreLinuxAgentCore
+    PkgConfig::Systemd # the answers-through-the-loop case runs an sd-event loop
     GTest::gtest
     GTest::gtest_main)
-librelinux_private_session_bus(PolkitAuthorizerOutcomeTest)
+libreagent_private_session_bus(PolkitAuthorizerOutcomeTest)
 libreagent_gtest_discover_tests(PolkitAuthorizerOutcomeTest
-    ENVIRONMENT "${LIBRELINUX_PRIVATE_BUS_ENV}"
+    ENVIRONMENT "${LIBREAGENT_PRIVATE_BUS_ENV}"
+    PROPERTIES TIMEOUT 120)
+
+# Sleep, screen lock and session switch from a fake logind on the agent's
+# system bus: which event means which reason, and what the agent forgets and
+# announces on Manager1.Quiesced.
+add_executable(SessionLifecycleWatchTest SessionLifecycleWatchTest.cpp)
+target_link_libraries(SessionLifecycleWatchTest PRIVATE
+    LibreLinuxAgentCore
+    LibreAgent::TestSupport # AllowAllAuthorizer
+    GTest::gtest
+    GTest::gtest_main)
+libreagent_private_session_bus(SessionLifecycleWatchTest)
+libreagent_gtest_discover_tests(SessionLifecycleWatchTest
+    ENVIRONMENT "${LIBREAGENT_PRIVATE_BUS_ENV}"
     PROPERTIES TIMEOUT 120)
 
 # Card1.ReadIdentity / GetPhoto end-to-end — capability gate + enqueue path.
 add_executable(CardObjectOperationsTest CardObjectOperationsTest.cpp)
 target_link_libraries(CardObjectOperationsTest PRIVATE
     LibreLinuxAgentCore
+    LibreAgent::TestSupport # AllowAllAuthorizer
     GTest::gtest
     GTest::gtest_main)
-librelinux_private_session_bus(CardObjectOperationsTest)
+libreagent_private_session_bus(CardObjectOperationsTest)
 libreagent_gtest_discover_tests(CardObjectOperationsTest
-    ENVIRONMENT "${LIBRELINUX_PRIVATE_BUS_ENV}"
+    ENVIRONMENT "${LIBREAGENT_PRIVATE_BUS_ENV}"
     PROPERTIES TIMEOUT 120)
 
 # PrompterClient end-to-end: drive the client against an in-process mock
@@ -380,17 +389,13 @@ add_executable(PrompterIntegrationTest
     PrompterIntegrationTest.cpp
     ${_test_prompter_adaptor})
 target_include_directories(PrompterIntegrationTest PRIVATE ${LL_DBUS_GEN_DIR})
-# The production-read case drives the real IdentityReadFlow against a detached
-# fake card session, which needs the middleware-internal session factory (same
-# opt-in the other session-driving suites here use).
-target_compile_definitions(PrompterIntegrationTest PRIVATE LIBRESCRS_INTERNAL_BUILD)
 target_link_libraries(PrompterIntegrationTest PRIVATE
     LibreLinuxAgentCore
     GTest::gtest
     GTest::gtest_main)
-librelinux_private_session_bus(PrompterIntegrationTest)
+libreagent_private_session_bus(PrompterIntegrationTest)
 libreagent_gtest_discover_tests(PrompterIntegrationTest
-    ENVIRONMENT "${LIBRELINUX_PRIVATE_BUS_ENV}"
+    ENVIRONMENT "${LIBREAGENT_PRIVATE_BUS_ENV}"
     PROPERTIES TIMEOUT 120)
 
 # SecretMemfdReader trust-root input-shape check: a correctly-sealed memfd is
@@ -415,12 +420,13 @@ add_executable(CardOperationsIntegrationTest
 target_include_directories(CardOperationsIntegrationTest PRIVATE ${LL_DBUS_GEN_DIR})
 target_link_libraries(CardOperationsIntegrationTest PRIVATE
     LibreLinuxAgentCore
+    LibreAgent::TestSupport # AllowAllAuthorizer
     PkgConfig::Systemd # the pre-read-auth marshal test drives an sd-event loop directly
     GTest::gtest
     GTest::gtest_main)
-librelinux_private_session_bus(CardOperationsIntegrationTest)
+libreagent_private_session_bus(CardOperationsIntegrationTest)
 libreagent_gtest_discover_tests(CardOperationsIntegrationTest
-    ENVIRONMENT "${LIBRELINUX_PRIVATE_BUS_ENV}"
+    ENVIRONMENT "${LIBREAGENT_PRIVATE_BUS_ENV}"
     PROPERTIES TIMEOUT 120)
 
 # Late-subscriber recovery store for the inline typed results, and — since the
@@ -468,12 +474,13 @@ target_link_libraries(Pkcs11XmlCodegenTest PRIVATE
     GTest::gtest_main)
 gtest_discover_tests(Pkcs11XmlCodegenTest)
 
-add_executable(Pkcs11OutcomeNamesTest Pkcs11OutcomeNamesTest.cpp)
-target_link_libraries(Pkcs11OutcomeNamesTest PRIVATE
+add_executable(SyncErrorBusNameTest SyncErrorBusNameTest.cpp)
+target_link_libraries(SyncErrorBusNameTest PRIVATE
     LibreLinuxAgentCore
+    LibreAgent::Wire
     GTest::gtest
     GTest::gtest_main)
-gtest_discover_tests(Pkcs11OutcomeNamesTest)
+gtest_discover_tests(SyncErrorBusNameTest)
 
 # Hardware smoke (env-gated; skipped without LIBRESCRS_HW). Not committed yet —
 # the start of the HW-validation increment.
@@ -483,27 +490,6 @@ target_link_libraries(SignHwSmokeTest PRIVATE
     GTest::gtest
     GTest::gtest_main)
 gtest_discover_tests(SignHwSmokeTest)
-
-# These backend tests construct a stable per-session key via the LM-internal
-# detached-session factory LibreSCRS::SmartCard::detail::makeDetachedCardSession.
-# Its prototype in <LibreSCRS/SmartCard/CardSession.h> is guarded behind
-# LIBRESCRS_INTERNAL_BUILD and the symbol is exported from libLibreSCRS_SmartCard
-# (LM_5), so the TEST TUs that use it must enable the internal declaration — the
-# same opt-in LibreMiddleware's own tests use. Production agent/module targets
-# NEVER define this, so the internal surface stays out of the shipped binaries.
-foreach(_internal_session_test IN ITEMS
-        CardObjectOperationsTest
-        CardOperationsIntegrationTest
-        CredentialOperationContractTest
-        SignFlowTest
-        SignBatchOperationTest
-        GetPhotoOperationTest
-        ReadCertificatesOperationTest
-        ReadIdentityOperationTest)
-    if(TARGET ${_internal_session_test})
-        target_compile_definitions(${_internal_session_test} PRIVATE LIBRESCRS_INTERNAL_BUILD)
-    endif()
-endforeach()
 
 # RequestSecrets (multi-secret) wire-shape conformance: compile-only
 # static_assert on the generated Prompter1 proxy + the shared PrompterWire
@@ -540,9 +526,9 @@ target_link_libraries(PrompterClientPinChangeTest PRIVATE
     LibreLinuxAgentCore
     GTest::gtest
     GTest::gtest_main)
-librelinux_private_session_bus(PrompterClientPinChangeTest)
+libreagent_private_session_bus(PrompterClientPinChangeTest)
 libreagent_gtest_discover_tests(PrompterClientPinChangeTest
-    ENVIRONMENT "${LIBRELINUX_PRIVATE_BUS_ENV}"
+    ENVIRONMENT "${LIBREAGENT_PRIVATE_BUS_ENV}"
     PROPERTIES TIMEOUT 120)
 
 # Human-paced prompt budget: the mock prompter replies only AFTER the D-Bus
@@ -558,32 +544,32 @@ target_link_libraries(PrompterClientInteractiveBudgetTest PRIVATE
     LibreLinuxAgentCore
     GTest::gtest
     GTest::gtest_main)
-librelinux_private_session_bus(PrompterClientInteractiveBudgetTest)
+libreagent_private_session_bus(PrompterClientInteractiveBudgetTest)
 # Higher ceiling than the 120 s default used elsewhere in this file: the
 # measured floor is ~32 s because the test deliberately rides past sd-bus's
 # ~25 s default reply window (same class as the pkcs11 ModuleAbiTest sibling).
 # The previous 90 s left under 3x headroom, which a loaded runner can eat
 # without anything actually being wrong.
 libreagent_gtest_discover_tests(PrompterClientInteractiveBudgetTest
-    ENVIRONMENT "${LIBRELINUX_PRIVATE_BUS_ENV}"
+    ENVIRONMENT "${LIBREAGENT_PRIVATE_BUS_ENV}"
     PROPERTIES TIMEOUT 180)
 
 # Credentials1 D-Bus surface end-to-end: CardObject (Card1 + Credentials1) + a fake
 # CredentialManager seam + FakePrompterService on a private session bus. Reuses the
-# locally-generated Prompter1 adaptor artefact; needs the LM-internal detached
-# session factory (LIBRESCRS_INTERNAL_BUILD) for the fake CardSession.
+# locally-generated Prompter1 adaptor artefact; the fake CardSession is a
+# detached one (see the SmartCardTesting list below).
 add_executable(CredentialsDbusTest
     CredentialsDbusTest.cpp
     ${_test_prompter_adaptor})
 target_include_directories(CredentialsDbusTest PRIVATE ${LL_DBUS_GEN_DIR})
 target_link_libraries(CredentialsDbusTest PRIVATE
     LibreLinuxAgentCore
+    LibreAgent::TestSupport # AllowAllAuthorizer
     GTest::gtest
     GTest::gtest_main)
-target_compile_definitions(CredentialsDbusTest PRIVATE LIBRESCRS_INTERNAL_BUILD)
-librelinux_private_session_bus(CredentialsDbusTest)
+libreagent_private_session_bus(CredentialsDbusTest)
 libreagent_gtest_discover_tests(CredentialsDbusTest
-    ENVIRONMENT "${LIBRELINUX_PRIVATE_BUS_ENV}"
+    ENVIRONMENT "${LIBREAGENT_PRIVATE_BUS_ENV}"
     PROPERTIES TIMEOUT 120)
 
 # --- country-signing anchor import ------------------------------------------
@@ -609,7 +595,20 @@ target_link_libraries(CscaImportDbusTest PRIVATE
     LibreAgent::TestSupport
     GTest::gtest
     GTest::gtest_main)
-librelinux_private_session_bus(CscaImportDbusTest)
+libreagent_private_session_bus(CscaImportDbusTest)
 libreagent_gtest_discover_tests(CscaImportDbusTest
-    ENVIRONMENT "${LIBRELINUX_PRIVATE_BUS_ENV}"
+    ENVIRONMENT "${LIBREAGENT_PRIVATE_BUS_ENV}"
     PROPERTIES TIMEOUT 120)
+
+# These suites hold a card session with no reader or card behind it, from
+# LibreMiddleware's declared test support (LibreSCRS::SmartCardTesting): a
+# stable per-session key for routing, caching and holding, with no card I/O.
+# The archive is linked into test executables only; nothing shipped links it.
+# Kept at the foot of the file: every suite named here must already exist.
+foreach(_detached IN ITEMS
+        CardObjectOperationsTest
+        CardOperationsIntegrationTest
+        CredentialsDbusTest
+        PrompterIntegrationTest)
+    target_link_libraries(${_detached} PRIVATE LibreSCRS::SmartCardTesting)
+endforeach()

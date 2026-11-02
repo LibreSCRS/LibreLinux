@@ -12,6 +12,7 @@
 #include "PolkitAuthorizer.h"
 #include "ProcPidPin.h" // librelinux-common pinned /proc readers
 
+#include <fcntl.h>    // open
 #include <sys/wait.h> // waitpid
 #include <unistd.h>   // fork, getpid, _exit
 
@@ -27,6 +28,8 @@ using LibreLinux::Common::readProcStatPinned;
 using LibreSCRS::Agent::PolkitDetail::buildUnixProcessDetails;
 using LibreSCRS::Agent::PolkitDetail::interpretReply;
 using LibreSCRS::Agent::PolkitDetail::parseProcStartTime;
+using LibreSCRS::Agent::PolkitDetail::uidDetail;
+using LibreSCRS::Agent::PolkitDetail::unixProcessDetailsFrom;
 
 TEST(PolkitProcStat, ParsesField22FromASimpleLine)
 {
@@ -125,7 +128,17 @@ TEST(PolkitSubject, BuildsUnixProcessDetailsWithPidAndStartTime)
     ASSERT_TRUE(details.contains("uid"));
     EXPECT_EQ(details.at("pid").get<std::uint32_t>(), 4242u);
     EXPECT_EQ(details.at("start-time").get<std::uint64_t>(), 987654u);
-    EXPECT_EQ(details.at("uid").get<std::uint32_t>(), 1000u);
+    EXPECT_STREQ(details.at("uid").peekValueType(), "i");
+    EXPECT_EQ(details.at("uid").get<std::int32_t>(), 1000);
+}
+
+// polkit reads a subject's uid as int32 and treats an entry of any other type
+// as absent -- the unsigned value the bus reports must not reach it as "u".
+TEST(PolkitSubject, TheUidIsTheSignedIntegerPolkitReads)
+{
+    EXPECT_STREQ(uidDetail(1000u).peekValueType(), "i");
+    EXPECT_EQ(uidDetail(1000u).get<std::int32_t>(), 1000);
+    EXPECT_EQ(uidDetail(0u).get<std::int32_t>(), 0);
 }
 
 TEST(PolkitSubject, OmitsUidWhenAbsent)
@@ -170,4 +183,74 @@ TEST(DefaultAuthorizer, AllowsPkcs11Login)
 {
     DefaultAuthorizer auth;
     EXPECT_EQ(auth.authorize(kActionPkcs11Login, CallerToken{":1.7"}), AuthorizationOutcome::Granted);
+}
+
+// A bus that hands out the caller's pidfd: the subject is that pidfd (and the
+// uid), and no start time is read -- there is no pid to pin.
+TEST(PolkitSubject, APidfdFromTheBusIsTheSubject)
+{
+    const int fd = ::open("/dev/null", O_RDONLY | O_CLOEXEC);
+    ASSERT_GE(fd, 0);
+    const std::map<std::string, sdbus::Variant> credentials{
+        {"ProcessID", sdbus::Variant{std::uint32_t{4242}}},
+        {"UnixUserID", sdbus::Variant{std::uint32_t{1000}}},
+        {"ProcessFD", sdbus::Variant{sdbus::UnixFd{fd, sdbus::adopt_fd}}},
+    };
+    int startTimeReads = 0;
+    const auto details = unixProcessDetailsFrom(credentials, [&startTimeReads](std::uint32_t) {
+        ++startTimeReads;
+        return std::optional<std::uint64_t>{1};
+    });
+    ASSERT_TRUE(details.has_value());
+    EXPECT_EQ(details->count("pidfd"), 1u);
+    EXPECT_EQ(details->count("pid"), 0u);
+    EXPECT_EQ(details->count("start-time"), 0u);
+    EXPECT_STREQ(details->at("uid").peekValueType(), "i");
+    EXPECT_EQ(details->at("uid").get<std::int32_t>(), 1000);
+    EXPECT_EQ(startTimeReads, 0);
+}
+
+// polkit refuses a pidfd subject that carries no uid, so a bus that hands out
+// the pidfd but not the uid gets the pid pinned by its start time instead.
+TEST(PolkitSubject, APidfdWithoutTheUidFallsBackToThePid)
+{
+    const int fd = ::open("/dev/null", O_RDONLY | O_CLOEXEC);
+    ASSERT_GE(fd, 0);
+    const std::map<std::string, sdbus::Variant> credentials{
+        {"ProcessID", sdbus::Variant{std::uint32_t{4242}}},
+        {"ProcessFD", sdbus::Variant{sdbus::UnixFd{fd, sdbus::adopt_fd}}},
+    };
+    const auto details =
+        unixProcessDetailsFrom(credentials, [](std::uint32_t) { return std::optional<std::uint64_t>{987654}; });
+    ASSERT_TRUE(details.has_value());
+    EXPECT_EQ(details->count("pidfd"), 0u);
+    EXPECT_EQ(details->count("uid"), 0u);
+    EXPECT_EQ(details->at("pid").get<std::uint32_t>(), 4242u);
+    EXPECT_EQ(details->at("start-time").get<std::uint64_t>(), 987654u);
+}
+
+// A bus that hands out no pidfd: the pid, pinned by its start time.
+TEST(PolkitSubject, WithoutAPidfdThePidAndItsStartTimeAreTheSubject)
+{
+    const std::map<std::string, sdbus::Variant> credentials{
+        {"ProcessID", sdbus::Variant{std::uint32_t{4242}}},
+        {"UnixUserID", sdbus::Variant{std::uint32_t{1000}}},
+    };
+    const auto details = unixProcessDetailsFrom(
+        credentials, [](std::uint32_t pid) { return std::optional<std::uint64_t>{pid == 4242 ? 987654 : 0}; });
+    ASSERT_TRUE(details.has_value());
+    EXPECT_EQ(details->count("pidfd"), 0u);
+    EXPECT_EQ(details->at("pid").get<std::uint32_t>(), 4242u);
+    EXPECT_EQ(details->at("start-time").get<std::uint64_t>(), 987654u);
+    EXPECT_STREQ(details->at("uid").peekValueType(), "i");
+    EXPECT_EQ(details->at("uid").get<std::int32_t>(), 1000);
+}
+
+// No pidfd and no start time, or no pid at all: nothing to ask polkit about.
+TEST(PolkitSubject, WithNeitherThereIsNoSubject)
+{
+    const std::map<std::string, sdbus::Variant> pidOnly{{"ProcessID", sdbus::Variant{std::uint32_t{4242}}}};
+    EXPECT_FALSE(unixProcessDetailsFrom(pidOnly, [](std::uint32_t) { return std::optional<std::uint64_t>{}; }));
+    const std::map<std::string, sdbus::Variant> none{{"UnixUserID", sdbus::Variant{std::uint32_t{1000}}}};
+    EXPECT_FALSE(unixProcessDetailsFrom(none, [](std::uint32_t) { return std::optional<std::uint64_t>{1}; }));
 }

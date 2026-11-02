@@ -7,6 +7,22 @@ Notable user-visible changes per release. Format follows
 
 ### Added
 
+- **Sleep, screen lock and switching users end card access the way they do on
+  macOS.** The agent follows systemd-logind: before the machine sleeps, and when
+  your session stops being the active one, it forgets cached CANs and MRZs,
+  closes every reader's session and ends every PKCS#11 login; when the screen
+  locks, it ends the PKCS#11 logins, so the next signature asks for the PIN
+  again. Clients hear why on the new `Manager1.Quiesced` signal. One screen
+  lock can be announced twice — once when something asks the session to lock
+  and once when the screen locker reports it locked — so a client treats a
+  repeated reason as the same event.
+
+- **`Reader1.Model` and `Reader1.Interface`:** a reader's short model name and
+  which interface of a dual-interface unit it is (`contact`, `contactless` or
+  `unknown`). Every client shows the same label without parsing the PC/SC name,
+  and a `PropertiesChanged` follows when another reader plugged in beside it
+  changes the label.
+
 - **`Pkcs11_1.LoginState`:** whether a PKCS#11 client's login on the card in a
   reader still holds, asked without extending it. The PKCS#11 module asks it
   (with a two-second deadline) so that Firefox sees a login the agent has ended
@@ -56,10 +72,6 @@ Notable user-visible changes per release. Format follows
   Configuration, cached data, a symlink from your own `systemctl --user enable`
   and an NSS profile entry you added yourself all survive uninstallation, on
   purpose.
-
-  **The agent conflicts with the direct PKCS#11 module package**, which the
-  middleware no longer builds but a machine may still carry: `apt install`
-  removes it, dnf needs `--allowerasing` and zypper `--force-resolution`.
 
 
 First public release of the Linux host for the LibreSCRS smart-card
@@ -199,6 +211,48 @@ and its secure PIN/CAN entry prompter, plus a client PKCS#11 module.
   times in a row.
 
 ### Fixed
+
+- **Prompts keep working after the agent package is upgraded.** A running
+  agent whose binary a package upgrade replaced was refused by the prompter,
+  so every PIN, CAN and MRZ prompt failed until the next login. The prompter
+  now recognises it as the agent installed at the same path.
+
+- **A prompter that was not reachable once is asked again.** If the first
+  prompt of an agent's life found the prompter not running (not yet started,
+  restarting, or slow to start), the agent decided the prompter was out of date
+  and refused every later prompt until it was restarted. Only an answer from
+  the prompter about its version is now remembered.
+
+- **Every package depends on polkit.** Without polkitd the agent cannot ask
+  whether a client may sign, change a PIN, log in over PKCS#11 or change a trust
+  setting, so it refuses all of them; the Arch package only suggested polkit and
+  the deb and rpm packages only recommended it.
+
+- **The agent keeps working while a password dialog is open.** Changing a
+  trust setting, importing or forgetting country signing anchors, signing and
+  changing a PIN all ask the system's authorization service first, and the
+  agent used to wait for that answer: while a polkit password dialog stayed
+  open, every other application's request and every progress or result signal
+  of an operation already running waited with it. The answer is now awaited
+  without holding anything else up.
+
+- **The PKCS#11 module no longer stalls on a card whose certificates the agent
+  already read.** The agent answers such a read at once, before the module had
+  subscribed to its result, so the module waited 60 seconds -- holding every
+  PKCS#11 call in the application -- and then showed the token without
+  certificates or keys. It now recovers a finished read from the agent, and a
+  read that failed on the way to the card is tried again on the next call
+  instead of being kept until a card or reader changes. A read you ended
+  yourself -- by closing the CAN window or letting it expire -- is not: the
+  window does not come back on every token list until you pull the card. A
+  read waiting for the CAN is given as long as the window stays open, and one
+  that still runs out is cancelled, so its window closes.
+
+- **Cancelling an operation stops it.** An application's request to cancel a
+  read, a signature or a PIN change was accepted and then ignored: the
+  operation ran on until its card call or prompt ended, kept the reader busy
+  meanwhile, and left its CAN or PIN window open. It now ends at once and its
+  window closes. Only the application that started an operation can cancel it.
 
 - **Two cards seated at once now show up as two PKCS#11 tokens.** Every token
   the agent-proxy module reported was labelled "LibreSCRS Token" with an empty

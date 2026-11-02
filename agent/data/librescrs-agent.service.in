@@ -53,7 +53,6 @@ SystemCallFilter=~@privileged @resources
 CapabilityBoundingSet=
 AmbientCapabilities=
 KeyringMode=private
-RemoveIPC=yes
 UMask=0077
 # Per-user writable cache mount under ProtectHome=read-only. For a --user
 # unit systemd creates this under $XDG_CACHE_HOME (e.g.

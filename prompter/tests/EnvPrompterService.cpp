@@ -53,7 +53,8 @@ bool isRetryPrompt(const std::map<std::string, sdbus::Variant>& options)
 std::tuple<std::string, sdbus::UnixFd, std::string> errorReply(const std::string& message)
 {
     sdbus::UnixFd fd{makeEmptySealedFd(), sdbus::adopt_fd};
-    return std::make_tuple(std::string{PrompterWire::kStatusError}, std::move(fd), message);
+    return std::make_tuple(std::string{PrompterWire::replyStatusToken(PrompterWire::PromptReplyStatus::Error)},
+                           std::move(fd), message);
 }
 
 } // namespace
@@ -76,7 +77,9 @@ EnvPrompterService::buildSecretReply(const std::string& kind, const std::map<std
     const pid_t ownerPid = authorizeCaller("RequestSecret");
     if (ownerPid == 0) {
         sdbus::UnixFd fd{makeEmptySealedFd(), sdbus::adopt_fd};
-        return std::make_tuple(std::string{PrompterWire::kStatusUnauthorized}, std::move(fd), std::string{});
+        return std::make_tuple(
+            std::string{PrompterWire::replyStatusToken(PrompterWire::PromptReplyStatus::Unauthorized)}, std::move(fd),
+            std::string{});
     }
 
     const char* envVar = nullptr;
@@ -131,7 +134,8 @@ EnvPrompterService::buildSecretReply(const std::string& kind, const std::map<std
         return errorReply("test prompter: failed to seal the test secret into a memfd");
     }
     sdbus::UnixFd wrapped{fd, sdbus::adopt_fd};
-    return std::make_tuple(std::string{PrompterWire::kStatusOk}, std::move(wrapped), std::string{});
+    return std::make_tuple(std::string{PrompterWire::replyStatusToken(PrompterWire::PromptReplyStatus::Ok)},
+                           std::move(wrapped), std::string{});
 }
 
 std::tuple<std::string, sdbus::UnixFd, sdbus::UnixFd, std::string>
@@ -142,11 +146,13 @@ EnvPrompterService::buildSecretsReply(const std::string& /*kind*/,
     sdbus::UnixFd primary{makeEmptySealedFd(), sdbus::adopt_fd};
     sdbus::UnixFd secondary{makeEmptySealedFd(), sdbus::adopt_fd};
     if (ownerPid == 0) {
-        return std::make_tuple(std::string{PrompterWire::kStatusUnauthorized}, std::move(primary), std::move(secondary),
-                               std::string{});
+        return std::make_tuple(
+            std::string{PrompterWire::replyStatusToken(PrompterWire::PromptReplyStatus::Unauthorized)},
+            std::move(primary), std::move(secondary), std::string{});
     }
     // change_pin is not modelled by this env-driven prompter (see header).
-    return std::make_tuple(std::string{PrompterWire::kStatusError}, std::move(primary), std::move(secondary),
+    return std::make_tuple(std::string{PrompterWire::replyStatusToken(PrompterWire::PromptReplyStatus::Error)},
+                           std::move(primary), std::move(secondary),
                            std::string{"change_pin is not supported by the env-driven test prompter"});
 }
 

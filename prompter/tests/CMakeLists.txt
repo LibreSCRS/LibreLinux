@@ -150,7 +150,7 @@ gtest_discover_tests(CallerAuthorizerProductionGateTest)
 # matching PROXY. add_custom_command OUTPUT must live in the same scope as the
 # consuming target, so we generate it here from the same XML.
 find_program(DBUS_RUN_SESSION dbus-run-session REQUIRED)
-set(_prompter_xml ${CMAKE_CURRENT_SOURCE_DIR}/../../agent/dbus/org.librescrs.Prompter1.xml)
+set(_prompter_xml ${LIBREAGENT_DBUS_XML_DIR}/org.librescrs.Prompter1.xml)
 set(_test_gen_dir ${CMAKE_CURRENT_BINARY_DIR}/generated)
 file(MAKE_DIRECTORY ${_test_gen_dir})
 set(_test_prompter_proxy ${_test_gen_dir}/org.librescrs.Prompter1_proxy.h)
@@ -210,14 +210,14 @@ target_link_libraries(PrompterAuthIntegrationTest PRIVATE
     GTest::gtest_main)
 
 # Private session bus (dbus-run-session) + offscreen Qt (no display server).
-librelinux_private_session_bus(PrompterAuthIntegrationTest)
+libreagent_private_session_bus(PrompterAuthIntegrationTest)
 # Higher ceiling than the 120 s default used elsewhere in this file: this test
 # stacks its own diagnostics — nine 15 s internal watchdogs, about 135 s worst
 # case. The ctest ceiling has to sit ABOVE that internal ceiling so a wedge
 # still fails as a named assertion with a message ("never returned (test
 # wedged)"), rather than being cut short as a mute Timeout.
 libreagent_gtest_discover_tests(PrompterAuthIntegrationTest
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;${LIBRELINUX_PRIVATE_BUS_ENV}"
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;${LIBREAGENT_PRIVATE_BUS_ENV}"
     PROPERTIES TIMEOUT 180)
 
 # Pins the reject-from-outside contract for PromptDialog. No production
@@ -416,9 +416,9 @@ target_link_libraries(PrompterMultiFieldTest PRIVATE
     GTest::gtest)
 
 # Private session bus (dbus-run-session) + offscreen Qt (no display server).
-librelinux_private_session_bus(PrompterMultiFieldTest)
+libreagent_private_session_bus(PrompterMultiFieldTest)
 libreagent_gtest_discover_tests(PrompterMultiFieldTest
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;${LIBRELINUX_PRIVATE_BUS_ENV}"
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;${LIBREAGENT_PRIVATE_BUS_ENV}"
     PROPERTIES TIMEOUT 120)
 
 # Serbian catalog RESOLUTION: proves the sr Cyrillic-primary
@@ -530,9 +530,9 @@ target_link_libraries(EnvPrompterServiceTest PRIVATE
 
 # Private session bus (dbus-run-session); no display server / Qt event loop
 # needed at all — every call in this prompter is synchronous.
-librelinux_private_session_bus(EnvPrompterServiceTest)
+libreagent_private_session_bus(EnvPrompterServiceTest)
 libreagent_gtest_discover_tests(EnvPrompterServiceTest
-    ENVIRONMENT "${LIBRELINUX_PRIVATE_BUS_ENV}"
+    ENVIRONMENT "${LIBREAGENT_PRIVATE_BUS_ENV}"
     PROPERTIES TIMEOUT 120)
 
 # The credential-window registry: pure addressing rules, no bus and no display.
@@ -597,12 +597,12 @@ target_link_libraries(PrompterConcurrentWindowsTest PRIVATE
     LibreSCRS::Secure
     GTest::gtest)
 
-librelinux_private_session_bus(PrompterConcurrentWindowsTest)
+libreagent_private_session_bus(PrompterConcurrentWindowsTest)
 # Higher ceiling than the 120 s default used elsewhere in this file: this test's
 # own pathological worst case is 25 consecutive 5 s pump budgets, about 125 s.
 # The ctest timeout has to sit ABOVE that internal ceiling so a genuine
 # wedge still surfaces as a named pumpUntil failure with a message, rather than
 # being cut short as a mute Timeout that says nothing about what stalled.
 libreagent_gtest_discover_tests(PrompterConcurrentWindowsTest
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;${LIBRELINUX_PRIVATE_BUS_ENV}"
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;${LIBREAGENT_PRIVATE_BUS_ENV}"
     PROPERTIES TIMEOUT 180)

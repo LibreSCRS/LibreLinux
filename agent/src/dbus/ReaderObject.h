@@ -8,6 +8,7 @@
 #include <sdbus-c++/Types.h>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 namespace LibreSCRS::Agent {
@@ -15,14 +16,16 @@ namespace LibreSCRS::Agent {
 // Name is fixed at construction; HasCard/Card are live — updated via
 // updateCardPresence() on insert/remove, which emits
 // org.freedesktop.DBus.Properties.PropertiesChanged so observers never see
-// stale presence.
+// stale presence. Model/Interface are the label the agent library derives over
+// the whole roster; they change when a neighbouring reader arrives or leaves
+// (updateLabel()), and are published as given, never derived here.
 class ReaderObject final : public sdbus::AdaptorInterfaces<org::librescrs::Agent::Reader1_adaptor>
 {
 public:
     ReaderObject(sdbus::IConnection& connection, sdbus::ObjectPath path, std::string name, bool hasCard,
-                 sdbus::ObjectPath card)
+                 sdbus::ObjectPath card, std::string model, std::string_view interfaceToken)
         : AdaptorInterfaces(connection, std::move(path)), m_name(std::move(name)), m_hasCard(hasCard),
-          m_card(std::move(card))
+          m_card(std::move(card)), m_model(std::move(model)), m_interface(interfaceToken)
     {
         registerAdaptor();
         // Announce over the ObjectManager so a client tracking the live tree sees
@@ -90,6 +93,25 @@ public:
         getObject().emitPropertiesChangedSignal(sdbus::InterfaceName{Reader1_adaptor::INTERFACE_NAME}, changed);
     }
 
+    /// Replace the label (Model + Interface) and emit ONE PropertiesChanged
+    /// carrying both, since a client reads them as a pair. A no-op (no signal)
+    /// when neither changed.
+    void updateLabel(std::string model, std::string_view interfaceToken)
+    {
+        {
+            // Same lock discipline as updateCardPresence: mutate under the lock,
+            // emit outside it.
+            const std::lock_guard guard(m_mutex);
+            if (m_model == model && m_interface == interfaceToken) {
+                return;
+            }
+            m_model = std::move(model);
+            m_interface = interfaceToken;
+        }
+        getObject().emitPropertiesChangedSignal(sdbus::InterfaceName{Reader1_adaptor::INTERFACE_NAME},
+                                                {sdbus::PropertyName{"Model"}, sdbus::PropertyName{"Interface"}});
+    }
+
 private:
     std::string Name() override
     {
@@ -105,13 +127,26 @@ private:
         const std::lock_guard guard(m_mutex);
         return m_card;
     }
-    // Guards the live presence fields (m_hasCard / m_card): the monitor-thread
-    // updateCardPresence writer must not tear against the loop-thread
-    // resolveReaderCard reader or the bus-thread Reader1 property getters.
+    std::string Model() override
+    {
+        const std::lock_guard guard(m_mutex);
+        return m_model;
+    }
+    std::string Interface() override
+    {
+        const std::lock_guard guard(m_mutex);
+        return m_interface;
+    }
+    // Guards the live fields (m_hasCard / m_card / m_model / m_interface): the
+    // monitor-thread updateCardPresence / updateLabel writers must not tear
+    // against the loop-thread resolveReaderCard reader or the bus-thread Reader1
+    // property getters.
     // m_name is set once at construction and never mutated, so it needs no guard.
     mutable std::mutex m_mutex;
     std::string m_name;
     bool m_hasCard;
     sdbus::ObjectPath m_card;
+    std::string m_model;
+    std::string m_interface;
 };
 } // namespace LibreSCRS::Agent

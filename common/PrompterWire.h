@@ -1,31 +1,41 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 // SPDX-FileCopyrightText: 2026 hirashix0
 //
-// The single definition of the Prompter1 D-Bus wire vocabulary shared across
-// THIS boundary's two binaries: the secret-KIND strings, the option-dict KEYS
-// the request marshals, and the STATUS strings the prompter returns. The
-// producer side (PrompterClient.cpp issuing the request + parsing the status)
-// and the consumer side (PrompterService.cpp parsing the kind + option dict and
-// minting the status) each used to hand-spell these same literals, with no
-// compile/link tie between the two binaries — so a typo on either side was a
-// silent wire mismatch (unknown kind -> error, dropped option, unrecognised
-// status -> generic error) with no compile failure. Sharing one constexpr table
-// closes that gap.
+// The Prompter1 D-Bus transport vocabulary shared across THIS boundary's two
+// binaries: the option-dict KEYS the request marshals and the contract version.
+// The producer side (PrompterClient.cpp issuing the request) and the consumer
+// side (PrompterService.cpp parsing the option dict) each used to hand-spell
+// these same literals, with no compile/link tie between the two binaries -- so
+// a typo on either side was a silent wire mismatch with no compile failure.
 //
-// The kind strings ("pin"/"can"/"mrz") ARE the CredentialEntry field identifiers
-// the LM Auth surface matches against AuthRequirement keys — those three kinds
-// are neutral vocabulary and are also defined in the agent core's PrompterWire
-// copy (LibreSCRS::PrompterWire), which the Qt-free credential plumbing keys off.
-// The option-key/status vocabulary is transport-only and lives HERE alone.
+// What every agent host and every prompter speaks alike -- the secret-KIND
+// words, the reply STATUS words and the largest secret a prompter may hand
+// back, and the reader-interface tokens -- is the agent library's, and is only
+// named here (LibreSCRS/Agent/backend/PrompterWire.h,
+// LibreSCRS/Agent/wire/ReaderInterface.h), never spelled again.
 //
-// Header-only, dependency-free (no Qt, no sdbus, no LM) — included by the agent
-// backend and the Qt prompter via the librelinux-common interface target.
+// Header-only, no Qt, no sdbus, no LM -- included by the agent backend and the
+// Qt prompter via the librelinux-common interface target, which also carries
+// the agent library's include directory for the two headers above (both
+// standard-library only).
 
 #pragma once
+
+#include <LibreSCRS/Agent/backend/PrompterWire.h> // kind words, reply status, kMaxSecretBytes
 
 #include <cstdint>
 
 namespace LibreLinux::PrompterWire {
+
+// The agent library's prompter vocabulary under this boundary's name.
+using LibreSCRS::PrompterWire::kKindCan;
+using LibreSCRS::PrompterWire::kKindChangePin;
+using LibreSCRS::PrompterWire::kKindMrz;
+using LibreSCRS::PrompterWire::kKindPin;
+using LibreSCRS::PrompterWire::kMaxSecretBytes;
+using LibreSCRS::PrompterWire::PromptReplyStatus;
+using LibreSCRS::PrompterWire::replyStatusFromToken;
+using LibreSCRS::PrompterWire::replyStatusToken;
 
 // The Prompter1 contract this tree implements, published by the prompter as the
 // read-only ProtocolVersion property and read once by the agent.
@@ -42,17 +52,9 @@ namespace LibreLinux::PrompterWire {
 //        the "timeout" reply word, Reset()
 inline constexpr std::uint32_t kProtocolVersion = 2;
 
-// Secret kind requested over RequestSecret(kind, options); also the
-// CredentialEntry field identifier the LM Auth surface matches.
-inline constexpr const char* kKindPin = "pin";
-inline constexpr const char* kKindCan = "can";
-inline constexpr const char* kKindMrz = "mrz";
-
-// Multi-secret kind requested over RequestSecrets(kind, options): the PIN
-// change prompt (current + new + confirm). The confirm entry is validated
-// inside the prompter and NEVER crosses the wire — the reply carries exactly
-// two sealed fds: primary (current) and secondary (new).
-inline constexpr const char* kKindChangePin = "change_pin";
+// The multi-secret kind (kKindChangePin, over RequestSecrets): the confirm
+// entry is validated inside the prompter and NEVER crosses the wire -- the
+// reply carries exactly two sealed fds: primary (current) and secondary (new).
 
 // Option-dict keys (the a{sv} options argument of RequestSecret).
 // The identity this prompt answers to for the lifetime of the call: the value
@@ -78,19 +80,15 @@ inline constexpr const char* kOptDeadlineMs = "deadline_ms";
 // the reader roster and is the only layer that can tell a dual-interface unit's
 // two slots apart. The prompter renders them and parses none of them.
 inline constexpr const char* kOptReaderModel = "reader_model";
-// A CLOSED vocabulary (kReaderInterface* below), not prose. The agent has no
+// A CLOSED vocabulary (the agent library's readerInterfaceToken), not prose. The agent has no
 // localisation, so any English wording it composed would be unfixable by a
 // prompter -- the agent keeps the judgement, the prompter keeps the words. An
-// unrecognised value is treated as kReaderInterfaceUnknown.
+// unrecognised value is treated as "unknown".
 inline constexpr const char* kOptReaderInterface = "reader_interface";
 // The literal PC/SC name, for a details affordance. Long enough to push the
 // entry field off a small screen, so it never belongs in the chrome itself.
 inline constexpr const char* kOptReaderFull = "reader_full";
 
-// The closed vocabulary of kOptReaderInterface.
-inline constexpr const char* kReaderInterfaceContact = "contact";
-inline constexpr const char* kReaderInterfaceContactless = "contactless";
-inline constexpr const char* kReaderInterfaceUnknown = "unknown";
 inline constexpr const char* kOptTitle = "title";
 inline constexpr const char* kOptDescription = "description";
 inline constexpr const char* kOptRequester = "requester";
@@ -111,7 +109,7 @@ inline constexpr const char* kOptMaxLength = "max_length";
 //   "last_error" (s) msgKey of the failure that triggered the retry (an
 //                LibreSCRS::Auth::ErrorKeys value, e.g. the pre-read
 //                auth-failure key) -- an open, growable value space, unlike
-//                the closed kKind*/kStatus* vocabularies above; the prompter
+//                the closed kind and reply-status vocabularies; the prompter
 //                maps recognised keys to localized text and falls back to a
 //                generic line for anything else, never showing the raw key.
 inline constexpr const char* kOptAttempt = "attempt";
@@ -125,9 +123,9 @@ inline constexpr const char* kOptLastError = "last_error";
 // Additive rollout contract, BOTH directions:
 //   * new caller x old prompter -- the prompter lifts only the keys it knows,
 //     so this one is dropped: no switch is offered and the reply is the plain
-//     kStatusOk vocabulary, exactly as before.
+//     reply vocabulary, exactly as before.
 //   * old caller x new prompter -- the key is absent, so the switch affordance
-//     is never constructed and kStatusOkMrz below is structurally unmintable.
+//     is never constructed and PromptReplyStatus::OkMrz is structurally unmintable.
 // The key is meaningful ONLY on kind "can"; a request of any other kind that
 // carries it renders no switch and answers with today's status vocabulary.
 inline constexpr const char* kOptAltKinds = "alt_kinds";
@@ -155,32 +153,19 @@ inline constexpr const char* kOptNewMaxLength = "new_max_length";
 inline constexpr const char* kOptCardLabel = "card_label";
 inline constexpr const char* kOptPinLabel = "pin_label";
 
-// Status strings returned by RequestSecret (the first tuple element).
-inline constexpr const char* kStatusOk = "ok";
-// Returned INSTEAD of kStatusOk when, and only when, the request was kind
-// "can", carried kOptAltKinds containing kKindMrz, and the user switched the
-// dialog to the MRZ form before accepting: the secret_fd then carries an MRZ
-// payload (the canonical three-line document-number / date-of-birth /
-// date-of-expiry shape), not a CAN. It tells the caller WHICH credential it is
-// holding, so it can deposit the value under the right field identifier.
+// The reply status (the first tuple element of RequestSecret/RequestSecrets)
+// is the agent library's PromptReplyStatus, spelled by replyStatusToken().
+// Two words carry a rule of THIS transport:
 //
-// Minting is gated on the same offer the dialog rendered, so "offered" and
-// "minted" cannot diverge: a caller that never opted in never sees this status,
-// and a caller that opted in but whose user stayed on the CAN form gets plain
-// kStatusOk. Consumers treat an unexpected kStatusOkMrz as they treat any
-// unknown status -- fail closed to an error, never as a successful CAN.
-inline constexpr const char* kStatusOkMrz = "ok_mrz";
-inline constexpr const char* kStatusCancelled = "cancelled";
-// The window closed itself because kOptDeadlineMs elapsed with no entry.
-// DISTINCT from kStatusCancelled on purpose: a holder who dismissed a dialog
-// and a holder whose time ran out did different things, and a client that
-// conflates them tells the second one they cancelled something.
-inline constexpr const char* kStatusTimeout = "timeout";
-inline constexpr const char* kStatusError = "error";
-// Returned to a caller that fails the prompter's binary-identity gate; pairs
-// with a zero-byte sealed memfd so no dialog shows and no secret can be
-// harvested. The agent is the only authorized caller, so it never legitimately
-// receives this — but it is part of the wire contract both ends acknowledge.
-inline constexpr const char* kStatusUnauthorized = "unauthorized";
+//   * OkMrz ("ok_mrz") is minted INSTEAD of Ok when, and only when, the
+//     request was kind "can", carried kOptAltKinds containing kKindMrz, and
+//     the user switched the dialog to the MRZ form before accepting: the
+//     secret_fd then carries an MRZ payload, not a CAN. Minting is gated on the
+//     same offer the dialog rendered, so "offered" and "minted" cannot diverge;
+//     a caller that never made the offer treats it as it treats any unknown
+//     word -- an error, never a successful CAN.
+//   * Unauthorized pairs with a zero-byte sealed memfd and answers a caller
+//     that fails the prompter's binary-identity gate, so no dialog shows and no
+//     secret can be harvested. The agent never legitimately receives it.
 
 } // namespace LibreLinux::PrompterWire

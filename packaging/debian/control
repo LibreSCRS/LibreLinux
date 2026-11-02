@@ -17,8 +17,6 @@ Build-Depends: debhelper-compat (= 13),
                qt6-base-dev,
                libkf6coreaddons-dev,
                libkf6i18n-dev,
-               libgtest-dev,
-               dbus-daemon,
                liblibrescrs-dev (>= 5.0),
                librescrs-agent-core-dev (>= 5.0)
 Standards-Version: 4.7.0
@@ -31,9 +29,9 @@ Depends: ${shlibs:Depends}, ${misc:Depends},
          liblibrescrs5 (>= 5.0),
          librescrs-card-plugins (>= 5.0),
          librescrs-pinentry-kde (= ${binary:Version}),
-         p11-kit
-Recommends: pcscd, polkitd
-Conflicts: librescrs-pkcs11-direct
+         p11-kit,
+         polkitd
+Recommends: pcscd
 Description: LibreSCRS smart-card session agent (D-Bus)
  A per-user, headless, Qt-free D-Bus session service that is the sole owner of
  smart-card access for the LibreSCRS stack. It works on any desktop.
@@ -46,11 +44,6 @@ Description: LibreSCRS smart-card session agent (D-Bus)
  The dependency on the prompter is hard rather than suggested. An agent with no
  prompter installs, activates over D-Bus, enumerates a card and then fails on
  the first PIN, because the interface it calls has no implementation.
- .
- The agent registers a PKCS#11 proxy with p11-kit, so it conflicts with
- librescrs-pkcs11-direct, the direct module package the middleware no longer
- builds but a machine may still carry: one card must not have two providers and
- two security models. Installing the agent with apt removes that package.
 
 Package: librescrs-pinentry-kde
 Architecture: any

@@ -470,7 +470,7 @@ TEST(SignResultStore, SealFailureLeavesStoreUnreadyForGetResult)
 // client recovers via GetResult (store ready <=> Ok).
 TEST(SignResultStore, EmitThrowAfterSuccessfulSealFailsOpenAndStaysRecoverable)
 {
-    log::init([](log::Level, std::string_view) {}); // silence the expected post-seal warn line
+    LibreSCRS::log::init([](LibreSCRS::log::Level, std::string_view) {}); // silence the expected post-seal warn line
     SignResultState state;
     const std::vector<std::uint8_t> bytes{'P', 'D', 'F', 0x0A, 0x0B, 0x0C};
     const SignMeta meta{.format = "pades", .level = "b-b", .tsaUsed = false, .chainComplete = false};
@@ -494,7 +494,7 @@ TEST(SignResultStore, EmitThrowAfterSuccessfulSealFailsOpenAndStaysRecoverable)
     const auto size = ::lseek(sealed.fd, 0, SEEK_END);
     EXPECT_EQ(size, static_cast<off_t>(bytes.size()));
     ::close(sealed.fd);
-    log::resetForTest();
+    LibreSCRS::log::resetForTest();
 }
 
 // A seal FAILURE still fails CLOSED through the same writer path: emit is never

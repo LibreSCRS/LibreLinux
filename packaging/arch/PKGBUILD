@@ -7,7 +7,12 @@
 #   librescrs-agent        — headless, Qt-free D-Bus session service
 #   librescrs-pinentry-kde — KDE-styled secure-input helper for the agent
 #
-# Dependency chain: librescrs-middleware <= librelinux <= librekde
+# The agent depends on the prompter, not the other way round, as in the deb
+# and rpm packages: an agent with no prompter installs, activates over D-Bus,
+# enumerates a card and then fails on the first PIN, because the interface it
+# calls has no implementation. The agent's own binary stays Qt-free.
+#
+# Dependency chain: librescrs-middleware <= libreagent <= librelinux <= librekde|librecelik
 #
 # Versioning: this component no longer carries its own 0.x SemVer. It is
 # released in lockstep with the rest of the stack, and pkgver is the first
@@ -38,14 +43,8 @@ makedepends=(
     'qt6-base'                  # Core/Gui/Widgets/DBus/Test
     'kcoreaddons'               # KF6::CoreAddons
     'ki18n'                     # KF6::I18n
-    # Test-time only — but CONFIGURE-time, not check-time: agent/tests is added
-    # unconditionally and does find_package(GTest REQUIRED), so without these the
-    # build fails at configure. A clean chroot is the only place that shows: a
-    # developer machine and the CI image both have them already.
-    'gtest'                     # agent/tests/CMakeLists.txt: find_package(GTest REQUIRED)
-    'dbus'                      # dbus-run-session (prompter + agent integration tests)
 )
-options=('!lto')   # links in a clean chroot with LTO off; with makepkg's -flto=auto the link once failed there, cause not established
+options=('!lto')   # LTO off, as the RPM spec does; with makepkg's -flto=auto the link once failed in a clean chroot, cause not established
 # The source is this project's signed release tag, fetched with git and
 # refused by makepkg unless the tag carries a valid signature by the key below
 # -- the LibreSCRS release key, whose primary fingerprint is the one in KEYS
@@ -69,8 +68,10 @@ build() {
     # The prompter is ON by default (LIBRELINUX_BUILD_PROMPTER_KDE) so a single
     # build produces both split-package payloads.
     #
-    # LIBRELINUX_USE_INSTALLED_AGENT_CORE is not optional here. Its default is
-    # OFF, which fetches the agent core and then its CBOR codec over the
+    # No tests are built, as in the deb and rpm recipes: CI runs the suite.
+    #
+    # LIBRESCRS_AGENT_FROM_SOURCE=OFF is not optional here. Its default is
+    # ON, which fetches the agent core and then its CBOR codec over the
     # network. In a network-less chroot that aborts; where it succeeds it is
     # worse, because the package is then built from a development commit rather
     # than from the agent's published tag — the one thing the publication order
@@ -80,16 +81,9 @@ build() {
     cmake -S . -B build -G Ninja \
         -DCMAKE_BUILD_TYPE=RelWithDebInfo \
         -DCMAKE_INSTALL_PREFIX=/usr \
-        -DLIBRELINUX_USE_INSTALLED_AGENT_CORE=ON
+        -DBUILD_TESTING=OFF \
+        -DLIBRESCRS_AGENT_FROM_SOURCE=OFF
     cmake --build build -j4
-}
-
-check() {
-    cd "$srcdir/LibreLinux-$pkgver"
-    # Prompter widget tests need offscreen Qt; the prompter+agent integration
-    # tests spin a private bus via dbus-run-session (dbus is a makedepend).
-    # Live-card/PIN suites self-skip without a reader + LIBRESCRS_TEST_* env.
-    QT_QPA_PLATFORM=offscreen ctest --test-dir build --output-on-failure -j4
 }
 
 # --- shared staging -----------------------------------------------------------
@@ -154,11 +148,8 @@ package_librescrs-agent() {
         'pcsclite'
         'openssl'       # OpenSSL::Crypto — CardFingerprint SHA-256(ATR); the daemon links libcrypto directly
         'p11-kit'       # loads the shipped .module for app auto-discovery + provides `p11-kit server`
-    )
-    optdepends=(
-        'librescrs-pinentry-kde: KDE secure PIN/CAN entry prompter'
-        'pcsclite: the pcscd daemon must be running for card access'
-        'polkit: client authorization for Sign and trust-config (PolkitAuthorizer)'
+        "librescrs-pinentry-kde=$pkgver-$pkgrel" # the prompter every PIN and CAN goes through
+        'polkit'        # authorizes every signature, PIN change, PKCS#11 login and trust setting
     )
     cd "$srcdir/LibreLinux-$pkgver"
 
@@ -172,7 +163,6 @@ package_librescrs-agent() {
 package_librescrs-pinentry-kde() {
     pkgdesc="KDE-styled secure PIN/CAN entry prompter for the LibreSCRS agent"
     depends=(
-        'librescrs-agent'
         'librescrs-middleware>=5.0' # links LibreSCRS::Secure (libLibreSCRS_Auth.so)
         'sdbus-cpp'                 # prompter links SDBusCpp::sdbus-c++ -> libsdbus-c++.so.2 directly
         'qt6-base'

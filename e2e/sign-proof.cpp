@@ -21,6 +21,8 @@
 // PACE-gated certificate read; the counter-limited PIN is requested once, by the
 // single Sign, and served by the auto-prompter while the gate file exists.
 
+#include "CertificateRead.h" // pkcs11-module/src: the module's own certificate read
+
 #include <sdbus-c++/sdbus-c++.h>
 
 #include <atomic>
@@ -48,22 +50,12 @@ constexpr const char* kObjMgr = "org.freedesktop.DBus.ObjectManager";
 constexpr const char* kReaderIf = "org.librescrs.Agent.Reader1";
 constexpr const char* kCardIf = "org.librescrs.Agent.Card1";
 constexpr const char* kOpIf = "org.librescrs.Agent.Operation1";
-constexpr const char* kCertsIf = "org.librescrs.Agent.Operation.Certificates1";
 constexpr const char* kSignIf = "org.librescrs.Agent.Operation.Sign1";
 
 // GetManagedObjects reply shape: a{oa{sa{sv}}}.
 using PropMap = std::map<std::string, sdbus::Variant>;
 using IfaceMap = std::map<std::string, PropMap>;
 using ManagedObjects = std::map<sdbus::ObjectPath, IfaceMap>;
-
-// Certificates1.Result payload element: (s b a{sa{s(ssv)}} u as as u b ay s u b).
-using FieldVal = sdbus::Struct<std::string, std::string, sdbus::Variant>;
-using FieldGroup = std::map<std::string, FieldVal>;
-using Fields = std::map<std::string, FieldGroup>;
-using CertEntry =
-    sdbus::Struct<std::string, bool, Fields, std::uint32_t, std::vector<std::string>, std::vector<std::string>,
-                  std::uint32_t, bool, std::vector<std::uint8_t>, std::string, std::uint32_t, bool>;
-using CertList = std::vector<CertEntry>;
 
 std::string envOr(const char* key, const char* fallback)
 {
@@ -262,59 +254,29 @@ int main(int argc, char** argv)
     // ---- 2. Resolve the signing certId ---------------------------------------
     std::string certId = forcedCertId;
     if (certId.empty()) {
-        // ReadCertificates -> op path; subscribe to Certificates1.Result + Finished.
         // CAN-only (PACE), no PIN: this read is safe to run (and, if needed, retry).
-        std::mutex m;
-        std::condition_variable cv;
-        bool finished = false;
-        bool gotCerts = false;
-        std::uint32_t cStatus = 99, cErr = 0;
-        std::string cMsg;
-        CertList certs;
-
-        sdbus::ObjectPath opPath;
+        // Collected the way the PKCS#11 module collects it (CertificateRead.h):
+        // a read that ended before this client could subscribe is still read.
+        LibreSCRS::Pkcs11Agent::CertificateRead read;
         try {
-            card->callMethod("ReadCertificates").onInterface(kCardIf).storeResultsTo(opPath);
+            read = LibreSCRS::Pkcs11Agent::readCertificates(*conn, sdbus::ObjectPath{cardPath});
         } catch (const sdbus::Error& e) {
-            std::fprintf(stderr, "[proof] FATAL: ReadCertificates failed: %s: %s\n", e.getName().c_str(),
+            std::fprintf(stderr, "[proof] FATAL: certificate read failed: %s: %s\n", e.getName().c_str(),
                          e.getMessage().c_str());
             return 13;
         }
-        std::fprintf(stderr, "[proof] ReadCertificates op = %s\n", opPath.c_str());
-        auto op = sdbus::createProxy(*conn, sdbus::ServiceName{kAgentSvc}, opPath);
-        op->uponSignal("Result").onInterface(kCertsIf).call([&](const CertList& c) {
-            std::lock_guard<std::mutex> lk(m);
-            certs = c;
-            gotCerts = true;
-        });
-        op->uponSignal("Finished")
-            .onInterface(kOpIf)
-            .call([&](std::uint32_t status, std::uint32_t errorCode, const std::string& /*msgKey*/,
-                      const std::string& msgFallback) {
-                std::lock_guard<std::mutex> lk(m);
-                cStatus = status;
-                cErr = errorCode;
-                cMsg = msgFallback;
-                finished = true;
-                cv.notify_all();
-            });
-
-        {
-            std::unique_lock<std::mutex> lk(m);
-            if (!cv.wait_for(lk, std::chrono::seconds(90), [&] { return finished; })) {
-                std::fprintf(stderr, "[proof] FATAL: certificate read timed out (90s)\n");
-                return 14;
-            }
-        }
-        if (cStatus != 0) {
-            std::fprintf(stderr, "[proof] FATAL: certificate read failed status=%u errorCode=%u msg=\"%s\"\n", cStatus,
-                         cErr, cMsg.c_str());
+        std::fprintf(stderr, "[proof] ReadCertificates op = %s\n", read.operation.c_str());
+        if (read.timedOut) {
+            std::fprintf(stderr, "[proof] FATAL: certificate read timed out (%llds)\n",
+                         static_cast<long long>(LibreSCRS::Pkcs11Agent::kCertificateReadBudget.count()));
             return 14;
         }
-        if (!gotCerts) {
-            std::fprintf(stderr, "[proof] FATAL: cert read finished Ok but Result signal was missed\n");
+        if (!read.ok()) {
+            std::fprintf(stderr, "[proof] FATAL: certificate read failed status=%u errorCode=%u msg=\"%s\"\n",
+                         read.status, read.errorCode, read.message.c_str());
             return 14;
         }
+        const auto& certs = read.certificates;
         std::fprintf(stderr, "[proof] certificates: %zu\n", certs.size());
         std::string firstSigning;
         std::string prefMatch;
