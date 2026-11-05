@@ -59,18 +59,12 @@ TEST(Operation1Adaptor, ConstructsAndUnregistersCleanly)
 
     auto state = std::make_shared<OperationState>();
     state->phase.store(4u);
-    state->progress.store(0.75);
-    state->isIndeterminate.store(true);
-    state->watchdogTimeoutSec.store(60u);
     state->completed.store(true);
     state->terminalStatus.store(2u);
     state->terminalErrorCode.store(1u);
     {
         IdentityProbeAdaptor adaptor(*conn, sdbus::ObjectPath{"/org/librescrs/Agent/op/0"}, state, {});
         EXPECT_EQ(adaptor.phase(), 4u);
-        EXPECT_DOUBLE_EQ(adaptor.progress(), 0.75);
-        EXPECT_TRUE(adaptor.isIndeterminate());
-        EXPECT_EQ(adaptor.watchdogTimeoutSeconds(), 60u);
         EXPECT_TRUE(adaptor.completed());
         EXPECT_EQ(adaptor.terminalStatus(), 2u);
         EXPECT_EQ(adaptor.terminalErrorCode(), 1u);

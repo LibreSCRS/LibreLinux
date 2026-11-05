@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 // SPDX-FileCopyrightText: 2026 hirashix0
 #include "SessionLifecycleWatch.h"
-#include "AgentFrontend.h"
 #include <LibreSCRS/Agent/AgentCore.h>
 #include <LibreSCRS/Logging.h>
 #include <sdbus-c++/Error.h>
@@ -107,22 +106,20 @@ void SessionLifecycleWatch::watchSession(sdbus::IConnection& systemBus)
     log::infof("session lifecycle: watching logind session {}", m_sessionPath);
 }
 
-void quiesceAndAnnounce(AgentCore& core, std::mutex& stateMutex, AgentFrontend& frontend, QuiesceReason reason)
+void quiesceUnderLock(AgentCore& core, std::mutex& stateMutex, QuiesceReason reason)
 {
     {
         const std::lock_guard lock(stateMutex);
         core.quiesce(reason);
     }
     log::infof("session lifecycle: card access quiesced (reason {})", static_cast<unsigned>(reason));
-    frontend.emitQuiesced(reason);
 }
 
 std::unique_ptr<SessionLifecycleWatch> watchSessionLifecycle(sdbus::IConnection& systemBus, AgentCore& core,
-                                                             std::mutex& stateMutex, AgentFrontend& frontend)
+                                                             std::mutex& stateMutex)
 {
-    return std::make_unique<SessionLifecycleWatch>(systemBus, [&core, &stateMutex, &frontend](QuiesceReason reason) {
-        quiesceAndAnnounce(core, stateMutex, frontend, reason);
-    });
+    return std::make_unique<SessionLifecycleWatch>(
+        systemBus, [&core, &stateMutex](QuiesceReason reason) { quiesceUnderLock(core, stateMutex, reason); });
 }
 
 } // namespace LibreSCRS::Agent

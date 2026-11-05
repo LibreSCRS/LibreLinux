@@ -1,21 +1,13 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 // SPDX-FileCopyrightText: 2026 hirashix0
 //
-// Conformance test pinning the frozen AgentTransport backend surface.
-// Proves the interface with a fake so any drift in the signatures/semantics the
-// platform impls (Linux BusExporter, macOS XPC) must honour is caught at compile
-// time (static_asserts) and run time:
-//   1. publishReader/publishCard/withdraw/updateProperties are recorded verbatim
-//      by an in-memory fake (typed presence deltas, no wire path or Variant).
-//   2. post(fn) is a straight worker->loop hop the fake can run inline.
-//   3. postAfter(delay, fn) carries the delay through to the backing sink.
-//   4. onClientDisconnect(handler) registers a startup-wired handler the
-//      backend fires with the disconnecting client's CallerToken.
-// It also drives the real Linux BusExporter loop-marshaling implementation: its
-// post/postAfter must marshal onto the EventLoopPoster attached via
-// attachLoopPoster. That case needs a private session bus (dbus-run-session).
+// The Linux BusExporter, driven directly. Its post/postAfter marshal onto the
+// EventLoopPoster attached via attachLoopPoster; the presence calls it receives
+// materialise real, introspectable sdbus objects through the frontend; a reader
+// carries the roster's label; and every registered client-disconnect handler
+// fires in registration order. These cases need a private session bus
+// (dbus-run-session).
 
-#include <LibreSCRS/Agent/backend/AgentTransport.h>
 #include "TestAgentCore.h"
 #include "AllowAllAuthorizer.h" // test support: grants every action
 #include <LibreSCRS/Agent/backend/Authorizer.h>
@@ -55,7 +47,6 @@
 #include <vector>
 
 using LibreSCRS::Agent::AgentFrontend;
-using LibreSCRS::Agent::AgentTransport;
 using LibreSCRS::Agent::AllowAllAuthorizer;
 using LibreSCRS::Agent::BusExporter;
 using LibreSCRS::Agent::CallerToken;
@@ -104,161 +95,12 @@ public:
     }
 };
 
-// A fake exercising every arm of the frozen surface. Presence calls land in
-// vectors, post() runs inline, postAfter() records its delay, and the disconnect
-// handlers are stored (additive multi-subscriber, matching production) so the
-// test can fire them all in order (as the real bus would).
-class FakeAgentTransport final : public AgentTransport
-{
-public:
-    std::vector<ReaderState> readers;
-    std::vector<CardState> cards;
-    std::vector<ObjectId> withdrawn;
-    std::vector<std::pair<ObjectId, PropertyDelta>> propertyUpdates;
-    std::vector<std::chrono::microseconds> postAfterDelays;
-    std::vector<std::function<void(CallerToken)>> disconnectHandlers;
-
-    void fireDisconnect(const CallerToken& caller)
-    {
-        for (const auto& handler : disconnectHandlers) {
-            if (handler) {
-                handler(caller);
-            }
-        }
-    }
-
-    void publishReader(const ReaderState& reader) override
-    {
-        readers.push_back(reader);
-    }
-    void publishCard(const CardState& card) override
-    {
-        cards.push_back(card);
-    }
-    void withdraw(ObjectId object) override
-    {
-        withdrawn.push_back(object);
-    }
-    void updateProperties(ObjectId reader, const PropertyDelta& delta) override
-    {
-        propertyUpdates.emplace_back(reader, delta);
-    }
-    void post(std::function<void()> fn) override
-    {
-        if (fn) {
-            fn();
-        }
-    }
-    void postAfter(std::chrono::microseconds delay, std::function<void()> fn) override
-    {
-        postAfterDelays.push_back(delay);
-        if (fn) {
-            fn();
-        }
-    }
-    void onClientDisconnect(std::function<void(CallerToken)> handler) override
-    {
-        disconnectHandlers.push_back(std::move(handler));
-    }
-};
-
-// --- Frozen-surface locks (compile-time) --------------------------------
-
-// The four presence methods take typed deltas by const-ref / by value ObjectId.
-static_assert(std::is_same_v<decltype(&AgentTransport::publishReader), void (AgentTransport::*)(const ReaderState&)>,
-              "frozen: publishReader(const ReaderState&)");
-static_assert(std::is_same_v<decltype(&AgentTransport::publishCard), void (AgentTransport::*)(const CardState&)>,
-              "frozen: publishCard(const CardState&)");
-static_assert(std::is_same_v<decltype(&AgentTransport::withdraw), void (AgentTransport::*)(ObjectId)>,
-              "frozen: withdraw(ObjectId)");
-static_assert(std::is_same_v<decltype(&AgentTransport::updateProperties),
-                             void (AgentTransport::*)(ObjectId, const PropertyDelta&)>,
-              "frozen: updateProperties(ObjectId, const PropertyDelta&)");
-
-// The two loop-marshaling methods.
-static_assert(std::is_same_v<decltype(&AgentTransport::post), void (AgentTransport::*)(std::function<void()>)>,
-              "frozen: post(std::function<void()>)");
-static_assert(std::is_same_v<decltype(&AgentTransport::postAfter),
-                             void (AgentTransport::*)(std::chrono::microseconds, std::function<void()>)>,
-              "frozen: postAfter(std::chrono::microseconds, std::function<void()>)");
-
-// The client-liveness registration.
-static_assert(std::is_same_v<decltype(&AgentTransport::onClientDisconnect),
-                             void (AgentTransport::*)(std::function<void(CallerToken)>)>,
-              "frozen: onClientDisconnect(std::function<void(CallerToken)>)");
-
 } // namespace
 
-TEST(AgentTransportConformance, PresenceDeltasRecordedVerbatim)
-{
-    FakeAgentTransport fake;
-    AgentTransport& transport = fake;
-
-    transport.publishReader(ReaderState{ObjectId{1}, "R0", false, {}});
-    ASSERT_EQ(fake.readers.size(), 1U);
-    EXPECT_EQ(fake.readers[0].id, ObjectId{1});
-    EXPECT_EQ(fake.readers[0].name, std::string{"R0"});
-    EXPECT_FALSE(fake.readers[0].hasCard);
-    EXPECT_FALSE(fake.readers[0].card.valid());
-
-    transport.publishCard(CardState{ObjectId{2}, ObjectId{1}, 0U, {}});
-    ASSERT_EQ(fake.cards.size(), 1U);
-    EXPECT_EQ(fake.cards[0].id, ObjectId{2});
-    EXPECT_EQ(fake.cards[0].reader, ObjectId{1});
-
-    transport.updateProperties(ObjectId{1}, PropertyDelta{true, ObjectId{2}});
-    ASSERT_EQ(fake.propertyUpdates.size(), 1U);
-    EXPECT_EQ(fake.propertyUpdates[0].first, ObjectId{1});
-    EXPECT_TRUE(fake.propertyUpdates[0].second.hasCard);
-    EXPECT_EQ(fake.propertyUpdates[0].second.card, ObjectId{2});
-
-    transport.withdraw(ObjectId{2});
-    ASSERT_EQ(fake.withdrawn.size(), 1U);
-    EXPECT_EQ(fake.withdrawn[0], ObjectId{2});
-}
-
-TEST(AgentTransportConformance, PostRunsImmediatelyAndPostAfterCarriesDelay)
-{
-    FakeAgentTransport fake;
-    AgentTransport& transport = fake;
-
-    int ran = 0;
-    transport.post([&] { ++ran; });
-    EXPECT_EQ(ran, 1);
-
-    transport.postAfter(std::chrono::milliseconds{5}, [&] { ++ran; });
-    EXPECT_EQ(ran, 2);
-    ASSERT_EQ(fake.postAfterDelays.size(), 1U);
-    EXPECT_EQ(fake.postAfterDelays[0], std::chrono::microseconds{5000});
-}
-
-TEST(AgentTransportConformance, DisconnectHandlersFireAllInRegistrationOrder)
-{
-    FakeAgentTransport fake;
-    AgentTransport& transport = fake;
-
-    // Additive multi-subscriber contract: EVERY registered handler fires, in
-    // registration order, on each disconnect (production registers op auto-cancel
-    // then lease revoke).
-    std::vector<int> order;
-    CallerToken fired;
-    transport.onClientDisconnect([&](CallerToken c) {
-        order.push_back(1);
-        fired = std::move(c);
-    });
-    transport.onClientDisconnect([&order](CallerToken) { order.push_back(2); });
-    ASSERT_EQ(fake.disconnectHandlers.size(), 2u);
-
-    fake.fireDisconnect(CallerToken{":1.5"});
-    EXPECT_EQ(order, (std::vector<int>{1, 2}));
-    EXPECT_EQ(fired, CallerToken{":1.5"});
-    EXPECT_EQ(fired.str(), std::string{":1.5"});
-}
-
-// The Linux impl side: BusExporter::post/postAfter must marshal onto the
+// BusExporter::post/postAfter must marshal onto the
 // EventLoopPoster attached via attachLoopPoster (draining the sd-event loop runs
 // the callbacks). With no poster attached the calls are silent no-ops.
-TEST(AgentTransportBusExporter, PostAndPostAfterMarshalThroughAttachedPoster)
+TEST(BusExporter, PostAndPostAfterMarshalThroughAttachedPoster)
 {
     auto bus = sdbus::createSessionBusConnection();
     ASSERT_NE(bus, nullptr) << "run under dbus-run-session";
@@ -295,13 +137,12 @@ TEST(AgentTransportBusExporter, PostAndPostAfterMarshalThroughAttachedPoster)
     sd_event_unref(ev);
 }
 
-// The Linux impl side of the presence surface: BusExporter IS-A AgentTransport, so
-// publishReader/publishCard/updateProperties/withdraw driven THROUGH the interface
-// reference must materialise real, introspectable sdbus objects at the
+// The presence surface: publishReader/publishCard/updateProperties/withdraw
+// driven on the BusExporter must materialise real, introspectable sdbus objects at the
 // backend-derived wire paths (the core hands opaque ObjectIds; the backend owns
 // the ObjectId<->path mapping). No loop poster is wired, so publishCard exports the
 // Card1 synchronously from the typed CardState -- enough to observe the object tree.
-TEST(AgentTransportBusExporter, PublishesPresenceTreeThroughInterface)
+TEST(BusExporter, PublishesPresenceTree)
 {
     constexpr const char* kService = "org.librescrs.Agent.Test.Transport";
     constexpr const char* kReaderPath = "/org/librescrs/Agent/reader/1";
@@ -320,9 +161,8 @@ TEST(AgentTransportBusExporter, PublishesPresenceTreeThroughInterface)
     NopResolver resolver;
     auto prompter = std::make_shared<NopPrompter>();
     AllowAllAuthorizer authz;
-    LibreSCRS::Agent::Testing::SilentTransport coreTransport;
-    LibreSCRS::Agent::AgentCore core = LibreSCRS::Agent::Testing::makeTestCore(
-        "librescrs-test-transport-tree", resolver, coreTransport, authz, prompter);
+    LibreSCRS::Agent::AgentCore core =
+        LibreSCRS::Agent::Testing::makeTestCore("librescrs-test-transport-tree", resolver, authz, prompter);
     // No loop poster -> the frontend exports the Card1 synchronously.
     BusExporter exporter(*serverConn, registry);
     // The frontend owns the exported objects + the root ManagerObject (which hosts
@@ -330,12 +170,10 @@ TEST(AgentTransportBusExporter, PublishesPresenceTreeThroughInterface)
     // reader/card children the frontend materialises).
     AgentFrontend frontend(exporter, serverConn, core, "test");
 
-    // Drive the presence surface through the interface reference (proves the
-    // virtual dispatch onto BusExporter's overrides).
-    AgentTransport& transport = exporter;
-    transport.publishReader(ReaderState{ObjectId{1}, "R0", false, {}});
-    transport.publishCard(CardState{ObjectId{2}, ObjectId{1}, 0x3U, {}});
-    transport.updateProperties(ObjectId{1}, PropertyDelta{true, ObjectId{2}});
+    // Drive the presence surface on the exporter directly.
+    exporter.publishReader(ReaderState{ObjectId{1}, "R0", false, {}});
+    exporter.publishCard(CardState{ObjectId{2}, ObjectId{1}, 0x3U, {}});
+    exporter.updateProperties(ObjectId{1}, PropertyDelta{true, ObjectId{2}});
 
     serverConn->enterEventLoopAsync();
     auto clientConn = sdbus::createSessionBusConnection();
@@ -376,7 +214,7 @@ TEST(AgentTransportBusExporter, PublishesPresenceTreeThroughInterface)
 
     // (c) withdraw(card) removes the Card1 object (production tears down from a
     // monitor thread while the loop runs; sdbus-c++ serialises bus access).
-    transport.withdraw(ObjectId{2});
+    exporter.withdraw(ObjectId{2});
     {
         ManagedObjects managed;
         root->callMethod("GetManagedObjects")
@@ -395,7 +233,7 @@ TEST(AgentTransportBusExporter, PublishesPresenceTreeThroughInterface)
 // beside it relabels the reader already on the bus -- one PropertiesChanged
 // carrying both, and Get answering the new label. Driven through the registry
 // (the production source), so nothing here classifies a reader name.
-TEST(AgentTransportBusExporter, AReaderCarriesTheRostersLabelAndFollowsItsChanges)
+TEST(BusExporter, AReaderCarriesTheRostersLabelAndFollowsItsChanges)
 {
     constexpr const char* kService = "org.librescrs.Agent.Test.ReaderLabel";
     constexpr const char* kReader1Iface = "org.librescrs.Agent.Reader1";
@@ -412,9 +250,8 @@ TEST(AgentTransportBusExporter, AReaderCarriesTheRostersLabelAndFollowsItsChange
     NopResolver resolver;
     auto prompter = std::make_shared<NopPrompter>();
     AllowAllAuthorizer authz;
-    LibreSCRS::Agent::Testing::SilentTransport coreTransport;
-    LibreSCRS::Agent::AgentCore core = LibreSCRS::Agent::Testing::makeTestCore(
-        "librescrs-test-transport-label", resolver, coreTransport, authz, prompter);
+    LibreSCRS::Agent::AgentCore core =
+        LibreSCRS::Agent::Testing::makeTestCore("librescrs-test-transport-label", resolver, authz, prompter);
     BusExporter exporter(*serverConn, registry);
     AgentFrontend frontend(exporter, serverConn, core, "test");
 
@@ -483,13 +320,12 @@ TEST(AgentTransportBusExporter, AReaderCarriesTheRostersLabelAndFollowsItsChange
     serverConn->leaveEventLoop();
 }
 
-// The Linux impl side of client-liveness: BusExporter owns the
-// org.freedesktop.DBus NameOwnerChanged proxy (created in its ctor). Handlers
-// registered THROUGH the AgentTransport interface must fire, in registration
+// Client-liveness: BusExporter owns the org.freedesktop.DBus NameOwnerChanged
+// proxy (created in its ctor). Registered handlers must fire, in registration
 // order, with the disconnecting client's CallerToken when a unique-name client
 // drops off the bus. Proves the watch folded out of OperationManager lands here.
 // Needs a private session bus (dbus-run-session).
-TEST(AgentTransportBusExporter, ClientDisconnectFiresHandlersInRegistrationOrder)
+TEST(BusExporter, ClientDisconnectFiresHandlersInRegistrationOrder)
 {
     auto agentBus = sdbus::createSessionBusConnection();
     ASSERT_NE(agentBus, nullptr) << "run under dbus-run-session";
@@ -503,12 +339,11 @@ TEST(AgentTransportBusExporter, ClientDisconnectFiresHandlersInRegistrationOrder
     // revoke in production).
     std::mutex mtx;
     std::vector<std::pair<int, std::string>> fired;
-    AgentTransport& transport = exporter;
-    transport.onClientDisconnect([&](CallerToken c) {
+    exporter.onClientDisconnect([&](CallerToken c) {
         const std::lock_guard g(mtx);
         fired.emplace_back(1, c.str());
     });
-    transport.onClientDisconnect([&](CallerToken c) {
+    exporter.onClientDisconnect([&](CallerToken c) {
         const std::lock_guard g(mtx);
         fired.emplace_back(2, c.str());
     });

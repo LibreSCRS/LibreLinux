@@ -26,8 +26,8 @@ class AgentFrontend;
 class EventLoopPoster;
 
 // The Linux backend host. Owns the session-bus connection + sd-event loop ([1]),
-// the interface impls the neutral core borrows ([2]: prompter, authorizer,
-// transport), the owning AgentCore aggregate ([3]), and the inbound frontend +
+// the interface impls the neutral core borrows ([2]: prompter, authorizer),
+// the owning AgentCore aggregate ([3]), and the inbound frontend +
 // monitor bridge ([4]). registerOnBus() claims org.librescrs.Agent, assembles
 // the four layers, and exports the tree; run() blocks on the bus event loop
 // until a SIGINT/SIGTERM signal handler stops it.
@@ -116,13 +116,13 @@ private:
     // the prompter alive for a zombie worker; the worker's bus connection lives
     // in its own blocked call frame, so nothing else has to outlive it.
     std::shared_ptr<PrompterClient> m_prompter;
-    // AgentTransport.post backing (built in installEventLoop). shared_ptr so an
+    // BusExporter::post backing (built in installEventLoop). shared_ptr so an
     // abandoned deferred-publish worker keeps it alive through the sink it
     // value-captured; declared before m_exporter, which shared-owns it.
     std::shared_ptr<EventLoopPoster> m_loopPoster;
-    // The slim AgentTransport impl: presence snapshot + post + client-liveness + the
-    // resolveReaderCard seam. Exports no object itself. Declared before m_core (which
-    // borrows it) so it outlives the core; the presence observers the core registry
+    // The slim transport wire: presence snapshot + post + client-liveness + the
+    // resolveReaderCard seam. Exports no object itself. Declared before m_core so it
+    // outlives the core; the presence observers the core registry
     // holds against this transport are severed explicitly in quiesce() (monitor
     // already stopped) while both are still alive, so this transport's destructor
     // never touches the core.
@@ -132,7 +132,7 @@ private:
     // Owns the registry, presence model, caches, key tracker, prompt gate, config
     // store, signing engine, rate limiter, lease manager, operation scheduler, and
     // PKCS#11 broker in one clean internal order. Borrows ONLY the [2] interfaces
-    // (transport + authorizer + prompter) plus the injected resolver; emplaced in
+    // (authorizer + prompter) plus the injected resolver; emplaced in
     // registerOnBus. Declared after m_prompter so ~AgentCore joins/abandons its
     // crypto workers while the prompter is still alive — the structural half of
     // the crypto-worker shutdown keep-alive.

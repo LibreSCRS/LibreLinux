@@ -132,7 +132,7 @@ struct CardHost
     CardHost()
         : core(Testing::makeTestCore(std::string{"cardops-"} +
                                          ::testing::UnitTest::GetInstance()->current_test_info()->name(),
-                                     resolver, transport, authorizer, std::make_shared<NopPrompter>())),
+                                     resolver, authorizer, std::make_shared<NopPrompter>())),
           launcher(core, seams())
     {}
 
@@ -151,7 +151,6 @@ struct CardHost
     }
 
     Testing::NoCandidates resolver;
-    Testing::SilentTransport transport;
     AllowAllAuthorizer authorizer;
     AgentCore core;
     OperationLauncher launcher;

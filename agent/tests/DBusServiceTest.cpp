@@ -150,8 +150,7 @@ TEST(DBusService, ExportsRealObjectsOverObjectManager)
     PresenceModel model(registry, resolver);
     auto prompter = std::make_shared<NopPrompter>();
     AllowAllAuthorizer authz;
-    Testing::SilentTransport coreTransport;
-    AgentCore core = Testing::makeTestCore("dbus1", resolver, coreTransport, authz, prompter);
+    AgentCore core = Testing::makeTestCore("dbus1", resolver, authz, prompter);
     BusExporter exporter(*serverConn, registry);
     AgentFrontend frontend(exporter, serverConn, core, "test-version");
 
@@ -217,8 +216,7 @@ TEST(DBusService, OnAddDoesNotProbeTransientOpen)
     PresenceModel model(registry, resolver);
     auto prompter = std::make_shared<NopPrompter>();
     AllowAllAuthorizer authz;
-    Testing::SilentTransport coreTransport;
-    AgentCore core = Testing::makeTestCore("dbus-noprobe", resolver, coreTransport, authz, prompter);
+    AgentCore core = Testing::makeTestCore("dbus-noprobe", resolver, authz, prompter);
     BusExporter exporter(*serverConn, registry);
     AgentFrontend frontend(exporter, serverConn, core, "test");
 
@@ -243,8 +241,7 @@ TEST(DBusService, ManagerVersionReadableOverProperties)
     PresenceModel model(registry, resolver);
     auto prompter = std::make_shared<NopPrompter>();
     AllowAllAuthorizer authz;
-    Testing::SilentTransport coreTransport;
-    AgentCore core = Testing::makeTestCore("dbus2", resolver, coreTransport, authz, prompter);
+    AgentCore core = Testing::makeTestCore("dbus2", resolver, authz, prompter);
     BusExporter exporter(*serverConn, registry);
     AgentFrontend frontend(exporter, serverConn, core, "9.9.9-test");
 
@@ -280,8 +277,7 @@ TEST(DBusService, ManagerFeaturesReadableOverProperties)
     PresenceModel model(registry, resolver);
     auto prompter = std::make_shared<NopPrompter>();
     AllowAllAuthorizer authz;
-    Testing::SilentTransport coreTransport;
-    AgentCore core = Testing::makeTestCore("dbus-features", resolver, coreTransport, authz, prompter);
+    AgentCore core = Testing::makeTestCore("dbus-features", resolver, authz, prompter);
     BusExporter exporter(*serverConn, registry);
     AgentFrontend frontend(exporter, serverConn, core, "9.9.9-test");
 
@@ -316,8 +312,7 @@ TEST(DBusService, HostsPkcs11InterfaceOnManagerPath)
     PresenceModel model(registry, resolver);
     auto prompter = std::make_shared<NopPrompter>();
     AllowAllAuthorizer authz;
-    Testing::SilentTransport coreTransport;
-    AgentCore core = Testing::makeTestCore("dbus-pkcs11", resolver, coreTransport, authz, prompter);
+    AgentCore core = Testing::makeTestCore("dbus-pkcs11", resolver, authz, prompter);
     BusExporter exporter(*serverConn, registry);
     AgentFrontend frontend(exporter, serverConn, core, "t");
 
@@ -350,7 +345,6 @@ struct ManagerHarness
     PresenceModel model{registry, resolver}; // unused directly (no card in this corpus); mirrors every sibling test
     std::shared_ptr<NopPrompter> prompter = std::make_shared<NopPrompter>();
     AllowAllAuthorizer authz;
-    Testing::SilentTransport coreTransport;
     std::optional<AgentCore> core;
     std::unique_ptr<BusExporter> exporter;
     std::unique_ptr<AgentFrontend> frontend;
@@ -359,7 +353,7 @@ struct ManagerHarness
         : serverConn(sdbus::createSessionBusConnection())
     {
         serverConn->requestName(sdbus::ServiceName{serviceName});
-        core.emplace(resolver, coreTransport, authz, prompter, Testing::testCoreDir(cfgDirName) / "agent.conf",
+        core.emplace(resolver, authz, prompter, Testing::testCoreDir(cfgDirName) / "agent.conf",
                      Testing::testCoreDir(cfgDirName) / "cache", Testing::noReaderCard(), Testing::noCardKey());
         exporter = std::make_unique<BusExporter>(*serverConn, registry);
         frontend = std::make_unique<AgentFrontend>(*exporter, serverConn, *core, "t");
@@ -526,7 +520,7 @@ TEST(DBusService, Pkcs11AsyncCertDerFulfilsDeferredErrorReply)
     AllowAllAuthorizer authz;
     auto prompter = std::make_shared<NopPrompter>();
     BusExporter exporter(*serverConn);
-    AgentCore core(resolver, exporter, authz, prompter, testCfgDir("dbus-async") / "agent.conf",
+    AgentCore core(resolver, authz, prompter, testCfgDir("dbus-async") / "agent.conf",
                    testCfgDir("dbus-async") / "cache", makeResolveReaderCard(exporter), makeResolveCardKey(exporter));
     exporter.observePresenceFrom(core.objectRegistry());
     AgentFrontend frontend(exporter, serverConn, core, "t");
@@ -574,7 +568,7 @@ std::string pkcs11ErrorName(const char* service, const char* cfg, Call call)
     AllowAllAuthorizer authz;
     auto prompter = std::make_shared<NopPrompter>();
     BusExporter exporter(*serverConn);
-    AgentCore core(resolver, exporter, authz, prompter, testCfgDir(cfg) / "agent.conf", testCfgDir(cfg) / "cache",
+    AgentCore core(resolver, authz, prompter, testCfgDir(cfg) / "agent.conf", testCfgDir(cfg) / "cache",
                    makeResolveReaderCard(exporter), makeResolveCardKey(exporter));
     exporter.observePresenceFrom(core.objectRegistry());
     AgentFrontend frontend(exporter, serverConn, core, "t");
@@ -713,8 +707,7 @@ TEST(DBusService, MultipleReadersAndCardsAllExported)
     PresenceModel model(registry, resolver);
     auto prompter = std::make_shared<NopPrompter>();
     AllowAllAuthorizer authz;
-    Testing::SilentTransport coreTransport;
-    AgentCore core = Testing::makeTestCore("dbus3", resolver, coreTransport, authz, prompter);
+    AgentCore core = Testing::makeTestCore("dbus3", resolver, authz, prompter);
     BusExporter exporter(*serverConn, registry);
     AgentFrontend frontend(exporter, serverConn, core, "test");
 
@@ -797,8 +790,7 @@ TEST(DBusService, EmitsInterfacesAddedWhenReaderMaterialises)
     PresenceModel model(registry, resolver);
     auto prompter = std::make_shared<NopPrompter>();
     AllowAllAuthorizer authz;
-    Testing::SilentTransport coreTransport;
-    AgentCore core = Testing::makeTestCore("dbus-ifadd-reader", resolver, coreTransport, authz, prompter);
+    AgentCore core = Testing::makeTestCore("dbus-ifadd-reader", resolver, authz, prompter);
     BusExporter exporter(*serverConn, registry);
     AgentFrontend frontend(exporter, serverConn, core, "test");
     serverConn->enterEventLoopAsync();
@@ -848,8 +840,7 @@ TEST(DBusService, EmitsInterfacesAddedWhenCardMaterialises)
     PresenceModel model(registry, resolver);
     auto prompter = std::make_shared<NopPrompter>();
     AllowAllAuthorizer authz;
-    Testing::SilentTransport coreTransport;
-    AgentCore core = Testing::makeTestCore("dbus-ifadd-card", resolver, coreTransport, authz, prompter);
+    AgentCore core = Testing::makeTestCore("dbus-ifadd-card", resolver, authz, prompter);
     BusExporter exporter(*serverConn, registry);
     AgentFrontend frontend(exporter, serverConn, core, "test");
     serverConn->enterEventLoopAsync();
@@ -904,8 +895,7 @@ TEST(DBusService, EmitsInterfacesRemovedWhenCardWithdrawn)
     PresenceModel model(registry, resolver);
     auto prompter = std::make_shared<NopPrompter>();
     AllowAllAuthorizer authz;
-    Testing::SilentTransport coreTransport;
-    AgentCore core = Testing::makeTestCore("dbus-ifremove-card", resolver, coreTransport, authz, prompter);
+    AgentCore core = Testing::makeTestCore("dbus-ifremove-card", resolver, authz, prompter);
     BusExporter exporter(*serverConn, registry);
     AgentFrontend frontend(exporter, serverConn, core, "test");
     serverConn->enterEventLoopAsync();

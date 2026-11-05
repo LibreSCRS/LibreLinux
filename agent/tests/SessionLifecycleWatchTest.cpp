@@ -5,12 +5,10 @@
 // systemd-logind on a private bus the agent reaches as its system bus
 // (DBUS_SYSTEM_BUS_ADDRESS). The first two cases pin which logind event means
 // which reason; the last two run the composition the agent itself runs
-// (watchSessionLifecycle over a real AgentCore and AgentFrontend) and read the
-// result where it matters: what the core still holds, and the Manager1.Quiesced
-// signal a client receives.
+// (watchSessionLifecycle over a real AgentCore) and read the result where it
+// matters: what the core still holds.
 
 #include "AgentCoreSeams.h"
-#include "AgentFrontend.h"
 #include "AgentObjectPath.h"
 #include "AllowAllAuthorizer.h" // test support: grants every action
 #include "BusExporter.h"
@@ -288,19 +286,17 @@ public:
 };
 
 constexpr const char* kAgentService = "org.librescrs.Agent.Test.Lifecycle";
-constexpr const char* kRootPath = "/org/librescrs/Agent";
 const CallerToken kCaller{":1.42"};
 
 // The agent's composition around one card: a cached CAN and a PKCS#11 lease on
-// it, and a client listening for Manager1.Quiesced.
+// it.
 struct Agent
 {
     Agent()
     {
         serverConn->requestName(sdbus::ServiceName{kAgentService});
-        core.emplace(resolver, exporter, authz, prompter, dir / "agent.conf", dir / "cache",
-                     makeResolveReaderCard(exporter), makeResolveCardKey(exporter));
-        frontend = std::make_unique<AgentFrontend>(exporter, serverConn, *core, "t");
+        core.emplace(resolver, authz, prompter, dir / "agent.conf", dir / "cache", makeResolveReaderCard(exporter),
+                     makeResolveCardKey(exporter));
         serverConn->enterEventLoopAsync();
 
         core->presenceModel().onReaderAdded("reader-A");
@@ -310,23 +306,14 @@ struct Agent
         core->credentialCache().putCan(cardKey, CredentialCache::Secret{"123456"});
         grantLease();
 
-        clientConn->enterEventLoopAsync();
-        client = sdbus::createProxy(*clientConn, sdbus::ServiceName{kAgentService}, sdbus::ObjectPath{kRootPath});
-        client->uponSignal(sdbus::SignalName{"Quiesced"})
-            .onInterface(sdbus::InterfaceName{"org.librescrs.Agent.Manager1"})
-            .call([this](std::uint32_t reason) { announced.add(static_cast<QuiesceReason>(reason)); });
-
-        watch = watchSessionLifecycle(*bus.systemBus, *core, stateMutex, *frontend);
+        watch = watchSessionLifecycle(*bus.systemBus, *core, stateMutex);
         bus.systemBus->enterEventLoopAsync();
     }
     ~Agent()
     {
         bus.systemBus->leaveEventLoop();
         watch.reset();
-        client.reset();
-        clientConn->leaveEventLoop();
         serverConn->leaveEventLoop();
-        frontend.reset();
         core.reset();
         fs::remove_all(dir);
     }
@@ -346,6 +333,19 @@ struct Agent
     {
         return core->credentialCache().getCan(cardKey).has_value();
     }
+    // The watch answers on the bus thread, so a test waits for what it
+    // changed: true once @p done holds, false if it never does.
+    static bool waitUntil(const std::function<bool()>& done)
+    {
+        const auto deadline = std::chrono::steady_clock::now() + 5s;
+        while (!done()) {
+            if (std::chrono::steady_clock::now() >= deadline) {
+                return false;
+            }
+            std::this_thread::sleep_for(10ms);
+        }
+        return true;
+    }
 
     const fs::path dir = fs::temp_directory_path() / ("ll-lifecycle-" + std::to_string(::getpid()));
     LogindBus bus;
@@ -355,19 +355,15 @@ struct Agent
     std::shared_ptr<NopPrompter> prompter = std::make_shared<NopPrompter>();
     BusExporter exporter{*serverConn};
     std::optional<AgentCore> core;
-    std::unique_ptr<AgentFrontend> frontend;
     std::mutex stateMutex;
     ObjectId card;
     std::string cardKey;
-    std::unique_ptr<sdbus::IConnection> clientConn = sdbus::createSessionBusConnection();
-    std::unique_ptr<sdbus::IProxy> client;
-    Reasons announced;
     std::unique_ptr<SessionLifecycleWatch> watch;
 };
 
 } // namespace
 
-TEST(SessionLifecycleWatch, TheAgentForgetsWhatTheReasonCallsForAndTellsItsClientsWhy)
+TEST(SessionLifecycleWatch, TheAgentForgetsWhatTheReasonCallsFor)
 {
     Agent agent;
     ASSERT_NE(agent.card, ObjectId{});
@@ -376,15 +372,14 @@ TEST(SessionLifecycleWatch, TheAgentForgetsWhatTheReasonCallsForAndTellsItsClien
 
     // A screen lock: the PKCS#11 login goes, the card's secrets stay.
     FakeLogind::signal(*agent.bus.logind->holder, "Lock");
-    ASSERT_EQ(agent.announced.waitFor(1), std::vector<QuiesceReason>{QuiesceReason::ScreenLocked});
+    ASSERT_TRUE(Agent::waitUntil([&agent] { return !agent.leaseActive(); }));
     EXPECT_FALSE(agent.leaseActive()) << "a screen lock revokes the PKCS#11 login";
     EXPECT_TRUE(agent.canCached()) << "a screen lock keeps the session and its secrets";
 
     // Sleep: everything goes.
     agent.grantLease();
     agent.bus.logind->prepareForSleep(true);
-    ASSERT_EQ(agent.announced.waitFor(2),
-              (std::vector<QuiesceReason>{QuiesceReason::ScreenLocked, QuiesceReason::SystemSleep}));
+    ASSERT_TRUE(Agent::waitUntil([&agent] { return !agent.canCached() && !agent.leaseActive(); }));
     EXPECT_FALSE(agent.leaseActive()) << "sleep revokes the PKCS#11 login";
     EXPECT_FALSE(agent.canCached()) << "sleep forgets the card's CAN";
 }
@@ -400,7 +395,7 @@ TEST(SessionLifecycleWatch, TheCoreForgetsOnlyUnderTheRegistryLock)
         EXPECT_TRUE(agent.canCached()) << "the core forgot while the registry lock was held elsewhere";
         EXPECT_TRUE(agent.leaseActive()) << "the core revoked while the registry lock was held elsewhere";
     }
-    ASSERT_EQ(agent.announced.waitFor(1), std::vector<QuiesceReason>{QuiesceReason::SessionInactive});
+    ASSERT_TRUE(Agent::waitUntil([&agent] { return !agent.canCached() && !agent.leaseActive(); }));
     EXPECT_FALSE(agent.canCached());
     EXPECT_FALSE(agent.leaseActive());
 }

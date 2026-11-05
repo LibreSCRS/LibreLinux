@@ -5,5 +5,5 @@
 # move a row with the tool, never by hand.
 #
 # <name>  <url>  <commit>
-LibreMiddleware  https://github.com/LibreSCRS/LibreMiddleware   eae373a991608fcca21e4b02ffee65f8fbed8d32
-LibreAgent       https://github.com/LibreSCRS/LibreAgent        207f9169049c130f445ec3bf5d571b47bb66f850
+LibreMiddleware  https://github.com/LibreSCRS/LibreMiddleware   3fc98d12dbd80acd8fa6c6556a524d5a9617330d
+LibreAgent       https://github.com/LibreSCRS/LibreAgent        d7910c0c52cdf98c2ae9e95b14dfef90d128aa34

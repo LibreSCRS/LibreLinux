@@ -3,12 +3,11 @@
 //
 // What a test of the bus surface needs to stand up the agent core a card object
 // and the frontend launch their operations through: a core over the test's own
-// authorizer, prompter, resolver and transport, and seams that fail every call
+// authorizer, prompter and resolver, and seams that fail every call
 // for the ones a test does not drive.
 #pragma once
 
 #include <LibreSCRS/Agent/AgentCore.h>
-#include <LibreSCRS/Agent/backend/AgentTransport.h>
 #include <LibreSCRS/Agent/operations/OperationLauncher.h>
 #include <LibreSCRS/Agent/operations/Seams.h>
 #include <LibreSCRS/Agent/presence/CapabilityResolver.h>
@@ -25,20 +24,6 @@
 #include <vector>
 
 namespace LibreSCRS::Agent::Testing {
-
-// A transport that publishes nothing: for a test that drives a card object
-// directly, with no presence surface behind it.
-class SilentTransport final : public AgentTransport
-{
-public:
-    void publishReader(const ReaderState&) override {}
-    void publishCard(const CardState&) override {}
-    void withdraw(ObjectId) override {}
-    void updateProperties(ObjectId, const PropertyDelta&) override {}
-    void post(std::function<void()>) override {}
-    void postAfter(std::chrono::microseconds, std::function<void()>) override {}
-    void onClientDisconnect(std::function<void(CallerToken)>) override {}
-};
 
 // Resolves no candidate plugin for any card.
 class NoCandidates final : public CapabilityResolver
@@ -151,13 +136,12 @@ public:
 
 // A real agent core whose configuration and caches live in testCoreDir(@p tag).
 // Its operation scheduler runs in production mode, as the launcher requires.
-[[nodiscard]] inline AgentCore makeTestCore(std::string_view tag, CapabilityResolver& resolver,
-                                            AgentTransport& transport, Authorizer& authorizer,
+[[nodiscard]] inline AgentCore makeTestCore(std::string_view tag, CapabilityResolver& resolver, Authorizer& authorizer,
                                             std::shared_ptr<Operations::PrompterClientBase> prompter)
 {
     const auto dir = testCoreDir(tag);
-    return AgentCore{resolver,           transport,     authorizer,     std::move(prompter),
-                     dir / "agent.conf", dir / "cache", noReaderCard(), noCardKey()};
+    return AgentCore{resolver,      authorizer,     std::move(prompter), dir / "agent.conf",
+                     dir / "cache", noReaderCard(), noCardKey()};
 }
 
 } // namespace LibreSCRS::Agent::Testing

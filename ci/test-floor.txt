@@ -7,8 +7,8 @@
 AgentErrorNameParityTest 3
 AgentObjectPathTest 4
 AgentShutdownUnderLoadTest 4
-AgentTransportTest 8
 BusExporterReaderRaceTest 4
+BusExporterTest 4
 CallerAuthorizerProductionGateTest 2
 CallerAuthorizerTest 6
 CallerIdentityTest 2
@@ -21,7 +21,7 @@ Config1PropertyKeyMirrorTest 2
 Config1Test 5
 ConfigPathsTest 8
 CredentialsDbusTest 21
-CscaImportDbusTest 32
+CscaImportDbusTest 28
 DBusAgentClientContractTest 24
 DBusAgentClientTest 20
 DBusServiceTest 21
@@ -31,7 +31,7 @@ HostOperationOwnershipTest 3
 Identity1XmlCodegenTest 1
 InputWidgetValidationTest 24
 Manager1XmlCodegenTest 1
-ModuleConfigTest 7
+ModuleConfigTest 5
 Operation1AdaptorTest 7
 Operation1ErrorCodeXmlGuardTest 1
 Operation1XmlCodegenTest 1

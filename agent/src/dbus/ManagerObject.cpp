@@ -122,7 +122,6 @@ Config::CscaAnchorState toRecordedState(const Trust::AnchorState& state)
     out.signerPinned = state.everyPublisherEstablished();
     out.acceptedAt = state.acceptedAt;
     out.signedAt = only != nullptr ? only->signedAt : std::nullopt;
-    out.origin = state.origin;
     return out;
 }
 
@@ -168,7 +167,6 @@ std::map<std::string, sdbus::Variant> anchorStateDict(const std::optional<Config
         // "there is no one date to show here".
         out["signedAt"] = sdbus::Variant{*state->signedAt};
     }
-    out["origin"] = sdbus::Variant{state->origin};
     return out;
 }
 
@@ -322,20 +320,6 @@ std::string ManagerObject::TslCacheDir()
 {
     return m_config.tslCacheDir();
 }
-std::string ManagerObject::AiaCacheDir()
-{
-    return m_config.aiaCacheDir();
-}
-std::vector<sdbus::Struct<std::string, bool>> ManagerObject::CscaSources()
-{
-    std::vector<sdbus::Struct<std::string, bool>> out;
-    const auto sources = m_config.cscaSources();
-    out.reserve(sources.size());
-    for (const auto& s : sources) {
-        out.emplace_back(s.uri, s.eager);
-    }
-    return out;
-}
 
 std::map<std::string, sdbus::Variant> ManagerObject::CscaAnchorState()
 {
@@ -352,10 +336,6 @@ std::string ManagerObject::DefaultReason()
 std::string ManagerObject::DefaultLocation()
 {
     return m_config.defaultLocation();
-}
-std::string ManagerObject::PluginDir()
-{
-    return m_config.pluginDir();
 }
 
 std::string ManagerObject::callerBusName() const noexcept
@@ -613,16 +593,6 @@ void ManagerObject::setValueGranted(const std::string& key, const sdbus::Variant
                 sources.push_back(Config::TslSource{std::get<0>(s), std::get<1>(s), std::get<2>(s)});
             }
             r = m_config.setTslSources(std::move(sources));
-        } else if (key == "CscaSources") {
-            // Same trust tier as TsaUrls/TslSources (actionFor already picked
-            // kActionConfigureTrust above from the store's Mutability) — the
-            // set of country-signing anchors is a trust decision, not a
-            // preference, so it needs no polkit action of its own.
-            std::vector<Config::CscaSource> sources;
-            for (const auto& s : value.get<std::vector<sdbus::Struct<std::string, bool>>>()) {
-                sources.push_back(Config::CscaSource{std::get<0>(s), std::get<1>(s)});
-            }
-            r = m_config.setCscaSources(std::move(sources));
         } else if (key == "DefaultReason") {
             r = m_config.setDefaultReason(value.get<std::string>());
         } else if (key == "DefaultLocation") {
@@ -672,8 +642,8 @@ void ManagerObject::ImportCscaMasterList(sdbus::Result<std::map<std::string, sdb
     // (up to the cap off) an fd it handed over — the same discipline, and the
     // same reasoning, as the document ingest behind Card1.Sign.
     //
-    // The polkit action is the trust one, shared with CscaSources: an import is
-    // a larger trust change than naming a source, not a smaller one.
+    // The polkit action is the trust one: an import is a larger trust change
+    // than naming a source, not a smaller one.
     const std::string sender = callerBusName();
     authorizeThenReply(m_authorizer, kActionConfigureTrust, sender, std::move(result),
                        "Not authorized to import country signing anchors", m_grantGate,
@@ -739,49 +709,6 @@ std::map<std::string, sdbus::Variant> ManagerObject::importCscaMasterListGranted
     return anchorStateDict(recorded);
 }
 
-void ManagerObject::ForgetCscaAnchors(sdbus::Result<std::uint64_t, bool>&& result)
-{
-    // Authorise FIRST and touch nothing before that answer. The action is the
-    // trust one for the stronger version of the import's reason — this does not
-    // name where anchors may come from, it throws away the ones a passport is
-    // checked against.
-    //
-    // NO flood bound here, unlike the import, and the asymmetry is deliberate:
-    // that bound exists because the import READS a descriptor the caller hands
-    // over, and a refused caller must not be able to make the agent read to the
-    // cap. This takes no input, unlinks three paths, and is idempotent — a
-    // second call finds nothing. Spending the import's per-caller budget on it
-    // would also mean a client that forgot could then be refused an IMPORT for
-    // an unrelated reason. Shape is handleSetConfig's trust tier: authorise,
-    // then act. Agreed with the socket host so both answer alike.
-    authorizeThenReply(m_authorizer, kActionConfigureTrust, callerBusName(), std::move(result),
-                       "Not authorized to forget country signing anchors", m_grantGate,
-                       [this] { return forgetCscaAnchorsGranted(); });
-}
-
-std::tuple<std::uint64_t, bool> ManagerObject::forgetCscaAnchorsGranted()
-{
-    // The library decides WHAT a forget is and in which order the two halves
-    // go; this host decides only that it may happen. Nothing about the order is
-    // spelled again here, deliberately: a second spelling of it is how the two
-    // hosts would come to disagree about a trust-policy rule.
-    const auto forgotten = Trust::forgetCscaAnchors(m_config);
-    if (!forgotten) {
-        // Said out loud rather than reported as a successful forget that kept
-        // everything. Nothing was changed — the recorded report included, since
-        // with the anchors still on disk it is the only thing describing them.
-        throw sdbus::Error{sdbus::Error::Name{kErrAnchorCacheNotWritable},
-                           "The country signing anchors could not be removed; nothing was changed"};
-    }
-
-    // No explicit emit: clearing the record fires Changed("CscaAnchorState")
-    // through the store, the same path the import's record takes, and a second
-    // signal for one action would make a client redraw twice.
-    log::infof("country signing anchors forgotten: anchors={} hadPinnedSigner={}", forgotten->anchors,
-               forgotten->hadPinnedSigner);
-    return {forgotten->anchors, forgotten->hadPinnedSigner};
-}
-
 void ManagerObject::emitConfigChanged(const std::string& key) noexcept
 {
     try {
@@ -790,17 +717,6 @@ void ManagerObject::emitConfigChanged(const std::string& key) noexcept
         log::warnf("config: failed to emit Changed({}): {}", key, e.what());
     } catch (...) {
         log::warn("config: failed to emit Changed (unknown error)");
-    }
-}
-
-void ManagerObject::announceQuiesced(QuiesceReason reason) noexcept
-{
-    try {
-        emitQuiesced(static_cast<std::uint32_t>(reason));
-    } catch (const std::exception& e) {
-        log::warnf("failed to emit Quiesced({}): {}", static_cast<unsigned>(reason), e.what());
-    } catch (...) {
-        log::warn("failed to emit Quiesced (unknown error)");
     }
 }
 

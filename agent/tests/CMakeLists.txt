@@ -6,7 +6,7 @@ find_package(GTest REQUIRED)
 find_program(DBUS_RUN_SESSION dbus-run-session REQUIRED)
 
 # The platform-neutral unit tests (flows, scheduler, presence model, caches,
-# lease/broker policy, value types, the 5 backend fakes) moved with the core to
+# lease/broker policy, value types, the backend fakes) moved with the core to
 # the librescrs-agent repo and run there. What remains here exercises the Linux
 # backend: the sdbus frontend, the interface implementations, the memfd
 # transport, and the D-Bus integration surface. Each still links
@@ -61,20 +61,19 @@ target_link_libraries(GrantGateTest PRIVATE
     GTest::gtest_main)
 gtest_discover_tests(GrantGateTest)
 
-# AgentTransport backend interface: a fake records the typed presence deltas +
-# loop-post + disconnect handler, and a bus-backed case drives the real
-# BusExporter loop-marshaling impl (needs a private session bus).
-add_executable(AgentTransportTest AgentTransportTest.cpp)
-target_link_libraries(AgentTransportTest PRIVATE
+# The BusExporter driven directly: loop marshaling, the presence object tree,
+# the reader label and client-disconnect handlers (needs a private session bus).
+add_executable(BusExporterTest BusExporterTest.cpp)
+target_link_libraries(BusExporterTest PRIVATE
     LibreLinuxAgentCore
     LibreAgent::TestSupport # AllowAllAuthorizer
     PkgConfig::Systemd # the post/postAfter marshal test drives an sd-event loop directly
     GTest::gtest
     GTest::gtest_main)
-libreagent_private_session_bus(AgentTransportTest)
+libreagent_private_session_bus(BusExporterTest)
 # A wedged test under dbus-run-session must fail in minutes, not consume the
 # runner's whole wall: every bus-backed test below carries an explicit timeout.
-libreagent_gtest_discover_tests(AgentTransportTest
+libreagent_gtest_discover_tests(BusExporterTest
     ENVIRONMENT "${LIBREAGENT_PRIVATE_BUS_ENV}"
     PROPERTIES TIMEOUT 120)
 
@@ -345,8 +344,7 @@ libreagent_gtest_discover_tests(PolkitAuthorizerOutcomeTest
     PROPERTIES TIMEOUT 120)
 
 # Sleep, screen lock and session switch from a fake logind on the agent's
-# system bus: which event means which reason, and what the agent forgets and
-# announces on Manager1.Quiesced.
+# system bus: which event means which reason, and what the agent forgets.
 add_executable(SessionLifecycleWatchTest SessionLifecycleWatchTest.cpp)
 target_link_libraries(SessionLifecycleWatchTest PRIVATE
     LibreLinuxAgentCore

@@ -14,7 +14,6 @@ class IProxy;
 
 namespace LibreSCRS::Agent {
 class AgentCore;
-class AgentFrontend;
 
 // systemd-logind's events for "the holder's session went away", in the agent's
 // one vocabulary. On the system bus it watches:
@@ -66,12 +65,12 @@ private:
 
 // The agent's answer to a lifecycle event: the core forgets what @p reason calls
 // for, under @p stateMutex (the lock that serialises the object registry the core
-// walks), and then every client hears why on Manager1.Quiesced.
-void quiesceAndAnnounce(AgentCore& core, std::mutex& stateMutex, AgentFrontend& frontend, QuiesceReason reason);
+// walks).
+void quiesceUnderLock(AgentCore& core, std::mutex& stateMutex, QuiesceReason reason);
 
-// The watch the agent runs: logind on @p systemBus, answered by quiesceAndAnnounce.
+// The watch the agent runs: logind on @p systemBus, answered by quiesceUnderLock.
 // Every argument must outlive the returned watch.
-[[nodiscard]] std::unique_ptr<SessionLifecycleWatch>
-watchSessionLifecycle(sdbus::IConnection& systemBus, AgentCore& core, std::mutex& stateMutex, AgentFrontend& frontend);
+[[nodiscard]] std::unique_ptr<SessionLifecycleWatch> watchSessionLifecycle(sdbus::IConnection& systemBus,
+                                                                           AgentCore& core, std::mutex& stateMutex);
 
 } // namespace LibreSCRS::Agent

@@ -517,8 +517,8 @@ using CredentialResultDict = std::map<std::string, sdbus::Variant>;
 using CredentialRecordsWire = std::vector<std::map<std::string, sdbus::Variant>>;
 
 // The uniform outcome payload -> a{sv}. "outcome" + "blocked" are always present;
-// retries_left / pin_activated / key_activated are OMITTED when absent (never a
-// sentinel). The outcome crosses as its camelCase STRING token, never an int.
+// retries_left is OMITTED when absent (never a sentinel). The outcome crosses
+// as its camelCase STRING token, never an int.
 CredentialResultDict toCredentialResultDict(const CredentialOpResult& op)
 {
     CredentialResultDict out;
@@ -526,12 +526,6 @@ CredentialResultDict toCredentialResultDict(const CredentialOpResult& op)
     out.emplace("blocked", sdbus::Variant{op.blocked});
     if (op.retriesLeft) {
         out.emplace("retries_left", sdbus::Variant{*op.retriesLeft});
-    }
-    if (op.pinActivated) {
-        out.emplace("pin_activated", sdbus::Variant{*op.pinActivated});
-    }
-    if (op.keyActivated) {
-        out.emplace("key_activated", sdbus::Variant{*op.keyActivated});
     }
     return out;
 }
@@ -556,16 +550,12 @@ std::map<std::string, sdbus::Variant> toCredentialRecordDict(const CredentialRec
     emplaceInt("uses_left", r.usesLeft);
     emplaceInt("uses_max", r.usesMax);
     emplaceInt("unblocks_left", r.unblocksLeft);
-    emplaceInt("min_length", r.minLength);
-    emplaceInt("max_length", r.maxLength);
     out.emplace("can_change", sdbus::Variant{r.canChange});
     out.emplace("unblockable", sdbus::Variant{r.unblockable});
-    out.emplace("unblock_style", sdbus::Variant{r.unblockStyle});
     out.emplace("activatable", sdbus::Variant{r.activatable});
     out.emplace("key_activation_pending", sdbus::Variant{r.keyActivationPending});
     out.emplace("key_activatable", sdbus::Variant{r.keyActivatable});
     out.emplace("recovery", sdbus::Variant{r.recovery});
-    out.emplace("probe_safe", sdbus::Variant{r.probeSafe});
     const auto emplaceStr = [&out](const char* key, const std::optional<std::string>& v) {
         if (v) {
             out.emplace(key, sdbus::Variant{*v});

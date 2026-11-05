@@ -72,13 +72,6 @@ void AgentFrontend::emitConfigChanged(const std::string& key) noexcept
     }
 }
 
-void AgentFrontend::emitQuiesced(QuiesceReason reason) noexcept
-{
-    if (m_manager) {
-        m_manager->announceQuiesced(reason);
-    }
-}
-
 CardOperationDeps AgentFrontend::buildDepsForCard(const std::string& cardPath, const std::string& readerName) const
 {
     CardOperationDeps deps;

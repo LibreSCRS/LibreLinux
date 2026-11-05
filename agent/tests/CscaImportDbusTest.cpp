@@ -174,28 +174,6 @@ struct Harness
         }
     }
 
-    // Drive ForgetCscaAnchors. Hands back the rejection name (empty == accepted)
-    // and, when accepted, what the agent said it destroyed.
-    std::string forgetAnchors(std::uint64_t* anchorsForgotten = nullptr, bool* hadPinnedSigner = nullptr)
-    {
-        try {
-            std::uint64_t forgotten = 0;
-            bool pinned = false;
-            proxy->callMethod("ForgetCscaAnchors")
-                .onInterface(sdbus::InterfaceName{kCfgIface})
-                .storeResultsTo(forgotten, pinned);
-            if (anchorsForgotten != nullptr) {
-                *anchorsForgotten = forgotten;
-            }
-            if (hadPinnedSigner != nullptr) {
-                *hadPinnedSigner = pinned;
-            }
-            return {};
-        } catch (const sdbus::Error& e) {
-            return e.getName();
-        }
-    }
-
     std::map<std::string, sdbus::Variant> anchorState()
     {
         sdbus::Variant v;
@@ -381,7 +359,6 @@ TEST(CscaImportDbus, AValidListIsImportedAndSummarised)
     EXPECT_EQ(summary.at("anchors").get<std::uint32_t>(), 3u);
     EXPECT_EQ(summary.at("issuers").get<std::uint32_t>(), 2u);
     EXPECT_EQ(summary.at("signer").get<std::string>(), Trust::toHex(list.signerSpkiSha256));
-    EXPECT_EQ(summary.at("origin").get<std::string>(), "import");
     EXPECT_GT(summary.at("acceptedAt").get<std::int64_t>(), 0);
     // Trusted on first import: nothing was compared, and the wire says so
     // rather than letting a client render "verified".
@@ -437,7 +414,6 @@ TEST(CscaImportDbus, ACollectionIsImportedAsTheUnionOfItsLists)
     EXPECT_EQ(summary.at("anchors").get<std::uint32_t>(), 3u) << "the shared anchor was stored twice, or a list was "
                                                                  "dropped";
     EXPECT_EQ(summary.at("issuers").get<std::uint32_t>(), 2u);
-    EXPECT_EQ(summary.at("origin").get<std::string>(), "import");
 
     const auto state = h.anchorState();
     EXPECT_EQ(state.at("anchors").get<std::uint32_t>(), 3u);
@@ -617,7 +593,6 @@ TEST(CscaImportDbus, AnAcceptedImportIsRememberedInTheConfiguration)
     EXPECT_TRUE(recorded->replayRefusalActive);
     ASSERT_TRUE(recorded->signedAt.has_value());
     EXPECT_EQ(*recorded->signedAt, kSignedEarlier);
-    EXPECT_EQ(recorded->origin, "import");
 
     // On DISK, not merely in memory. A second store over the same file is the
     // restart this record exists for: it is the only thing a client that has
@@ -643,7 +618,6 @@ TEST(CscaImportDbus, TheReadableStateIsServedFromTheRecordedConfiguration)
     remembered.signer = "ab12";
     remembered.signerPinned = true;
     remembered.acceptedAt = 1'700'000'000;
-    remembered.origin = "import";
     h.config->recordCscaAnchorState(remembered);
 
     const auto state = h.anchorState();
@@ -653,7 +627,6 @@ TEST(CscaImportDbus, TheReadableStateIsServedFromTheRecordedConfiguration)
     EXPECT_EQ(state.at("signer").get<std::string>(), "ab12");
     EXPECT_TRUE(state.at("signerPinned").get<bool>());
     EXPECT_EQ(state.at("acceptedAt").get<std::int64_t>(), 1'700'000'000);
-    EXPECT_EQ(state.at("origin").get<std::string>(), "import");
     ASSERT_TRUE(state.contains("replayRefusalActive"));
     EXPECT_FALSE(state.at("replayRefusalActive").get<bool>());
     // Absence survives the trip through the agent's own memory: a remembered
@@ -1049,99 +1022,4 @@ TEST(CscaAnchorPublication, TheAgentPublishesTheConfiguredDirectoryAtStartup)
         << "nothing hands the card plugins the anchors this agent holds";
     EXPECT_NE(src.find("configStore().cscaCacheDir()"), std::string::npos)
         << "the published directory must come from the CONFIGURED cache dir, not one rebuilt from the cache root";
-}
-
-// --- forgetting, over the bus ------------------------------------------------
-//
-// The shared library owns WHAT a forget is and in which order; these assert
-// what only this host can hold — that the verb exists on the bus, that it sits
-// behind the same authorization as the import, and that the property a client
-// reads afterwards agrees with it.
-
-TEST(CscaForgetDbus, ForgettingClearsTheAnchorsAndTheServedReport)
-{
-    AllowAuthorizer allow;
-    Harness h("forget-ok", allow);
-
-    const auto list = fixture::signMasterList({fixture::makeCsca("CSCA A", "AA"), fixture::makeCsca("CSCA B", "BB")},
-                                              fixture::makeIndependentSigner());
-    TempFile file(h.dir / "in", "masterlist.ml", list.der);
-    ASSERT_EQ(h.importFd(file.fd()), "");
-    ASSERT_FALSE(h.anchorState().empty());
-
-    std::uint64_t forgotten = 0;
-    bool pinned = false;
-    ASSERT_EQ(h.forgetAnchors(&forgotten, &pinned), "");
-
-    EXPECT_EQ(forgotten, 2u) << "the reply describes what was destroyed";
-    EXPECT_TRUE(pinned) << "a publisher was being followed and the reply did not say so";
-    EXPECT_TRUE(h.anchorState().empty()) << "the property still serves a report for anchors that are gone";
-}
-
-// The reason the verb exists, asserted end to end over the bus: a publisher the
-// agent refused before is taken in afterwards, and taken in as a first import.
-TEST(CscaForgetDbus, AfterForgettingARefusedPublisherIsAcceptedAgain)
-{
-    AllowAuthorizer allow;
-    Harness h("forget-reopens", allow);
-
-    const auto first = fixture::signMasterList({fixture::makeCsca("CSCA A", "AA")}, fixture::makeIndependentSigner());
-    TempFile firstFile(h.dir / "in", "first.ml", first.der);
-    ASSERT_EQ(h.importFd(firstFile.fd()), "");
-
-    const auto stranger =
-        fixture::signMasterList({fixture::makeCsca("CSCA X", "XX")}, fixture::makeIndependentSigner());
-    TempFile strangerFile(h.dir / "in", "stranger.ml", stranger.der);
-    ASSERT_EQ(h.importFd(strangerFile.fd()), "org.librescrs.Agent.Error.MasterListSignerChanged")
-        << "the fixture did not reproduce the trap";
-
-    ASSERT_EQ(h.forgetAnchors(), "");
-
-    TempFile againFile(h.dir / "in", "again.ml", stranger.der);
-    std::map<std::string, sdbus::Variant> summary;
-    ASSERT_EQ(h.importFd(againFile.fd(), &summary), "") << "the publisher is still refused after forgetting";
-    EXPECT_FALSE(summary.at("signerPinned").get<bool>())
-        << "an import after forgetting was reported as an established publisher";
-}
-
-// Same gate as the import, and for the stronger version of the same reason:
-// this does not name where anchors may come from, it throws away the ones a
-// passport is checked against.
-TEST(CscaForgetDbus, ForgettingIsRefusedWithoutTheTrustAuthorization)
-{
-    DenyAuthorizer deny;
-    Harness h("forget-denied", deny);
-
-    // Seeded through the library rather than over the bus, because the bus is
-    // closed to us here -- which is the point: a refused caller must not be
-    // able to reach the store at all.
-    Trust::AnchorCache cache{fs::path{h.config->cscaCacheDir()}};
-    const auto list = fixture::signMasterList({fixture::makeCsca("CSCA A", "AA"), fixture::makeCsca("CSCA B", "BB")},
-                                              fixture::makeIndependentSigner());
-    ASSERT_TRUE(Trust::importMasterList(list.der, cache, kSignedLater).has_value());
-    ASSERT_TRUE(cache.holdsAnchor());
-
-    EXPECT_EQ(h.forgetAnchors(), "org.librescrs.Agent.Error.NotAuthorized");
-
-    // The error name alone proves nothing, and this is the half that matters:
-    // a refusal that deleted the anchors anyway answers IDENTICALLY to one that
-    // did not, so only the store can tell them apart. Moving the authorization
-    // below the deletion keeps this method's reply exactly as it is and fails
-    // right here.
-    EXPECT_TRUE(cache.holdsAnchor()) << "a refused caller destroyed the anchors and was told it was refused";
-    EXPECT_TRUE(cache.state().present) << "a refused caller destroyed the pin and was told it was refused";
-}
-
-// Holding nothing is not a failure: an agent that imported nothing has already
-// forgotten everything, and it says so with zeros rather than an error.
-TEST(CscaForgetDbus, ForgettingWithNothingInstalledAnswersZeros)
-{
-    AllowAuthorizer allow;
-    Harness h("forget-empty", allow);
-
-    std::uint64_t forgotten = 1;
-    bool pinned = true;
-    ASSERT_EQ(h.forgetAnchors(&forgotten, &pinned), "");
-    EXPECT_EQ(forgotten, 0u);
-    EXPECT_FALSE(pinned);
 }

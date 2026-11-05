@@ -12,10 +12,7 @@ Notable user-visible changes per release. Format follows
   your session stops being the active one, it forgets cached CANs and MRZs,
   closes every reader's session and ends every PKCS#11 login; when the screen
   locks, it ends the PKCS#11 logins, so the next signature asks for the PIN
-  again. Clients hear why on the new `Manager1.Quiesced` signal. One screen
-  lock can be announced twice — once when something asks the session to lock
-  and once when the screen locker reports it locked — so a client treats a
-  repeated reason as the same event.
+  again.
 
 - **`Reader1.Model` and `Reader1.Interface`:** a reader's short model name and
   which interface of a dual-interface unit it is (`contact`, `contactless` or
@@ -52,8 +49,8 @@ Notable user-visible changes per release. Format follows
   Debian 13 and Ubuntu 26.04 LTS, `rpm` for Fedora 43 and 44 and openSUSE
   Tumbleweed, each built in that distribution's own container and installed
   and checked in a clean one before it is published. The agent's files that
-  have to land in root-owned system directories span systemd units
-  (`librescrs-agent.service`, `librescrs-p11-server.service`), D-Bus service
+  have to land in root-owned system directories span a systemd unit
+  (`librescrs-agent.service`), D-Bus service
   activation files, a D-Bus session policy, the D-Bus interface definitions, a
   polkit action and a p11-kit module registration — so no bundle format can
   deliver it, and a distribution package is the only shape it can take.
@@ -229,7 +226,7 @@ and its secure PIN/CAN entry prompter, plus a client PKCS#11 module.
   the deb and rpm packages only recommended it.
 
 - **The agent keeps working while a password dialog is open.** Changing a
-  trust setting, importing or forgetting country signing anchors, signing and
+  trust setting, importing country signing anchors, signing and
   changing a PIN all ask the system's authorization service first, and the
   agent used to wait for that answer: while a polkit password dialog stayed
   open, every other application's request and every progress or result signal

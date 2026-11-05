@@ -298,22 +298,22 @@ bool AgentService::registerOnBus()
         // and the capability guard refuses to raise prompts on one anyway.
         m_prompter->resetPrompter();
 
-        // [2] The slim AgentTransport wire. Built with NO registry: the core
+        // [2] The slim transport wire. Built with NO registry: the core
         // registry it observes lives INSIDE m_core (constructed next), so the
         // registry->transport observers are wired below via observePresenceFrom
         // once both exist. The ctor still installs the NameOwnerChanged
         // client-liveness watch on the connection.
         m_exporter = std::make_unique<BusExporter>(*m_connection);
 
-        // [3] The owning neutral-core aggregate. Borrows the resolver + the [2]
-        // transport / authorizer / prompter, plus the reader/card resolution seams
+        // [3] The owning neutral-core aggregate. Borrows the resolver + the
+        // authorizer / prompter, plus the reader/card resolution seams
         // served from the transport's presence snapshot (the readerId is recovered
         // from the reader path via the backend's ObjectId<->path bijection). It
         // OWNS the registry / presence model / caches / key tracker / prompt gate /
         // config store / signing engine / rate limiter / lease manager / operation
         // scheduler / PKCS#11 broker, and builds the broker's crypto seams from its
         // own members + the co-owned prompter (the shutdown keep-alive).
-        m_core.emplace(m_resolver, *m_exporter, *m_authorizer, m_prompter, m_configFile, m_cacheRoot,
+        m_core.emplace(m_resolver, *m_authorizer, m_prompter, m_configFile, m_cacheRoot,
                        makeResolveReaderCard(*m_exporter), makeResolveCardKey(*m_exporter));
 
         // Which reader holds a card, for the prompt chrome. Set once here,
@@ -395,8 +395,8 @@ bool AgentService::registerOnBus()
         // A D-Bus client dropping off the bus (unique-name vanish) triggers, in
         // registration order: (1) auto-cancel of every Operation recorded for that
         // caller, then (2) revocation of its PKCS#11 login leases so a reconnecting
-        // client must re-Login. The BusExporter (AgentTransport) owns the
-        // NameOwnerChanged watch and fires both handlers in order.
+        // client must re-Login. The BusExporter owns the NameOwnerChanged
+        // watch and fires both handlers in order.
         m_exporter->onClientDisconnect([this](CallerToken caller) {
             if (m_core) {
                 m_core->operationManager().dispatchClientDisconnect(caller);
@@ -427,13 +427,13 @@ bool AgentService::registerOnBus()
         return false;
     }
     // Answer sleep, screen lock and session switch the way every platform does
-    // (AgentCore::quiesce, then Manager1.Quiesced). logind talks on the system
+    // (AgentCore::quiesce). logind talks on the system
     // bus, so the agent opens a connection of its own there and pumps it from
     // this loop. Without a system bus the agent still runs; it then forgets
     // nothing on those events, which the log says.
     try {
         m_systemBus = sdbus::createSystemBusConnection();
-        m_lifecycle = watchSessionLifecycle(*m_systemBus, *m_core, m_stateMutex, *m_frontend);
+        m_lifecycle = watchSessionLifecycle(*m_systemBus, *m_core, m_stateMutex);
         m_systemBus->attachSdEventLoop(m_event);
     } catch (const std::exception& e) {
         log::warnf("no system bus for session lifecycle events ({}); sleep, screen lock and session switch "

@@ -17,12 +17,10 @@
 //   LIBRESCRS_SIGN_PIN=<pin>       sign phase only: that card's signing PIN
 // Cert-read phase:  …  --gtest_filter='*CertRead*'   (no SIGN_* needed)
 // Sign phase:       …  --gtest_filter='*Sign*'       (after cert-read is clean)
-#include <LibreSCRS/Agent/util/Sha256Hex.h>
 #include <LibreSCRS/Agent/presence/PluginCapabilityResolver.h>
 #include <LibreSCRS/Agent/operations/CardPluginRouting.h>
 #include <LibreSCRS/Agent/operations/CardSessionHolder.h>
 #include <LibreSCRS/Agent/operations/LmSeams.h>
-#include <LibreSCRS/Agent/operations/SignGate.h>
 #include <LibreSCRS/Agent/operations/SigningEngineProvider.h>
 #include <LibreSCRS/Agent/config/ConfigStore.h>
 

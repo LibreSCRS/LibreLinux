@@ -58,14 +58,13 @@ set(LL_DBUS_GEN_DIR ${_gen_dir})
 
 # --- Linux backend static lib ---------------------------------------------
 # The platform-neutral half (flows, scheduler, presence model, caches,
-# lease/broker policy, value types, LM-backed seams, the 5 backend interfaces)
+# lease/broker policy, value types, LM-backed seams, the 4 backend interfaces)
 # now lives in the sibling librescrs-agent repo and is linked in below as
 # LibreAgent::Core. What remains here is the Linux backend: the sdbus
 # frontend (Manager/Card/Reader/Operation objects), the interface
-# implementations (BusExporter=AgentTransport, PolkitAuthorizer=Authorizer,
-# PrompterClient=Prompter, Operation1Adaptor=OperationChannel,
-# EventLoopPoster=post/postAfter), the memfd secret/result transport, and the
-# composition root.
+# implementations (PolkitAuthorizer=Authorizer, PrompterClient=Prompter,
+# Operation1Adaptor=OperationChannel), the EventLoopPoster behind
+# BusExporter::post/postAfter, the memfd secret/result transport, and the composition root.
 add_library(LibreLinuxAgentCore STATIC
     src/AgentService.h
     src/AgentService.cpp

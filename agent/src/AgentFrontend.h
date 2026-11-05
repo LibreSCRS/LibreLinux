@@ -4,7 +4,6 @@
 #include "BusExporter.h" // BusExporter::Materializer / BusExporter::ReaderCard
 #include <LibreSCRS/Agent/operations/OperationLauncher.h>
 #include <LibreSCRS/Agent/presence/CardResolutionPolicy.h>
-#include <LibreSCRS/Agent/wire/QuiesceReason.h>
 #include <sdbus-c++/IConnection.h>
 #include <chrono>
 #include <functional>
@@ -65,10 +64,6 @@ public:
     // A config mutation (D-Bus or agent-internal) emits Config1.Changed on the
     // root ManagerObject. AgentService wires this into ConfigStore::setOnChanged.
     void emitConfigChanged(const std::string& key) noexcept;
-
-    // Tell every client the agent quiesced card access, and why (Manager1.Quiesced
-    // on the root ManagerObject).
-    void emitQuiesced(QuiesceReason reason) noexcept;
 
 private:
     // Materialization callbacks the transport forwards each typed presence delta

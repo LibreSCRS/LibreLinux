@@ -58,7 +58,7 @@ TEST(SyncErrorBusName, ABrokerLoginOutcomeReachesTheBusUnderItsName)
 // that is not unique among them -- is the request's fault.
 TEST(SyncErrorBusName, ACredentialEntryErrorReachesTheBusUnderItsName)
 {
-    EXPECT_EQ(busName(EntryError::UnknownCredential), wire::kErrUnknownCredential);
+    EXPECT_EQ(busName(EntryError::UnknownCredential), "org.librescrs.Agent.Error.UnknownCredential");
     for (const auto err : {EntryError::UnknownVerb, EntryError::UnknownOption, EntryError::InvalidCombination,
                            EntryError::AmbiguousCredential}) {
         EXPECT_EQ(busName(err), wire::kErrInvalidRequest) << static_cast<int>(err);

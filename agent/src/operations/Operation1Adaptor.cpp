@@ -53,11 +53,8 @@ void Operation1Adaptor<ResultSubAdaptor>::emitPropertiesChangedForOperation1() n
 {
     try {
         const sdbus::InterfaceName iface{kOperation1Iface};
-        const std::vector<sdbus::PropertyName> props{
-            sdbus::PropertyName{"Phase"},           sdbus::PropertyName{"Progress"},
-            sdbus::PropertyName{"IsIndeterminate"}, sdbus::PropertyName{"WatchdogTimeoutSeconds"},
-            sdbus::PropertyName{"Completed"},       sdbus::PropertyName{"Status"},
-            sdbus::PropertyName{"ErrorCode"}};
+        const std::vector<sdbus::PropertyName> props{sdbus::PropertyName{"Phase"}, sdbus::PropertyName{"Completed"},
+                                                     sdbus::PropertyName{"Status"}, sdbus::PropertyName{"ErrorCode"}};
         // emitPropertiesChangedSignal is inherited from IObject (re-exposed
         // via the AdaptorInterfaces base).
         this->getObject().emitPropertiesChangedSignal(iface, props);

@@ -30,7 +30,6 @@
 #include <LibreSCRS/Agent/operations/OperationBase.h>
 #include <LibreSCRS/Agent/operations/OperationManager.h>
 #include <LibreSCRS/Agent/operations/PromptSerializer.h>
-#include <LibreSCRS/Agent/operations/SerializingPrompter.h>
 #include <LibreSCRS/Agent/presence/CapabilityResolver.h>
 #include <LibreSCRS/Agent/presence/ObjectRegistry.h>
 #include <LibreSCRS/Agent/presence/PresenceModel.h>
@@ -321,8 +320,8 @@ private:
     int m_marker;
 };
 
-// A typed op that routes its consent prompt through the REAL agent-wide seam
-// (SerializingPrompter -> PromptSerializer) carrying its own token, and skips its
+// A typed op that routes its consent prompt through the REAL agent-wide gate
+// (PromptSerializer) carrying its own token, and skips its
 // wire completion on the shutdown-cancel path — exactly what the production typed
 // ops (Sign / ReadIdentity / ReadCertificates) do after their flow returns.
 class PromptingOp final : public OperationBase
@@ -345,8 +344,14 @@ protected:
         setPhase(static_cast<std::uint32_t>(OperationPhase::AwaitingConsent));
         // The gate is keyed by card, as production keys it from the reader's card
         // object; this test drives one op, so the key only has to be stable.
-        SerializingPrompter gated{m_serializer, m_prompter, token(), "card-typed-11"};
-        static_cast<void>(gated.requestPin(PromptOptions{}));
+        const std::string cardKey = "card-typed-11";
+        static_cast<void>(m_serializer.serialize(
+            cardKey, token(),
+            [&] {
+                const auto live = m_serializer.registerLivePrompt(cardKey, "prompt-typed-11");
+                return m_prompter.requestPin(PromptOptions{});
+            },
+            [] { return PromptResult{PromptStatus::Cancelled, std::nullopt, ""}; }));
         if (shutdownRequested()) {
             return; // teardown: skip the wire completion (as the real typed ops do)
         }

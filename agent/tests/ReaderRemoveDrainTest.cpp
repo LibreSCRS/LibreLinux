@@ -163,8 +163,7 @@ TEST(ReaderRemoveDrain, ExporterRemovalDrainsOperationManagerWorker)
     PresenceModel model(registry, resolver);
     auto prompter = std::make_shared<NopPrompter>();
     AllowAllAuthorizer authz;
-    Testing::SilentTransport coreTransport;
-    AgentCore core = Testing::makeTestCore("librescrs-test-readerdrain", resolver, coreTransport, authz, prompter);
+    AgentCore core = Testing::makeTestCore("librescrs-test-readerdrain", resolver, authz, prompter);
     BusExporter exporter(*bus, registry);
     // The frontend owns the exported objects + the reader-removal drain (its
     // withdraw path calls OperationManager::removeReader before dropping the

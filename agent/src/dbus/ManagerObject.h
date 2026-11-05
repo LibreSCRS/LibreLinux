@@ -2,7 +2,6 @@
 // SPDX-FileCopyrightText: 2026 hirashix0
 #pragma once
 #include "dbus/GrantGate.h"
-#include <LibreSCRS/Agent/wire/QuiesceReason.h>
 #include "org.librescrs.Agent.Config1_adaptor.h"
 #include "org.librescrs.Agent.Manager1_adaptor.h"
 #include "org.librescrs.Agent.Pkcs11_1_adaptor.h"
@@ -58,10 +57,6 @@ public:
     // failure is logged, never propagated to the worker that triggered it.
     void emitConfigChanged(const std::string& key) noexcept;
 
-    // Manager1.Quiesced: card access was quiesced for @p reason. noexcept for the
-    // same reason as emitConfigChanged.
-    void announceQuiesced(QuiesceReason reason) noexcept;
-
 private:
     // Manager1
     std::string Version() override;
@@ -87,15 +82,12 @@ private:
     std::string LastTsaUrl() override;
     std::vector<sdbus::Struct<std::string, bool, bool>> TslSources() override;
     std::string TslCacheDir() override;
-    std::string AiaCacheDir() override;
-    std::vector<sdbus::Struct<std::string, bool>> CscaSources() override;
     // The report an accepted import recorded in the store, served the way
     // LastTsaUrl is. Empty dict until a master list has been accepted; see the
     // XML for the keys.
     std::map<std::string, sdbus::Variant> CscaAnchorState() override;
     std::string DefaultReason() override;
     std::string DefaultLocation() override;
-    std::string PluginDir() override;
     // Config1 — mutation. Each one is authorised before it acts, and the
     // authority may take as long as a person needs to answer a password dialog,
     // so these are ASYNC methods: the reply is deferred until the authority
@@ -109,12 +101,10 @@ private:
     // must not be able to make the agent read anything.
     void ImportCscaMasterList(sdbus::Result<std::map<std::string, sdbus::Variant>>&& result,
                               sdbus::UnixFd masterList) override;
-    void ForgetCscaAnchors(sdbus::Result<std::uint64_t, bool>&& result) override;
     void setValueGranted(const std::string& key, const sdbus::Variant& value);
     void resetGranted(const std::string& key);
     std::map<std::string, sdbus::Variant> importCscaMasterListGranted(const sdbus::UnixFd& masterList,
                                                                       const std::string& sender);
-    std::tuple<std::uint64_t, bool> forgetCscaAnchorsGranted();
 
     // Pkcs11_1 — low-level PKCS#11 broker. The card-touching methods are sdbus-c++
     // ASYNC methods (org.freedesktop.DBus.Method.Async): each resolves the caller

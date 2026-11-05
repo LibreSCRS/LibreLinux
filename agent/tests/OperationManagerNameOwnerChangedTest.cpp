@@ -62,10 +62,10 @@ TEST(OperationManagerNameOwnerChanged, ClientDisconnectCancelsRecordedOps)
     bus->enterEventLoopAsync();
 
     OperationManager mgr(nullptr); // production (cleanup-grace) mode; no resolver
-    // The NameOwnerChanged proxy now lives in the AgentTransport (BusExporter),
-    // which forwards each unique-name drop here via dispatchClientDisconnect. This
-    // test drives that forwarding target directly (the same call the transport
-    // handler makes), so no proxy is wired here.
+    // The NameOwnerChanged proxy lives in the BusExporter, which forwards each
+    // unique-name drop here via dispatchClientDisconnect. This test drives that
+    // forwarding target directly (the same call the transport handler makes), so
+    // no proxy is wired here.
 
     auto adaptor = std::make_unique<CountingChannel>();
     auto* raw = adaptor.get();

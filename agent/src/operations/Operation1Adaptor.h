@@ -55,18 +55,6 @@ public:
     {
         return m_state ? m_state->phase.load() : 0u;
     }
-    [[nodiscard]] double progress() const
-    {
-        return m_state ? m_state->progress.load() : 0.0;
-    }
-    [[nodiscard]] bool isIndeterminate() const
-    {
-        return m_state && m_state->isIndeterminate.load();
-    }
-    [[nodiscard]] std::uint32_t watchdogTimeoutSeconds() const
-    {
-        return m_state ? m_state->watchdogTimeoutSec.load() : 0u;
-    }
     [[nodiscard]] bool completed() const
     {
         return m_state && m_state->completed.load();
@@ -92,18 +80,6 @@ private:
     std::uint32_t Phase() override
     {
         return phase();
-    }
-    double Progress() override
-    {
-        return progress();
-    }
-    bool IsIndeterminate() override
-    {
-        return isIndeterminate();
-    }
-    std::uint32_t WatchdogTimeoutSeconds() override
-    {
-        return watchdogTimeoutSeconds();
     }
     bool Completed() override
     {

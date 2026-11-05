@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 // SPDX-FileCopyrightText: 2026 hirashix0
 #pragma once
-#include <LibreSCRS/Agent/backend/AgentTransport.h>
+#include <LibreSCRS/Agent/Identity.h>
 #include <LibreSCRS/Agent/PresenceTypes.h>
 #include <LibreSCRS/Agent/value/ReaderLabels.h> // PresenceRoster
 #include <sdbus-c++/IConnection.h>
@@ -20,7 +20,7 @@ class EventLoopPoster;
 // White-box test access to the private disconnect-handler vector (agent/tests).
 struct BusExporterTestPeer;
 
-// The transport wire (AgentTransport impl). Keeps a synchronised presence
+// The transport wire. Keeps a synchronised presence
 // SNAPSHOT (a pure projection of the typed reader deltas — no exported sdbus
 // object), the worker->loop marshaling seam, the client-liveness
 // (NameOwnerChanged) watch, and the reader->card resolveReaderCard seam the core
@@ -28,7 +28,7 @@ struct BusExporterTestPeer;
 // updates the snapshot and is forwarded to a registered materialization callback
 // (the AgentFrontend) that owns the real Reader1/Card1 object lifetimes. The
 // snapshot lets the core reader->card lookup stay off the frontend's object maps.
-class BusExporter : public AgentTransport
+class BusExporter
 {
 public:
     // The transport wire is decoupled from the presence SOURCE: this ctor only
@@ -82,7 +82,7 @@ public:
     [[nodiscard]] PresenceRoster presenceRoster() const;
 
     // The callbacks the AgentFrontend registers so each typed presence delta
-    // (forwarded from the AgentTransport overrides) materialises/withdraws its
+    // (forwarded from the presence calls) materialises/withdraws its
     // real exported sdbus object. Mirrors the ObjectRegistry observer triple. Set
     // once at startup (before the monitor emits) and cleared by the frontend as it
     // tears down, so no delta materialises into a half-destroyed frontend.
@@ -111,17 +111,17 @@ public:
     // (rather than dereference a concrete transport pointer off the loop thread).
     [[nodiscard]] std::function<void(std::chrono::microseconds, std::function<void()>)> loopPostSink() const;
 
-    // --- AgentTransport: presence object tree --------------------------------
-    // The core hands typed presence deltas (ReaderState/CardState/PropertyDelta,
-    // keyed by opaque ObjectId); these overrides update the internal presence
+    // --- presence object tree --------------------------------
+    // The registry's observers hand typed presence deltas (ReaderState/CardState/
+    // PropertyDelta, keyed by opaque ObjectId); these calls update the internal presence
     // snapshot (readerPath -> {name, hasCard, cardPath}) and forward the delta to
     // the frontend materialization callback, which owns the ObjectId<->wire-path
     // mapping and all Variant/interface-name tagging and materialises the real
     // exported sdbus object.
-    void publishReader(const ReaderState& reader) override;
-    void publishCard(const CardState& card) override;
-    void withdraw(ObjectId id) override;
-    void updateProperties(ObjectId reader, const PropertyDelta& delta) override;
+    void publishReader(const ReaderState& reader);
+    void publishCard(const CardState& card);
+    void withdraw(ObjectId id);
+    void updateProperties(ObjectId reader, const PropertyDelta& delta);
     // A published reader's label (Model/Interface) changed because a reader
     // arrived or left beside it: the registry decides the label over the whole
     // roster, this only forwards it to the live Reader1 object.
@@ -130,8 +130,8 @@ public:
     // Loop-marshaling surface: run @p fn on the event-loop thread now (post) or
     // after @p delay (postAfter), through the wired poster. A no-op when no poster
     // is wired (a bus-less unit test or before the loop exists).
-    void post(std::function<void()> fn) override;
-    void postAfter(std::chrono::microseconds delay, std::function<void()> fn) override;
+    void post(std::function<void()> fn);
+    void postAfter(std::chrono::microseconds delay, std::function<void()> fn);
 
     // Client liveness. This exporter owns the process-global
     // org.freedesktop.DBus NameOwnerChanged proxy (created in the ctor on
@@ -140,7 +140,7 @@ public:
     // client's CallerToken. Handlers are append-only, wired once at startup
     // (AgentService registers the op auto-cancel first, then the PKCS#11 lease
     // revoke -- preserving the order the OperationManager watch used).
-    void onClientDisconnect(std::function<void(CallerToken)> handler) override;
+    void onClientDisconnect(std::function<void(CallerToken)> handler);
 
     // Sever the NameOwnerChanged proxy and drop every registered handler so no
     // late unique-name drop can fire a handler into a half-torn-down composition.
@@ -170,7 +170,7 @@ private:
 
     // The frontend's materialization callbacks (wired once at startup via
     // setMaterializer, cleared as the frontend tears down). Invoked synchronously
-    // from the AgentTransport overrides on the same thread the delta arrives on.
+    // from the presence calls on the same thread the delta arrives on.
     Materializer m_materializer;
 
     // The worker->loop poster (attached once the loop exists). SHARED-owned so the

@@ -7,7 +7,7 @@
 //     Operation path, then Identity1.Result fires before
 //     Operation1.Finished(Ok) on the same path.
 //   * Cancel path — client drops its bus connection mid-read; the agent's
-//     NameOwnerChanged listener (owned by the BusExporter/AgentTransport and
+//     NameOwnerChanged listener (owned by the BusExporter and
 //     forwarded to OperationManager::dispatchClientDisconnect, fed by
 //     CardObject::callerSender on the inbound method) propagates the cancel,
 //     the in-flight read returns Status::Cancelled, and the Operation
@@ -338,7 +338,7 @@ struct ReadHost
     ReadHost(std::shared_ptr<PrompterClientBase> prompter, std::shared_ptr<CardReader> reader)
         : core(Testing::makeTestCore(std::string{"integration-"} +
                                          ::testing::UnitTest::GetInstance()->current_test_info()->name(),
-                                     resolver, transport, authorizer, std::move(prompter))),
+                                     resolver, authorizer, std::move(prompter))),
           launcher(core, seamsReadingWith(std::move(reader)))
     {
         core.operationManager().setSessionFactoryForTest(fakeSessionFactory());
@@ -352,7 +352,6 @@ struct ReadHost
     }
 
     Testing::NoCandidates resolver;
-    Testing::SilentTransport transport;
     AllowAllAuthorizer authorizer;
     AgentCore core;
     OperationLauncher launcher;
@@ -662,7 +661,7 @@ TEST(CardOperationsIntegration, ClientDisconnectCancelsInflightOp)
     auto reader = std::make_shared<CancellableReader>(); // blocks on the token, honours cancel
     ReadHost host{prompterClient, reader};
 
-    // The client-disconnect watch now lives in the BusExporter (AgentTransport):
+    // The client-disconnect watch now lives in the BusExporter:
     // its ctor installs the org.freedesktop.DBus NameOwnerChanged proxy on the
     // agent bus, and each unique-name drop (empty new-owner) fires the registered
     // handlers. We wire the op auto-cancel handler exactly as AgentService does, so
@@ -1348,8 +1347,7 @@ TEST(CardOperationsIntegration, PreReadAuthResolvedOnWorkerAndPublishedOnLoop)
         PresenceModel model(registry, resolver);
         auto prompter = std::make_shared<NopPrompter>();
         AllowAllAuthorizer authz;
-        Testing::SilentTransport coreTransport;
-        AgentCore core = Testing::makeTestCore("prereadauth-e2e", resolver, coreTransport, authz, prompter);
+        AgentCore core = Testing::makeTestCore("prereadauth-e2e", resolver, authz, prompter);
 
         // Production ctor + the resolver so the per-reader holder resolves the
         // Can candidate; the detached fake session stands in for PC/SC.
@@ -1513,8 +1511,7 @@ TEST(CardOperationsIntegration, CapabilitiesResolvedFromHeldSessionForAidProbeOn
         PresenceModel model(registry, resolver);
         auto prompter = std::make_shared<NopPrompter>();
         AllowAllAuthorizer authz;
-        Testing::SilentTransport coreTransport;
-        AgentCore core = Testing::makeTestCore("aidprobe-e2e", resolver, coreTransport, authz, prompter);
+        AgentCore core = Testing::makeTestCore("aidprobe-e2e", resolver, authz, prompter);
 
         core.operationManager().setSessionFactoryForTest(fakeSessionFactory());
 
@@ -1691,8 +1688,7 @@ TEST(CardOperationsIntegration, CardTypeAndAtrResolvedAtInsertionThenAuthoritati
         PresenceModel model(registry, resolver);
         auto prompter = std::make_shared<NopPrompter>();
         AllowAllAuthorizer authz;
-        Testing::SilentTransport coreTransport;
-        AgentCore core = Testing::makeTestCore("cardtype-e2e", resolver, coreTransport, authz, prompter);
+        AgentCore core = Testing::makeTestCore("cardtype-e2e", resolver, authz, prompter);
 
         core.operationManager().setSessionFactoryForTest(fakeSessionFactory());
 
@@ -1896,8 +1892,7 @@ TEST(CardOperationsIntegration, CardTypeUpdateForWithdrawnCardIsDroppedWithoutCr
         PresenceModel model(registry, resolver);
         auto prompter = std::make_shared<NopPrompter>();
         AllowAllAuthorizer authz;
-        Testing::SilentTransport coreTransport;
-        AgentCore core = Testing::makeTestCore("withdrawrace-e2e", resolver, coreTransport, authz, prompter);
+        AgentCore core = Testing::makeTestCore("withdrawrace-e2e", resolver, authz, prompter);
 
         core.operationManager().setSessionFactoryForTest(fakeSessionFactory());
 
@@ -2114,8 +2109,7 @@ InsertionOutcome insertIntoContactSlot(int failFirst)
         PresenceModel model(registry, resolver);
         auto prompter = std::make_shared<NopPrompter>();
         AllowAllAuthorizer authz;
-        Testing::SilentTransport coreTransport;
-        AgentCore core = Testing::makeTestCore("insertion-e2e", resolver, coreTransport, authz, prompter);
+        AgentCore core = Testing::makeTestCore("insertion-e2e", resolver, authz, prompter);
 
         core.operationManager().setSessionFactoryForTest(
             [opens, failFirst](const std::string& r)

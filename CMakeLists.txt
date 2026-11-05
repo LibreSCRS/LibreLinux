@@ -131,7 +131,7 @@ set(DART_TESTING_TIMEOUT 300 CACHE STRING
 include(CTest)
 
 # The platform-neutral agent core (flows, scheduler, presence model, caches,
-# lease/broker policy, LM-backed seams, the 5 backend interfaces). The Linux
+# lease/broker policy, LM-backed seams, the 4 backend interfaces). The Linux
 # backend below implements those interfaces and builds the librescrs-agent
 # daemon on top of LibreAgent::Core. By default it is built from the revision
 # deps.lock names; packaging passes -DLIBRESCRS_AGENT_FROM_SOURCE=OFF and takes

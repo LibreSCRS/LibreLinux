@@ -13,7 +13,7 @@
 //     exact snake_case keys + camelCase value tokens;
 //   * the ManagePin change happy path -> Credentials1.Result outcome=ok with the
 //     pinned payload keys, before Operation1.Finished(Ok);
-//   * ActivateSigningKey happy path -> key_activated;
+//   * ActivateSigningKey happy path -> outcome=ok;
 //   * the mutation ops route through the Authorizer + RateLimiter (over-cap ->
 //     RateLimited BEFORE any prompt);
 //   * card removal drops the snapshot (the AgentService removal-lambda contract).
@@ -364,7 +364,6 @@ struct Harness
     DenyAllAuthorizer denyAuthorizer;
     HoldingAuthorizer holdingAuthorizer;
     Testing::NoCandidates resolver;
-    Testing::SilentTransport transport;
     std::optional<AgentCore> core;
     std::optional<OperationLauncher> launcher;
     std::unique_ptr<CardObject> card;
@@ -388,7 +387,7 @@ struct Harness
                                 : holdAuthorization ? static_cast<Authorizer&>(holdingAuthorizer)
                                                     : static_cast<Authorizer&>(authorizer);
         const auto dir = Testing::testCoreDir("cred-" + suffix);
-        core.emplace(resolver, transport, authority, std::make_shared<PrompterClient>(prompterName, kPrompterObject),
+        core.emplace(resolver, authority, std::make_shared<PrompterClient>(prompterName, kPrompterObject),
                      dir / "agent.conf", dir / "cache", Testing::noReaderCard(), Testing::noCardKey());
         core->operationManager().setSessionFactoryForTest(fakeSessionFactory());
         auto seams = Testing::unusedSeams();
@@ -460,7 +459,7 @@ std::pair<ResultDict, RecordsWire> getResult(sdbus::IProxy& op)
     ResultDict result;
     RecordsWire records;
     op.callMethod("GetResult")
-        .onInterface(sdbus::InterfaceName{LibreLinux::AgentWire::kOpCredentialsIface})
+        .onInterface(sdbus::InterfaceName{"org.librescrs.Agent.Operation.Credentials1"})
         .storeResultsTo(result, records);
     return {result, records};
 }
@@ -470,7 +469,7 @@ sdbus::ObjectPath callManagePin(sdbus::IProxy& card, const std::string& pinId, c
 {
     sdbus::ObjectPath op;
     card.callMethod("ManagePin")
-        .onInterface(sdbus::InterfaceName{LibreLinux::AgentWire::kCredentialsIface})
+        .onInterface(sdbus::InterfaceName{"org.librescrs.Agent.Credentials1"})
         .withArguments(pinId, verb, options)
         .storeResultsTo(op);
     return op;
@@ -531,7 +530,7 @@ TEST(CredentialsDbus, ManagePinBadPinIdRejectedAtEntry)
         static_cast<void>(callManagePin(*card, "user:0x01", "change", {}));
         FAIL() << "a pinId with no snapshot must be rejected at entry";
     } catch (const sdbus::Error& e) {
-        EXPECT_EQ(e.getName(), std::string{LibreLinux::AgentWire::kErrUnknownCredential});
+        EXPECT_EQ(e.getName(), std::string{"org.librescrs.Agent.Error.UnknownCredential"});
     }
     // Snapshot present but the id is absent -> still UnknownCredential.
     h.core->credentialSnapshotCache().put(
@@ -540,7 +539,7 @@ TEST(CredentialsDbus, ManagePinBadPinIdRejectedAtEntry)
         static_cast<void>(callManagePin(*card, "sign:0xFF", "change", {}));
         FAIL() << "an unlisted pinId must be rejected at entry";
     } catch (const sdbus::Error& e) {
-        EXPECT_EQ(e.getName(), std::string{LibreLinux::AgentWire::kErrUnknownCredential});
+        EXPECT_EQ(e.getName(), std::string{"org.librescrs.Agent.Error.UnknownCredential"});
     }
 }
 
@@ -557,7 +556,7 @@ TEST(CredentialsDbus, MissingCapabilityRejectedAtEntry)
                 op = callManagePin(*card, "user:0x01", "change", {});
             } else {
                 card->callMethod(method)
-                    .onInterface(sdbus::InterfaceName{LibreLinux::AgentWire::kCredentialsIface})
+                    .onInterface(sdbus::InterfaceName{"org.librescrs.Agent.Credentials1"})
                     .storeResultsTo(op);
             }
             FAIL() << method << " must be refused without the PinManagement capability";
@@ -585,7 +584,7 @@ TEST(CredentialsDbus, ManagePinChangeHappyPathEmitsOkResultBeforeFinished)
     std::atomic<int> orderedResultBeforeFinished{-1};
     auto op = h.opProxy(opPath);
     op->uponSignal(sdbus::SignalName{"Result"})
-        .onInterface(sdbus::InterfaceName{LibreLinux::AgentWire::kOpCredentialsIface})
+        .onInterface(sdbus::InterfaceName{"org.librescrs.Agent.Operation.Credentials1"})
         .call([&](const ResultDict&, const RecordsWire&) { sawResult.store(true); });
     op->uponSignal(sdbus::SignalName{"Finished"})
         .onInterface(sdbus::InterfaceName{LibreLinux::AgentWire::kOperation1Iface})
@@ -614,9 +613,6 @@ TEST(CredentialsDbus, ManagePinChangeHappyPathEmitsOkResultBeforeFinished)
     EXPECT_FALSE(result.at("blocked").get<bool>());
     ASSERT_TRUE(result.count("retries_left"));
     EXPECT_EQ(result.at("retries_left").get<int>(), 3);
-    // pin_activated / key_activated are omitted for a plain change (not engaged).
-    EXPECT_FALSE(result.count("pin_activated"));
-    EXPECT_FALSE(result.count("key_activated"));
 }
 
 TEST(CredentialsDbus, ManagePinChangeUnsupportedSeamYieldsUnsupportedResult)
@@ -646,7 +642,7 @@ TEST(CredentialsDbus, ListCredentialsEmptyReturnsOkEmptyList)
     auto card = h.cardProxy();
     sdbus::ObjectPath opPath;
     card->callMethod("ListCredentials")
-        .onInterface(sdbus::InterfaceName{LibreLinux::AgentWire::kCredentialsIface})
+        .onInterface(sdbus::InterfaceName{"org.librescrs.Agent.Credentials1"})
         .storeResultsTo(opPath);
     ASSERT_FALSE(std::string{opPath}.empty());
 
@@ -676,7 +672,7 @@ TEST(CredentialsDbus, ListCredentialsReturnsRecordsWithWireKeys)
     auto card = h.cardProxy();
     sdbus::ObjectPath opPath;
     card->callMethod("ListCredentials")
-        .onInterface(sdbus::InterfaceName{LibreLinux::AgentWire::kCredentialsIface})
+        .onInterface(sdbus::InterfaceName{"org.librescrs.Agent.Credentials1"})
         .storeResultsTo(opPath);
     ASSERT_FALSE(std::string{opPath}.empty());
 
@@ -696,8 +692,6 @@ TEST(CredentialsDbus, ListCredentialsReturnsRecordsWithWireKeys)
     EXPECT_TRUE(rec.at("can_change").get<bool>());
     ASSERT_TRUE(rec.count("retries_left"));
     EXPECT_EQ(rec.at("retries_left").get<int>(), 3);
-    ASSERT_TRUE(rec.count("min_length"));
-    EXPECT_EQ(rec.at("min_length").get<int>(), 4);
 
     // The listing was cached under the card path so ManagePin can address it.
     const auto cached = h.core->credentialSnapshotCache().get(kCardPath);
@@ -706,7 +700,7 @@ TEST(CredentialsDbus, ListCredentialsReturnsRecordsWithWireKeys)
     EXPECT_EQ(cached->records.front().id, "user:0x01");
 }
 
-TEST(CredentialsDbus, ActivateSigningKeyHappyPathReportsKeyActivated)
+TEST(CredentialsDbus, ActivateSigningKeyHappyPathReportsOk)
 {
     Harness h("ActivateOk", kPinMgmtBit);
     h.core->credentialSnapshotCache().put(
@@ -716,7 +710,7 @@ TEST(CredentialsDbus, ActivateSigningKeyHappyPathReportsKeyActivated)
     auto card = h.cardProxy();
     sdbus::ObjectPath opPath;
     card->callMethod("ActivateSigningKey")
-        .onInterface(sdbus::InterfaceName{LibreLinux::AgentWire::kCredentialsIface})
+        .onInterface(sdbus::InterfaceName{"org.librescrs.Agent.Credentials1"})
         .storeResultsTo(opPath);
     ASSERT_FALSE(std::string{opPath}.empty());
 
@@ -725,8 +719,6 @@ TEST(CredentialsDbus, ActivateSigningKeyHappyPathReportsKeyActivated)
     EXPECT_EQ(h.credMgr.activateCalls.load(), 1);
     const auto [result, records] = getResult(*op);
     EXPECT_EQ(result.at("outcome").get<std::string>(), "ok");
-    ASSERT_TRUE(result.count("key_activated"));
-    EXPECT_TRUE(result.at("key_activated").get<bool>());
 }
 
 // Operation1.Cancel while the PIN window stands: the window the operation
@@ -743,7 +735,7 @@ TEST(CredentialsDbus, CancelWhileThePinWindowStandsClosesItAndEndsTheOp)
     auto card = h.cardProxy();
     sdbus::ObjectPath opPath;
     card->callMethod("ActivateSigningKey")
-        .onInterface(sdbus::InterfaceName{LibreLinux::AgentWire::kCredentialsIface})
+        .onInterface(sdbus::InterfaceName{"org.librescrs.Agent.Credentials1"})
         .storeResultsTo(opPath);
     ASSERT_FALSE(std::string{opPath}.empty());
 
@@ -778,7 +770,7 @@ TEST(CredentialsDbus, ActivateSigningKeyNotActivatableIsUnsupportedNotEntryError
     auto card = h.cardProxy();
     sdbus::ObjectPath opPath;
     card->callMethod("ActivateSigningKey")
-        .onInterface(sdbus::InterfaceName{LibreLinux::AgentWire::kCredentialsIface})
+        .onInterface(sdbus::InterfaceName{"org.librescrs.Agent.Credentials1"})
         .storeResultsTo(opPath);
     ASSERT_FALSE(std::string{opPath}.empty());
     auto op = h.opProxy(opPath);
@@ -802,7 +794,7 @@ TEST(CredentialsDbus, MutationRateLimitedBeforePrompt)
     try {
         sdbus::ObjectPath op;
         card->callMethod("ActivateSigningKey")
-            .onInterface(sdbus::InterfaceName{LibreLinux::AgentWire::kCredentialsIface})
+            .onInterface(sdbus::InterfaceName{"org.librescrs.Agent.Credentials1"})
             .storeResultsTo(op);
         FAIL() << "an over-cap caller must be rejected with RateLimited before any prompt";
     } catch (const sdbus::Error& e) {
