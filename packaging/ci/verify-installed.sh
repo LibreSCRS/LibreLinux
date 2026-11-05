@@ -114,8 +114,6 @@ test -f /usr/lib/systemd/user/librescrs-agent.service
 check "V2d systemd user unit on /usr/lib/systemd/user" $?
 test -f /usr/lib/systemd/user/librescrs-pinentry-kde.service
 check "V2d2 prompter user unit on /usr/lib/systemd/user" $?
-test -f /usr/lib/systemd/user/librescrs-p11-server.service
-check "V2d3 module-server user unit on /usr/lib/systemd/user" $?
 test -f /usr/share/p11-kit/modules/librescrs-agent.module
 check "V2e p11-kit registration" $?
 

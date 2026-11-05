@@ -118,7 +118,6 @@ libraries with it (internationalization and core additions).
 %license LICENSE
 %{_libexecdir}/librescrs-agent
 %{_userunitdir}/librescrs-agent.service
-%{_userunitdir}/librescrs-p11-server.service
 %{_libdir}/pkcs11/librescrs-pkcs11-agent.so
 %{_datadir}/p11-kit/modules/librescrs-agent.module
 %{_datadir}/dbus-1/services/org.librescrs.Agent.service

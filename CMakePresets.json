@@ -17,27 +17,11 @@
       }
     },
     {
-      "name": "debug",
-      "displayName": "Debug (Ninja)",
-      "inherits": "base",
-      "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Debug"
-      }
-    },
-    {
       "name": "release",
       "displayName": "Release (Ninja)",
       "inherits": "base",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "RelWithDebInfo"
-      }
-    },
-    {
-      "name": "release-strict",
-      "displayName": "Release + warnings as errors",
-      "inherits": "release",
-      "cacheVariables": {
-        "LIBRESCRS_WERROR": "ON"
       }
     },
     {
@@ -48,57 +32,18 @@
         "CMAKE_INSTALL_PREFIX": "$env{HOME}/.local",
         "LIBRELINUX_USER_INSTALL": "ON"
       }
-    },
-    {
-      "name": "coverage",
-      "displayName": "Coverage (Debug + gcov)",
-      "description": "A coverage build for a local gcovr run (gcovr.cfg at the repository root). A coverage number carries its configuration or it is not reproducible, so compare two runs only under the same compiler and gcovr version. Note this build type is Debug: where a CI leg is Release, an assertion-only case can be registered here and not there, so the two discovered sets are close but need not be identical.",
-      "binaryDir": "${sourceDir}/build-cov",
-      "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Debug",
-        "CMAKE_CXX_FLAGS": "-O0 -g --coverage -fprofile-update=atomic",
-        "CMAKE_C_FLAGS": "-O0 -g --coverage -fprofile-update=atomic",
-        "CMAKE_EXE_LINKER_FLAGS": "--coverage",
-        "CMAKE_SHARED_LINKER_FLAGS": "--coverage"
-      },
-      "inherits": "base"
     }
   ],
   "buildPresets": [
-    {
-      "name": "debug",
-      "configurePreset": "debug",
-      "jobs": 4
-    },
     {
       "name": "release",
       "configurePreset": "release",
       "jobs": 4
     },
     {
-      "name": "release-strict",
-      "configurePreset": "release-strict",
-      "jobs": 4
-    },
-    {
       "name": "user",
       "configurePreset": "user",
       "jobs": 4
-    }
-  ],
-  "testPresets": [
-    {
-      "name": "debug",
-      "configurePreset": "debug",
-      "output": {
-        "outputOnFailure": true
-      },
-      "execution": {
-        "noTestsAction": "error"
-      },
-      "environment": {
-        "LD_LIBRARY_PATH": "$env{HOME}/.local/librescrs/lib"
-      }
     }
   ]
 }

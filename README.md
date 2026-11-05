@@ -36,9 +36,9 @@ which the headless agent calls over a private session-bus interface.
 ## Build
 
 ```sh
-cmake --preset debug
-cmake --build build/debug
-ctest --preset debug
+cmake --preset release
+cmake --build --preset release
+ctest --test-dir build/release --output-on-failure
 ```
 
 The preset expects LibreMiddleware 5.x installed at

@@ -3,10 +3,10 @@
 //
 // The shared AgentClient contract, instantiated over the bus transport.
 //
-// The claims are not here. They come from the agent project's installed header
-// (<LibreSCRS/Agent/pkcs11/testing/AgentClientContract.h>), which the socket
-// transport instantiates in its own tree over its own client. This file
-// supplies only the traits type: the bus double's script.
+// The claims are not here. They come from the agent project's test-support
+// header (<AgentClientContract.h>), which the socket transport instantiates in
+// its own tree over its own client. This file supplies only the traits type:
+// the bus double's script.
 //
 // Runs under dbus-run-session, like every other bus suite here. The double
 // claims the agent's well-known name, which one connection at a time can own,
@@ -16,7 +16,7 @@
 #include "DBusAgentClient.h"
 #include "FakeAgent.h"
 
-#include <LibreSCRS/Agent/pkcs11/testing/AgentClientContract.h>
+#include <AgentClientContract.h>
 
 #include <gtest/gtest.h>
 

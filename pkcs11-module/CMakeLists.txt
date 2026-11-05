@@ -35,7 +35,7 @@ librelinux_strict_warnings(librescrs-pkcs11-agent NO_CONVERSION)
 # Install to the p11-kit default module dir (resolved by the top-level CMake).
 install(TARGETS librescrs-pkcs11-agent LIBRARY DESTINATION ${LIBRESCRS_P11_MODULE_DIR})
 
-# --- p11-kit .module registration + deployment (b) server unit --------------
+# --- p11-kit .module registration -----------------------------------------
 # The .module file goes into p11-kit's module-config dir (pkg-config
 # p11-kit-1 --variable p11_module_configs; /usr/share/p11-kit/modules fallback).
 # Under a per-user dogfood install the system dir is unwritable, and the data
@@ -79,22 +79,6 @@ message(STATUS "p11-kit module reference: ${LIBRESCRS_P11_MODULE_REF}")
 configure_file(data/librescrs-agent.module.in librescrs-agent.module @ONLY)
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/librescrs-agent.module
     DESTINATION ${LIBRESCRS_P11_MODULE_CONFIGS})
-
-# Deployment (b) systemd USER unit for `p11-kit server` (out-of-process
-# isolation). Mirrors the agent's --user install pattern: under
-# LIBRELINUX_USER_INSTALL it lands in the per-user XDG systemd dir, otherwise the
-# pkg-config system user-unit dir.
-if(LIBRELINUX_USER_INSTALL)
-    set(LIBRESCRS_P11_SYSTEMD_USER_DIR ${LIBRELINUX_USER_SYSTEMD_UNIT_DIR})
-else()
-    pkg_get_variable(LIBRESCRS_P11_SYSTEMD_USER_DIR systemd systemd_user_unit_dir)
-    if(NOT LIBRESCRS_P11_SYSTEMD_USER_DIR)
-        set(LIBRESCRS_P11_SYSTEMD_USER_DIR ${CMAKE_INSTALL_PREFIX}/lib/systemd/user)
-    endif()
-endif()
-configure_file(data/librescrs-p11-server.service.in librescrs-p11-server.service @ONLY)
-install(FILES ${CMAKE_CURRENT_BINARY_DIR}/librescrs-p11-server.service
-    DESTINATION ${LIBRESCRS_P11_SYSTEMD_USER_DIR})
 
 # BUILD_TESTING, not unconditional. include(CTest) in the root file defines it
 # and defaults it ON, so a developer build is unchanged. A distribution package

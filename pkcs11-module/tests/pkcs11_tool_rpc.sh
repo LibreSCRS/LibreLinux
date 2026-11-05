@@ -4,13 +4,12 @@
 #
 # RPC integration smoke: drive the EXTERNAL consumer pkcs11-tool
 # against the real librescrs-pkcs11-agent.so module, with the test FakeAgent as
-# the card backend on a private session bus. This is the in-process deployment
-# (a) path end-to-end: pkcs11-tool -> dlopen(module) -> D-Bus -> FakeAgent.
+# the card backend on a private session bus. This is the in-process path
+# end-to-end: pkcs11-tool -> dlopen(module) -> D-Bus -> FakeAgent.
 #
 # A full p11-kit-ROUTED run (apps reaching the module via a .module file in
-# /usr/share/p11-kit/modules, or out-of-process via `p11-kit server`) is NOT
-# exercised here — it needs a system install + a live p11-kit and is covered by
-# the documented manual smoke. This script asserts the module is a
+# /usr/share/p11-kit/modules) is NOT exercised here — it needs a system install
+# + a live p11-kit and is covered by the documented manual smoke. This script asserts the module is a
 # well-formed PKCS#11 provider that a real consumer can enumerate.
 #
 # Invoked under dbus-run-session by CTest. Args:
@@ -26,7 +25,7 @@ MODULE="$2"
 # first in initial library list" (ASan must be the first loaded runtime, which a
 # late dlopen by an uninstrumented host cannot satisfy). This is an artefact of
 # the external-consumer harness, not a module defect, so the ASan suite skips it;
-# the release-strict run still exercises it for real. Detect ASan by whether the
+# the CI release run still exercises it for real. Detect ASan by whether the
 # built module links libasan (deterministic, no CMake plumbing needed). LD_PRELOAD
 # of libasan would work but is fragile across toolchains, so we skip instead.
 if command -v ldd >/dev/null 2>&1 && ldd "${MODULE}" 2>/dev/null | grep -qiE 'libasan|libclang_rt\.asan'; then

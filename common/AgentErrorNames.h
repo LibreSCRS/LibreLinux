@@ -38,8 +38,5 @@ inline constexpr const char* kErrUnsupportedOnThisCard = "org.librescrs.Agent.Er
 // Credentials1.ManagePin entry rejections that are the client's fault: an unknown
 // verb, an undefined options key, or an illegal verb/option combination.
 inline constexpr const char* kErrInvalidRequest = "org.librescrs.Agent.Error.InvalidRequest";
-// Credentials1.ManagePin addressed a pinId that resolves to no record in the
-// latest ListCredentials snapshot — including the never-listed (no-snapshot) case.
-inline constexpr const char* kErrUnknownCredential = "org.librescrs.Agent.Error.UnknownCredential";
 
 } // namespace LibreLinux::AgentWire

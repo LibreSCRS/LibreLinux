@@ -1,7 +1,7 @@
 # This file registers the LibreSCRS agent-proxy PKCS#11 module with p11-kit.
 # See man pkcs11.conf(5) and man p11-kit(8).
 #
-# DEFAULT (in-process, deployment a): apps load librescrs-pkcs11-agent.so
+# DEFAULT (in-process): apps load librescrs-pkcs11-agent.so
 # directly; it maps the PKCS#11 C_* ABI to D-Bus calls into the per-user
 # librescrs-agent (the single card owner + prompter + policy + lease). The
 # module itself holds NO card secret and does NO crypto. PIN/CAN are collected
@@ -27,24 +27,6 @@ critical: no
 # the card through the agent before any generic module that might also see it.
 priority: 10
 
-# ---------------------------------------------------------------------------
-# OPT-IN OUT-OF-PROCESS ISOLATION (deployment b). The SAME .so, config-only:
-# comment out the `module:` line above and enable ONE of the two forms below.
-# (p11-kit's server side is CLI-only — `p11-kit server` / `p11-kit remote`; it
-# exposes no embeddable RPC library, so we ship the backend .so and let p11-kit
-# host it out-of-process. man p11-kit(8), SERVER / REMOTE.)
-#
-#   1) Per-client pipe (no daemon — p11-kit spawns one `p11-kit remote` child
-#      per consumer; nothing to start/stop, simplest isolation):
-# remote: |p11-kit remote @LIBRESCRS_P11_MODULE_DIR_ABS@/librescrs-pkcs11-agent.so
-#
-#   2) Long-lived shared server (start librescrs-p11-server.service, which runs
-#      `p11-kit server`), then point apps at the stock p11-kit-client.so via a
-#      fixed per-user socket. The server creates the socket srw------- (0600,
-#      owner-only — empirically verified) under $XDG_RUNTIME_DIR/p11-kit/.
-#      Override at runtime with the P11_KIT_SERVER_ADDRESS env var.
-# server-address: unix:path=${XDG_RUNTIME_DIR}/p11-kit/librescrs
-#
 # ---------------------------------------------------------------------------
 # DISCOVERY WHERE p11-kit-proxy IS NOT WIRED INTO THE CONSUMER (no README per
 # project policy — the notes live here):

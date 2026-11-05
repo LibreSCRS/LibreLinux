@@ -65,8 +65,7 @@ Install LM into `$HOME/.local/librescrs` (its own self-contained prefix):
 ```sh
 # in the LibreMiddleware checkout
 cmake -B build -S . -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-    -DCMAKE_INSTALL_PREFIX="$HOME/.local/librescrs" \
-    -DLIBREMIDDLEWARE_BUILD_SHARED=ON
+    -DCMAKE_INSTALL_PREFIX="$HOME/.local/librescrs"
 cmake --build build -j4
 cmake --install build
 ```
@@ -232,8 +231,8 @@ cmake --build build -j4
 cmake --install build
 ```
 
-By default this builds and installs the plasmoid, the Purpose plugin, and the
-KIO worker (`-DLIBREKDE_BUILD_PLASMOID/PURPOSE/KIO=ON`). KDE's `KDEInstallDirs`
+This builds and installs the plasmoid, the Purpose plugin, and the KIO
+worker. KDE's `KDEInstallDirs`
 decides the exact subpaths from the prefix (the `lib` infix — `lib`, `lib64`,
 or `lib/qt6` — is distribution-dependent, so verify against
 `build/install_manifest.txt` after installing). With prefix `$HOME/.local` the

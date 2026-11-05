@@ -38,15 +38,15 @@ libreagent_gtest_discover_tests(DBusAgentClientTest
 
 # The same contract suite the agent's own tree instantiates over the socket
 # transport, instantiated here over the bus one. The claims are NOT copied: the
-# header arrives through LibreAgent::Pkcs11Facade's interface include property,
-# the same way AgentClient.h does, on both the FetchContent and the
-# find_package path.
+# header arrives through LibreAgent::TestSupport, on both the FetchContent and
+# the find_package path.
 add_executable(DBusAgentClientContractTest DBusAgentClientContractTest.cpp ../src/DBusAgentClient.cpp)
 target_include_directories(DBusAgentClientContractTest PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/../src)
 target_compile_features(DBusAgentClientContractTest PRIVATE cxx_std_23)
-target_link_libraries(DBusAgentClientContractTest PRIVATE SDBusCpp::sdbus-c++ GTest::gtest GTest::gtest_main)
+target_link_libraries(DBusAgentClientContractTest PRIVATE SDBusCpp::sdbus-c++ LibreAgent::TestSupport GTest::gtest
+    GTest::gtest_main)
 libreagent_private_session_bus(DBusAgentClientContractTest)
 # One claim in that suite is what the client answers when the agent is ABSENT,
 # and on this transport "nobody owns the name" is not the same thing: the bus
@@ -60,7 +60,7 @@ libreagent_gtest_discover_tests(DBusAgentClientContractTest
     ENVIRONMENT "XDG_DATA_HOME=${CMAKE_CURRENT_BINARY_DIR}/no-bus-services;XDG_DATA_DIRS=${CMAKE_CURRENT_BINARY_DIR}/no-bus-services;${LIBREAGENT_PRIVATE_BUS_ENV}"
     PROPERTIES TIMEOUT 120)
 
-# Pure-text assertions on the configured .module + deployment-(b) server unit
+# Pure-text assertions on the configured .module
 # (no p11-kit, no D-Bus). The configured files are produced by the parent
 # CMakeLists into ${CMAKE_CURRENT_BINARY_DIR}/.. (the pkcs11-module build dir).
 add_executable(ModuleConfigTest ModuleConfigTest.cpp)
@@ -68,7 +68,6 @@ target_compile_features(ModuleConfigTest PRIVATE cxx_std_23)
 target_link_libraries(ModuleConfigTest PRIVATE GTest::gtest GTest::gtest_main)
 target_compile_definitions(ModuleConfigTest PRIVATE
     LIBRESCRS_MODULE_CONFIG_PATH="${CMAKE_CURRENT_BINARY_DIR}/../librescrs-agent.module"
-    LIBRESCRS_SERVER_UNIT_PATH="${CMAKE_CURRENT_BINARY_DIR}/../librescrs-p11-server.service"
     # Where this build puts the .so, and where p11-kit looks for a bare name.
     # The declaration may use the bare form only when the two are equal.
     LIBRESCRS_MODULE_DIR_ABS="${LIBRESCRS_P11_MODULE_DIR_ABS}"
@@ -76,10 +75,9 @@ target_compile_definitions(ModuleConfigTest PRIVATE
 gtest_discover_tests(ModuleConfigTest)
 
 # RPC integration: drive the EXTERNAL consumer pkcs11-tool against the real .so
-# with the FakeAgent as the card backend (in-process deployment-a path). Needs a
-# standalone fake-agent process + pkcs11-tool; SKIPs (ctest 77) if pkcs11-tool is
-# absent. A full p11-kit-routed / out-of-process `p11-kit server` run is the
-# documented manual smoke.
+# with the FakeAgent as the card backend (in-process path). Needs a standalone
+# fake-agent process + pkcs11-tool; SKIPs (ctest 77) if pkcs11-tool is absent.
+# A full p11-kit-routed run is the documented manual smoke.
 add_executable(FakeAgentMain FakeAgentMain.cpp)
 target_include_directories(FakeAgentMain PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}

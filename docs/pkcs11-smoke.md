@@ -24,7 +24,7 @@ of exercising the module against real hardware.
 
 ```
 app (Firefox / Thunderbird / ssh / pkcs11-tool)
-  └─ dlopen(librescrs-pkcs11-agent.so)        ← in-process, deployment (a)
+  └─ dlopen(librescrs-pkcs11-agent.so)        ← in-process
        └─ D-Bus (session bus)
             └─ librescrs-agent                  ← the single card owner + policy
                  ├─ prompter (PIN/CAN)          ← CKF_PROTECTED_AUTHENTICATION_PATH
@@ -32,9 +32,7 @@ app (Firefox / Thunderbird / ssh / pkcs11-tool)
 ```
 
 The module holds **no card connection and no secret**; every crypto op runs
-on-card inside the agent. Deployment **(b)** (out-of-process isolation) swaps the
-in-process `dlopen` for `p11-kit remote`/`p11-kit server` + the stock
-`p11-kit-client.so` — same `.so`, config-only difference.
+on-card inside the agent.
 
 ## 0. Prerequisites
 
@@ -53,7 +51,6 @@ A system (package) install drops the files in the right places automatically:
 | --- | --- | --- |
 | `librescrs-pkcs11-agent.so` | `pkg-config p11-kit-1 --variable p11_module_path` (`/usr/lib/pkcs11`) | `${CMAKE_INSTALL_PREFIX}/lib/pkcs11` |
 | `librescrs-agent.module` | `pkg-config p11-kit-1 --variable p11_module_configs` (`/usr/share/p11-kit/modules`) | `${XDG_CONFIG_HOME:-$HOME/.config}/pkcs11/modules` |
-| `librescrs-p11-server.service` | the systemd **user** unit dir (deployment b only) | `${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user` |
 
 p11-kit reads exactly three directories, in ascending precedence:
 `/usr/share/p11-kit/modules`, `/etc/pkcs11/modules` and
@@ -164,25 +161,7 @@ As always, the agent prompter is the only PIN sink
 (`CKF_PROTECTED_AUTHENTICATION_PATH`): never feed a placeholder PIN through the
 module — a wrong signing PIN risks an irreversible NAM lockout.
 
-## 7. Deployment (b) — out-of-process isolation (optional)
-
-Two opt-in forms (see the comments in `librescrs-agent.module`):
-
-1. **Per-client pipe, no daemon** — in the `.module`, comment out `module:` and
-   enable `remote: |p11-kit remote …/librescrs-pkcs11-agent.so`. p11-kit spawns
-   one `p11-kit remote` child per consumer; nothing to start.
-2. **Shared server** — `systemctl --user enable --now librescrs-p11-server`,
-   then enable `server-address:` in the `.module` so apps load the stock
-   `p11-kit-client.so` against the per-user socket.
-
-Verify the server socket is owner-only:
-
-```bash
-systemctl --user start librescrs-p11-server
-stat -c '%a %U %F' "$XDG_RUNTIME_DIR/p11-kit/"*   # expect: 600 <you> socket
-```
-
-## 8. Recorded HW-empirical items (fill in on a real run)
+## 7. Recorded HW-empirical items (fill in on a real run)
 
 Two questions could not be answered from the man pages / fake-agent suite and
 must be settled on hardware. **Record the verified answers in the knowledge-repo
@@ -217,6 +196,4 @@ Also record, while you are on hardware:
 
 - which `SC_ALGORITHM_RSA_PAD_*` decipher flag the PKS card accepted for
   `C_Decrypt` (relevant to the LM decipher seam);
-- the `p11-kit server` socket mode actually observed (`stat` in §7 — expected
-  `600`);
 - whether NSS auto-discovered the module on your distro or needed `modutil`.

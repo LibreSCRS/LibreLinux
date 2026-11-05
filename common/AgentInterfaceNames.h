@@ -34,10 +34,8 @@ inline constexpr const char* kServiceName = "org.librescrs.Agent";
 inline constexpr const char* kRootPath = "/org/librescrs/Agent";
 inline constexpr const char* kReaderIface = "org.librescrs.Agent.Reader1";
 inline constexpr const char* kCardIface = "org.librescrs.Agent.Card1";
-inline constexpr const char* kCredentialsIface = "org.librescrs.Agent.Credentials1";
 inline constexpr const char* kOperation1Iface = "org.librescrs.Agent.Operation1";
 inline constexpr const char* kCertificatesIface = "org.librescrs.Agent.Operation.Certificates1";
-inline constexpr const char* kOpCredentialsIface = "org.librescrs.Agent.Operation.Credentials1";
 inline constexpr const char* kPkcs11Iface = "org.librescrs.Agent.Pkcs11_1";
 inline constexpr const char* kObjectManagerIface = "org.freedesktop.DBus.ObjectManager";
 

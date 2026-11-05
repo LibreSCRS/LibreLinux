@@ -13,7 +13,6 @@
 libexec/librescrs-agent
 
 lib/systemd/user/librescrs-agent.service
-lib/systemd/user/librescrs-p11-server.service
 
 # The PKCS#11 agent-proxy module and its p11-kit registration.
 lib/pkcs11/librescrs-pkcs11-agent.so

@@ -147,7 +147,7 @@ package_librescrs-agent() {
         'systemd-libs'
         'pcsclite'
         'openssl'       # OpenSSL::Crypto — CardFingerprint SHA-256(ATR); the daemon links libcrypto directly
-        'p11-kit'       # loads the shipped .module for app auto-discovery + provides `p11-kit server`
+        'p11-kit'       # loads the shipped .module for app auto-discovery
         "librescrs-pinentry-kde=$pkgver-$pkgrel" # the prompter every PIN and CAN goes through
         'polkit'        # authorizes every signature, PIN change, PKCS#11 login and trust setting
     )
