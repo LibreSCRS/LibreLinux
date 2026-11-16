@@ -157,8 +157,10 @@ struct Harness
     }
 
     // Drive the import and hand back the rejection name (empty == accepted).
+    // The rejection's message is kept in lastMessage.
     std::string importFd(int fd, std::map<std::string, sdbus::Variant>* summary = nullptr)
     {
+        lastMessage.clear();
         try {
             std::map<std::string, sdbus::Variant> out;
             proxy->callMethod(kMethod)
@@ -170,9 +172,12 @@ struct Harness
             }
             return {};
         } catch (const sdbus::Error& e) {
+            lastMessage = e.getMessage();
             return e.getName();
         }
     }
+
+    std::string lastMessage;
 
     std::map<std::string, sdbus::Variant> anchorState()
     {
@@ -224,6 +229,7 @@ struct Harness
 };
 
 constexpr const char* kErrReplayed = "org.librescrs.Agent.Error.MasterListReplayed";
+constexpr const char* kErrInvalidRequest = "org.librescrs.Agent.Error.InvalidRequest";
 
 // Two instants a publisher might have signed at, an hour apart.
 constexpr std::int64_t kSignedEarlier = 1'700'000'000;
@@ -288,7 +294,7 @@ TEST(CscaImportDbus, RateLimitPrecedesTheRead)
     ASSERT_GE(garbage.fd(), 0);
     for (std::size_t i = 0; i < Operations::RateLimiter::kMaxPerWindow; ++i) {
         ASSERT_EQ(::lseek(garbage.fd(), 0, SEEK_SET), 0);
-        EXPECT_EQ(h.importFd(garbage.fd()), "org.librescrs.Agent.Error.NotAMasterList") << "call " << i;
+        EXPECT_EQ(h.importFd(garbage.fd()), kErrInvalidRequest) << "call " << i;
     }
 
     // Now over budget, and handed a descriptor the read path would reject with
@@ -314,7 +320,7 @@ TEST(CscaImportDbus, NonRegularDescriptorIsRefused)
     // rejection exists to prevent.
     ::close(pipeFds[1]);
 
-    EXPECT_EQ(h.importFd(pipeFds[0]), "org.librescrs.Agent.Error.InvalidRequest");
+    EXPECT_EQ(h.importFd(pipeFds[0]), kErrInvalidRequest);
     ::close(pipeFds[0]);
 }
 
@@ -716,7 +722,11 @@ TEST(CscaImportDbus, AChangedSignerIsRefusedOverTheWire)
     const auto stranger =
         fixture::signMasterList({fixture::makeCsca("CSCA X", "XX")}, fixture::makeIndependentSigner());
     TempFile strangerFile(h.dir / "in", "stranger.ml", stranger.der);
-    EXPECT_EQ(h.importFd(strangerFile.fd()), "org.librescrs.Agent.Error.MasterListSignerChanged");
+    EXPECT_EQ(h.importFd(strangerFile.fd()), kErrInvalidRequest);
+    EXPECT_NE(h.lastMessage.find("a publisher this agent does not follow"), std::string::npos) << h.lastMessage;
+    EXPECT_NE(h.lastMessage.find(Trust::toHex(first.signerSpkiSha256)), std::string::npos)
+        << "the publisher the agent follows is the one a person compares against";
+    EXPECT_NE(h.lastMessage.find(Trust::toHex(stranger.signerSpkiSha256)), std::string::npos) << h.lastMessage;
 
     // The refusal changed nothing a client can read.
     const auto state = h.anchorState();
@@ -976,8 +986,9 @@ TEST(CscaImportDbus, DiscardingAStaleReportLeavesTheSignerPinStanding)
     const auto stranger =
         fixture::signMasterList({fixture::makeCsca("CSCA X", "XX")}, fixture::makeIndependentSigner());
     TempFile strangerFile(h.dir / "in", "stranger.ml", stranger.der);
-    EXPECT_EQ(h.importFd(strangerFile.fd()), "org.librescrs.Agent.Error.MasterListSignerChanged")
+    EXPECT_EQ(h.importFd(strangerFile.fd()), kErrInvalidRequest)
         << "the wiped cache let a publisher this agent does not follow install anchors";
+    EXPECT_NE(h.lastMessage.find("a publisher this agent does not follow"), std::string::npos) << h.lastMessage;
 
     // ... and the publisher the agent DOES follow is recognised, not merely
     // observed. signerPinned true is the pin being read; a blanket refusal

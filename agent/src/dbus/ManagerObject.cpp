@@ -56,74 +56,11 @@ const char* actionFor(Config::Mutability m) noexcept
     return (m == Config::Mutability::DbusMutableTrust) ? kActionConfigureTrust : kActionConfigure;
 }
 
-// ImportCscaMasterList rejections. The master-list refusals are distinct names
-// rather than one generic failure because a client has to be able to tell
-// "this file is not a master list" from "it is one, and it is empty" — the two
-// need different words in front of a person.
+// ImportCscaMasterList rejections that are not a refused list. A refused list
+// is named by toSyncError(Trust::ImportRefusal), LibreAgent's one table for it.
 constexpr const char* kErrInvalidRequest = LibreLinux::AgentWire::kErrInvalidRequest;
 constexpr const char* kErrRateLimited = LibreLinux::AgentWire::kErrRateLimited;
 constexpr const char* kErrInputTooLarge = "org.librescrs.Agent.Error.InputTooLarge";
-constexpr const char* kErrNotAMasterList = "org.librescrs.Agent.Error.NotAMasterList";
-constexpr const char* kErrEmptyMasterList = "org.librescrs.Agent.Error.EmptyMasterList";
-constexpr const char* kErrMalformedMasterList = "org.librescrs.Agent.Error.MalformedMasterList";
-constexpr const char* kErrBadMasterListSignature = "org.librescrs.Agent.Error.BadMasterListSignature";
-constexpr const char* kErrMasterListSignerChanged = "org.librescrs.Agent.Error.MasterListSignerChanged";
-constexpr const char* kErrMasterListReplayed = "org.librescrs.Agent.Error.MasterListReplayed";
-constexpr const char* kErrAnchorCacheNotWritable = "org.librescrs.Agent.Error.AnchorCacheNotWritable";
-
-// What an accepted import leaves in the agent's own configuration.
-//
-// The import reply answers the client that performed the import. A client that
-// has only just connected has no reply to read, so the outcome is REMEMBERED
-// here rather than left to the caller — the same standing a recorded
-// LastTsaUrl has, and read-only for a stronger reason: a client able to write
-// it would be claiming what passports are checked against without installing a
-// single anchor.
-//
-// AN IMPORT NOW TAKES IN SEVERAL PUBLISHERS. What the directory serves is a
-// collection: dozens of master lists, each published and signed by a different
-// country, and an import that admits them holds one record per publisher. The
-// three members below that were written for ONE publisher therefore have to
-// describe many, and each is resolved the same way — report what is true of the
-// WHOLE, and where the whole has no answer, say nothing rather than pick a
-// winner out of the parts.
-//
-//   * `signer` and `signedAt` are filled only when the agent follows EXACTLY
-//     ONE publisher, which is every single published list and was the only case
-//     that ever existed before. With several there is no such thing as "the
-//     publisher" or "the date", and naming one of them would be a SPECIFIC
-//     false statement rather than a vague one. The refusal path already reports
-//     its fingerprints under exactly this rule.
-//   * `signerPinned` is the AGGREGATE, and deliberately the weakest of its
-//     parts: true only when EVERY accepted publisher was established. For one
-//     publisher that is the identical statement it always made. For several it
-//     is the only reading a surface may render "authenticity verified" over.
-//     The discipline replayRefusalActive is already defined with, for the same
-//     reason.
-//
-// WHAT IS NOT REPORTED, and is absent rather than approximated: HOW MANY
-// publishers were taken in, and how many of those were established. Both are
-// honest things to say and neither can be said from here — this record is the
-// only thing that survives a restart, it has no member able to carry a count,
-// and a key present in the import reply but gone from the property a moment
-// later would be worse than the silence. Those numbers go to the log instead,
-// where they cost no interface.
-Config::CscaAnchorState toRecordedState(const Trust::AnchorState& state)
-{
-    // Exactly one publisher: everything the single-publisher vocabulary was
-    // written to say is true of it, so all of it is said.
-    const Trust::AcceptedSigner* only = state.signers.size() == 1 ? &state.signers.front() : nullptr;
-
-    Config::CscaAnchorState out;
-    out.anchors = state.anchorCount;
-    out.issuers = state.issuerCount;
-    out.replayRefusalActive = state.replayRefusalActive();
-    out.signer = only != nullptr ? Trust::toHex(only->fingerprint) : std::string{};
-    out.signerPinned = state.everyPublisherEstablished();
-    out.acceptedAt = state.acceptedAt;
-    out.signedAt = only != nullptr ? only->signedAt : std::nullopt;
-    return out;
-}
 
 // The dict both the import reply and the CscaAnchorState property serve, built
 // from the one value the agent records, so the two can never describe the same
@@ -149,7 +86,7 @@ std::map<std::string, sdbus::Variant> anchorStateDict(const std::optional<Config
     // ALWAYS present, and now an aggregate: true only when EVERY publisher the
     // import took in was established. Unchanged in meaning for the single
     // publisher it used to describe, and for several the only reading that
-    // cannot overstate — see toRecordedState.
+    // cannot overstate — see Trust::recordedStateFor.
     out["signerPinned"] = sdbus::Variant{state->signerPinned};
     if (state->acceptedAt) {
         out["acceptedAt"] = sdbus::Variant{*state->acceptedAt};
@@ -170,22 +107,21 @@ std::map<std::string, sdbus::Variant> anchorStateDict(const std::optional<Config
     return out;
 }
 
-[[noreturn]] void throwRefusal(const Trust::Refusal& refusal)
+// The person-readable reason. The NAME comes from the shared table; which
+// refusal it was is said here, and in the log.
+std::string refusalMessage(const Trust::Refusal& refusal)
 {
     switch (refusal.reason) {
     case Trust::ImportRefusal::NotAMasterList:
-        throw sdbus::Error{sdbus::Error::Name{kErrNotAMasterList}, "The file is not an ICAO master list"};
+        return "The file is not an ICAO master list";
     case Trust::ImportRefusal::Empty:
-        throw sdbus::Error{sdbus::Error::Name{kErrEmptyMasterList},
-                           "The master list carries no country signing certificate"};
+        return "The master list carries no country signing certificate";
     case Trust::ImportRefusal::Malformed:
-        throw sdbus::Error{sdbus::Error::Name{kErrMalformedMasterList}, "The master list's content cannot be read"};
+        return "The master list's content cannot be read";
     case Trust::ImportRefusal::BadSignature:
-        throw sdbus::Error{sdbus::Error::Name{kErrBadMasterListSignature},
-                           "The signature over the master list does not verify"};
+        return "The signature over the master list does not verify";
     case Trust::ImportRefusal::CacheNotWritable:
-        throw sdbus::Error{sdbus::Error::Name{kErrAnchorCacheNotWritable},
-                           "The master list verified but the anchors could not be stored"};
+        return "The master list verified but the anchors could not be stored";
     case Trust::ImportRefusal::Replayed: {
         // Both dates travel with the refusal, and the two shapes read
         // differently on purpose: a missing offered date is the STRIP attempt,
@@ -196,7 +132,7 @@ std::map<std::string, sdbus::Variant> anchorStateDict(const std::optional<Config
         }
         replay += refusal.seenSignedAt ? "; offered list signed at " + std::to_string(*refusal.seenSignedAt)
                                        : "; the offered list carries no signing time at all";
-        throw sdbus::Error{sdbus::Error::Name{kErrMasterListReplayed}, replay};
+        return replay;
     }
     case Trust::ImportRefusal::SignerChanged:
         break;
@@ -211,7 +147,12 @@ std::map<std::string, sdbus::Variant> anchorStateDict(const std::optional<Config
     if (refusal.seenSigner) {
         message += "; offered signer " + Trust::toHex(*refusal.seenSigner);
     }
-    throw sdbus::Error{sdbus::Error::Name{kErrMasterListSignerChanged}, message};
+    return message;
+}
+
+[[noreturn]] void throwRefusal(const Trust::Refusal& refusal)
+{
+    throw sdbus::Error{sdbus::Error::Name{syncErrorBusName(toSyncError(refusal.reason))}, refusalMessage(refusal)};
 }
 } // namespace
 
@@ -704,7 +645,7 @@ std::map<std::string, sdbus::Variant> ManagerObject::importCscaMasterListGranted
     // to read. The store persists it and fires Changed("CscaAnchorState")
     // itself — the path a recorded LastTsaUrl already takes — so there is no
     // explicit emit here, and no second signal for one import.
-    const auto recorded = toRecordedState(*imported);
+    const auto recorded = Trust::recordedStateFor(*imported);
     m_config.recordCscaAnchorState(recorded);
     return anchorStateDict(recorded);
 }
