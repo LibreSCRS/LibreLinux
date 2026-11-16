@@ -1,9 +1,8 @@
 # Link-time optimisation off, explicitly. Fedora's default %%optflags carry
 # -flto=auto -ffat-lto-objects, and this package links the static
-# LibreAgent::Core archive (the librescrs-agent-core package). Debian does not
-# enable LTO by default, which is why this line has no counterpart there and
-# why one recipe mechanically translated into the other would have been
-# wrong.
+# LibreAgent::Core archive (the librescrs-agent-core package). The deb recipe
+# says the same with optimize=-lto: Debian leaves LTO off by default, but
+# Ubuntu turns it on.
 %global _lto_cflags %{nil}
 
 Name:           librelinux
