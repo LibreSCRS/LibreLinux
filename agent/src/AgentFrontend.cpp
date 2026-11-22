@@ -211,11 +211,13 @@ void AgentFrontend::applyCardResolution(const std::string& cardPath, const std::
     log::infof("exported card {}", cardPath);
 
     // Power hold: the policy's verdict over the exporter's presence roster (the
-    // same lookup the prompt dialog uses). The held reader keeps the probe's
-    // session parked with no secrets while no operation uses it, so the same
-    // single-chip card's contactless twin stops flapping. Released by
-    // AgentService's card-removed hook.
-    if (CardResolutionPolicy::holdsReader(probe, m_transport.presenceRoster(), cardPath)) {
+    // same lookup the prompt dialog uses). pcsc-lite writes the interface into
+    // the reader name, so only the contact slot of a dual-interface unit is
+    // held. The held reader keeps the probe's session parked with no secrets
+    // while no operation uses it, so the same single-chip card's contactless
+    // twin stops flapping. Released by AgentService's card-removed hook.
+    if (CardResolutionPolicy::holdsReader(probe, m_transport.presenceRoster(), cardPath,
+                                          HoldRule::DualInterfaceContactSlot)) {
         m_core.operationManager().setReaderHold(objectIdFromPath(readerPath), true);
         log::infof("reader {}: holding the contact interface to quiet its contactless twin", readerName);
     }
