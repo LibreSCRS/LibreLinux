@@ -216,7 +216,7 @@ void AgentFrontend::applyCardResolution(const std::string& cardPath, const std::
     // held. The held reader keeps the probe's session parked with no secrets
     // while no operation uses it, so the same single-chip card's contactless
     // twin stops flapping. Released by AgentService's card-removed hook.
-    if (CardResolutionPolicy::holdsReader(probe, m_transport.presenceRoster(), cardPath,
+    if (CardResolutionPolicy::holdsReader(probe, m_transport.presenceRoster(), cardPath, atrHex,
                                           HoldRule::DualInterfaceContactSlot)) {
         m_core.operationManager().setReaderHold(objectIdFromPath(readerPath), true);
         log::infof("reader {}: holding the contact interface to quiet its contactless twin", readerName);
