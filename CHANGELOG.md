@@ -7,6 +7,11 @@ Notable user-visible changes per release. Format follows
 
 ### Added
 
+- **A card's identity is read in the background once it is shown.** When a
+  card that carries identity data and needs no secret before reading (no CAN,
+  no MRZ) appears, the agent reads it once the reader is idle, so the first
+  request for it is answered from the cache. It never prompts; a request that
+  arrives while it runs waits for at most that one read.
 - **Sleep, screen lock and switching users end card access the way they do on
   macOS.** The agent follows systemd-logind: before the machine sleeps, and when
   your session stops being the active one, it forgets cached CANs and MRZs,

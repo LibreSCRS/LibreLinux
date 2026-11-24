@@ -2039,13 +2039,14 @@ constexpr const char* kContactlessSlot =
 class ServingPlugin final : public LibreSCRS::Plugin::CardPlugin
 {
 public:
-    ServingPlugin()
+    explicit ServingPlugin(LibreSCRS::Plugin::CardCapabilities caps = LibreSCRS::Plugin::CardCapabilities::PKI)
+        : m_caps(caps)
     {
         setIdentity("serving-stub", 0);
     }
     LibreSCRS::Plugin::CardCapabilities capabilities() const override
     {
-        return LibreSCRS::Plugin::CardCapabilities::PKI;
+        return m_caps;
     }
     std::span<const LibreSCRS::Plugin::Atr> supportedAtrs() const noexcept override
     {
@@ -2058,6 +2059,9 @@ protected:
     {
         return LibreSCRS::Plugin::ReadResult::communicationError(LibreSCRS::Auth::ErrorKeys::genericComm());
     }
+
+private:
+    LibreSCRS::Plugin::CardCapabilities m_caps;
 };
 
 // Serves every card it is asked about; resolvePlugin finds none, so the ATR
@@ -2065,11 +2069,17 @@ protected:
 class InsertionResolver final : public CapabilityResolver
 {
 public:
+    explicit InsertionResolver(LibreSCRS::Plugin::CardCapabilities caps = LibreSCRS::Plugin::CardCapabilities::PKI)
+        : m_caps(caps)
+    {}
     std::vector<std::shared_ptr<const LibreSCRS::Plugin::CardPlugin>>
     resolveCandidates(std::span<const std::uint8_t>, LibreSCRS::SmartCard::CardSession&) override
     {
-        return {std::make_shared<ServingPlugin>()};
+        return {std::make_shared<ServingPlugin>(m_caps)};
     }
+
+private:
+    LibreSCRS::Plugin::CardCapabilities m_caps;
 };
 
 struct InsertionOutcome
@@ -2078,12 +2088,15 @@ struct InsertionOutcome
     std::uint32_t caps{0};
     int opens{0};
     bool held{false};
+    std::uint32_t backgroundRequests{0}; // background reads parked on the reader
 };
 
 // Insert one card into the OMNIKEY's contact slot (its CL twin present, empty)
 // and wait for the card to be exported. @p failFirst opens are refused, the
 // way a card another process holds exclusively refuses them.
-InsertionOutcome insertIntoContactSlot(int failFirst)
+InsertionOutcome
+insertIntoContactSlot(int failFirst,
+                      LibreSCRS::Plugin::CardCapabilities caps = LibreSCRS::Plugin::CardCapabilities::PKI)
 {
     InsertionOutcome out;
     std::shared_ptr<sdbus::IConnection> serverConn = sdbus::createSessionBusConnection();
@@ -2104,7 +2117,7 @@ InsertionOutcome insertIntoContactSlot(int failFirst)
         // live memory.
         auto opens = std::make_shared<std::atomic<int>>(0);
 
-        InsertionResolver resolver;
+        InsertionResolver resolver(caps);
         ObjectRegistry registry;
         PresenceModel model(registry, resolver);
         auto prompter = std::make_shared<NopPrompter>();
@@ -2167,6 +2180,7 @@ InsertionOutcome insertIntoContactSlot(int failFirst)
         // the hold, if any, was set in the same loop step as the export.
         out.opens = opens->load();
         out.held = core.operationManager().isReaderHeldForTest(contactReader);
+        out.backgroundRequests = core.operationManager().backgroundRequestsForTest(contactReader);
 
         client->leaveEventLoop();
         stopLoop.store(true, std::memory_order_release);
@@ -2189,4 +2203,20 @@ TEST(CardOperationsIntegration, AProbeThatCouldNotOpenTheCardIsRetriedThenHeld)
     EXPECT_EQ(out.caps, static_cast<std::uint32_t>(LibreSCRS::Plugin::CardCapabilities::PKI));
     EXPECT_EQ(out.opens, 3) << "two refused opens, then the one that served";
     EXPECT_TRUE(out.held) << "a served card on the OMNIKEY contact slot is held";
+}
+
+// A published card whose plugin declares identity data asks for one background
+// read of it; a card that only holds keys does not.
+TEST(CardOperationsIntegration, AnIdentityCardAsksForTheBackgroundIdentityRead)
+{
+    const auto out = insertIntoContactSlot(/*failFirst=*/0, LibreSCRS::Plugin::CardCapabilities::IdentityData);
+    ASSERT_TRUE(out.exported) << "the card must be exported within 5 s";
+    EXPECT_EQ(out.backgroundRequests, 1U);
+}
+
+TEST(CardOperationsIntegration, APkiOnlyCardAsksForNoBackgroundRead)
+{
+    const auto out = insertIntoContactSlot(/*failFirst=*/0);
+    ASSERT_TRUE(out.exported) << "the card must be exported within 5 s";
+    EXPECT_EQ(out.backgroundRequests, 0U);
 }

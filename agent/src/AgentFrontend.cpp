@@ -221,6 +221,15 @@ void AgentFrontend::applyCardResolution(const std::string& cardPath, const std::
         m_core.operationManager().setReaderHold(objectIdFromPath(readerPath), true);
         log::infof("reader {}: holding the contact interface to quiet its contactless twin", readerName);
     }
+
+    // Read the identity in the background so the first client request finds it
+    // cached. The agent runs it only once the reader's queue is idle, and it
+    // never prompts, so a card that needs a pre-read secret is not asked for.
+    if (CardResolutionPolicy::prefetchesIdentity(probe)) {
+        m_launcher.prefetch(
+            ReaderCard{.readerId = objectIdFromPath(readerPath), .readerName = readerName, .cardKey = cardPath},
+            Operations::OperationLauncher::PrefetchIdentity{.onCardType = makeCardTypeResolvedCallback(cardPath)});
+    }
 }
 
 void AgentFrontend::materializeReader(const ReaderState& reader)

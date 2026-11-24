@@ -94,9 +94,9 @@ private:
                                const std::string& readerName, std::chrono::milliseconds delay);
     // Loop-thread sink: what the policy makes of @p probe -- probe again after
     // a wait, or CREATE + export the Card1 object now with what the probe
-    // learned (deferred publish), taking the reader's power hold when the
-    // policy says so. A no-op if the card was removed meanwhile. Guarded by
-    // m_cardsMutex.
+    // learned (deferred publish), taking the reader's power hold and parking a
+    // background identity read when the policy says so. A no-op if the card
+    // was removed meanwhile. Guarded by m_cardsMutex.
     void applyCardResolution(const std::string& cardPath, const std::string& readerPath, const std::string& readerName,
                              const CardProbe& probe);
     // Build the onCardTypeResolved callback CardOperationDeps carries into every
