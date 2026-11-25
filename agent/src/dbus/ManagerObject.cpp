@@ -661,4 +661,26 @@ void ManagerObject::emitConfigChanged(const std::string& key) noexcept
     }
 }
 
+void ManagerObject::emitQuiesced(QuiesceReason reason) noexcept
+{
+    try {
+        org::librescrs::Agent::Manager1_adaptor::emitQuiesced(static_cast<std::uint32_t>(reason));
+    } catch (const std::exception& e) {
+        log::warnf("lifecycle: failed to emit Quiesced({}): {}", static_cast<unsigned>(reason), e.what());
+    } catch (...) {
+        log::warnf("lifecycle: failed to emit Quiesced({})", static_cast<unsigned>(reason));
+    }
+}
+
+void ManagerObject::emitResumed(QuiesceReason reason) noexcept
+{
+    try {
+        org::librescrs::Agent::Manager1_adaptor::emitResumed(static_cast<std::uint32_t>(reason));
+    } catch (const std::exception& e) {
+        log::warnf("lifecycle: failed to emit Resumed({}): {}", static_cast<unsigned>(reason), e.what());
+    } catch (...) {
+        log::warnf("lifecycle: failed to emit Resumed({})", static_cast<unsigned>(reason));
+    }
+}
+
 } // namespace LibreSCRS::Agent

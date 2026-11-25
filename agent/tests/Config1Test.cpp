@@ -16,6 +16,7 @@
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <tuple>
@@ -181,6 +182,60 @@ TEST(Config1, ChangedSignalFires)
     }
     EXPECT_TRUE(got.load(std::memory_order_acquire));
     EXPECT_EQ(gotKey, "DefaultReason");
+
+    clientConn->leaveEventLoop();
+    serverConn->leaveEventLoop();
+    fs::remove_all(dir);
+}
+
+// Manager1.Quiesced / Resumed on the root object carry the reason as the wire's
+// quiesce-reason integer, in the order they were emitted.
+TEST(Manager1, QuiescedAndResumedSignalsCarryTheReason)
+{
+    const auto dir = uniqueCfgDir("quiesce-signal");
+    fs::remove_all(dir);
+    auto serverConn = sdbus::createSessionBusConnection();
+    ASSERT_NE(serverConn, nullptr);
+    const char* svc = "org.librescrs.Agent.Test.QuiesceSig";
+    serverConn->requestName(sdbus::ServiceName{svc});
+    Config::ConfigStore cfg(dir / "agent.conf", dir / "cache");
+    AllowAllAuthorizer authz;
+    Operations::RateLimiter limiter;
+    ManagerObject manager(*serverConn, sdbus::ObjectPath{kRootPath}, "t", cfg, authz, limiter, nullptr);
+    serverConn->enterEventLoopAsync();
+
+    auto clientConn = sdbus::createSessionBusConnection();
+    clientConn->enterEventLoopAsync();
+    std::mutex mutex;
+    std::vector<std::string> seen;
+    auto proxy = sdbus::createProxy(*clientConn, sdbus::ServiceName{svc}, sdbus::ObjectPath{kRootPath});
+    constexpr const char* kManagerIface = "org.librescrs.Agent.Manager1";
+    proxy->uponSignal("Quiesced").onInterface(sdbus::InterfaceName{kManagerIface}).call([&](std::uint32_t reason) {
+        const std::lock_guard lock{mutex};
+        seen.push_back("Q" + std::to_string(reason));
+    });
+    proxy->uponSignal("Resumed").onInterface(sdbus::InterfaceName{kManagerIface}).call([&](std::uint32_t reason) {
+        const std::lock_guard lock{mutex};
+        seen.push_back("R" + std::to_string(reason));
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(100)); // let the match rules propagate
+
+    manager.emitQuiesced(QuiesceReason::ScreenLocked);
+    manager.emitResumed(QuiesceReason::ScreenLocked);
+    manager.emitQuiesced(QuiesceReason::SystemSleep);
+    for (int i = 0; i < 100; ++i) {
+        {
+            const std::lock_guard lock{mutex};
+            if (seen.size() >= 3) {
+                break;
+            }
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    {
+        const std::lock_guard lock{mutex};
+        EXPECT_EQ(seen, (std::vector<std::string>{"Q1", "R1", "Q0"}));
+    }
 
     clientConn->leaveEventLoop();
     serverConn->leaveEventLoop();

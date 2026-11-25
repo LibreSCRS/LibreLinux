@@ -18,6 +18,15 @@ Notable user-visible changes per release. Format follows
   closes every reader's session and ends every PKCS#11 login; when the screen
   locks, it ends the PKCS#11 logins, so the next signature asks for the PIN
   again.
+- **The agent tells its clients when card access stops and when it resumes.**
+  The root object sends `Manager1.Quiesced(reason)` for each of the above and
+  `Manager1.Resumed(reason)` when that reason ends: the wake, the screen
+  unlocking (the session's `LockedHint` going false) and your session becoming
+  the active one again. `Resumed` follows only a `Quiesced` that was sent.
+  Clients treat the agent as unavailable until every reason has ended, so an
+  operation in flight when the screen locks now fails as it does on macOS.
+  A screen locker that never sets `LockedHint` sends no end, and clients wait
+  for their next retry.
 
 - **`Reader1.Model` and `Reader1.Interface`:** a reader's short model name and
   which interface of a dual-interface unit it is (`contact`, `contactless` or

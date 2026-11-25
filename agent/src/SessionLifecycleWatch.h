@@ -18,14 +18,19 @@ class AgentCore;
 // systemd-logind's events for "the holder's session went away", in the agent's
 // one vocabulary. On the system bus it watches:
 //
-//   Manager.PrepareForSleep(true)                -> SystemSleep
-//   Manager.PrepareForSleep(false)               -> the resume callback
-//   the holder's session Lock, or LockedHint true -> ScreenLocked
-//   the holder's session Active false            -> SessionInactive
+//   Manager.PrepareForSleep(true)                -> quiesce SystemSleep
+//   Manager.PrepareForSleep(false)               -> resume SystemSleep
+//   the holder's session Lock, or LockedHint true -> quiesce ScreenLocked
+//   the holder's session LockedHint false        -> resume ScreenLocked
+//   the holder's session Active false            -> quiesce SessionInactive
+//   the holder's session Active true             -> resume SessionInactive
 //
-// Waking up reports through the resume callback, which lets the core take its
-// card holds back; unlocking and becoming active again report nothing: what the
-// agent forgot on the way out is not restored on the way back. Both lock reports are
+// Each report names the reason it begins or ends. Waking up lets the core take
+// its card holds back; unlocking and becoming active again change nothing in
+// the core: what the agent forgot on the way out is not restored on the way
+// back, the callback only tells whoever announces the end. The end of a lock is
+// LockedHint false alone: the session's Unlock signal is a request to the
+// screen locker, not a report that it unlocked. Both lock reports are
 // watched because they come from different places -- Lock is someone asking
 // logind to lock the session (loginctl lock-session, an idle policy), LockedHint
 // is the desktop's screen locker saying it locked -- and a desktop locked from
@@ -44,7 +49,7 @@ class SessionLifecycleWatch
 {
 public:
     using OnQuiesce = std::function<void(QuiesceReason)>;
-    using OnResume = std::function<void()>;
+    using OnResume = std::function<void(QuiesceReason)>;
 
     SessionLifecycleWatch(sdbus::IConnection& systemBus, OnQuiesce onQuiesce, OnResume onResume);
     ~SessionLifecycleWatch();
@@ -76,10 +81,22 @@ void quiesceUnderLock(AgentCore& core, std::mutex& stateMutex, QuiesceReason rea
 // under the same @p stateMutex as quiesceUnderLock.
 void resumeUnderLock(AgentCore& core, std::mutex& stateMutex);
 
+// Where the agent announces a quiesce and its end to its clients (the D-Bus
+// Quiesced and Resumed signals). Either may be empty. Called from the bus
+// dispatch thread, never under the state mutex.
+struct LifecycleNotifier
+{
+    std::function<void(QuiesceReason)> quiesced;
+    std::function<void(QuiesceReason)> resumed;
+};
+
 // The watch the agent runs: logind on @p systemBus, answered by quiesceUnderLock
-// and resumeUnderLock.
-// Every argument must outlive the returned watch.
+// and resumeUnderLock, and announced through @p notifier: quiesced on every
+// quiesce, resumed only when that reason was quiesced and not yet ended (a
+// QuiesceSet kept here, touched only from the dispatch thread). @p systemBus,
+// the core and the mutex must outlive the returned watch.
 [[nodiscard]] std::unique_ptr<SessionLifecycleWatch> watchSessionLifecycle(sdbus::IConnection& systemBus,
-                                                                           AgentCore& core, std::mutex& stateMutex);
+                                                                           AgentCore& core, std::mutex& stateMutex,
+                                                                           LifecycleNotifier notifier);
 
 } // namespace LibreSCRS::Agent

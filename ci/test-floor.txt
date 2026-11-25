@@ -8,7 +8,7 @@ AgentErrorNameParityTest 3
 AgentObjectPathTest 4
 AgentShutdownUnderLoadTest 4
 BusExporterReaderRaceTest 4
-BusExporterTest 4
+BusExporterTest 5
 CallerAuthorizerProductionGateTest 2
 CallerAuthorizerTest 6
 CallerIdentityTest 2
@@ -18,7 +18,7 @@ CardOperationsIntegrationTest 15
 CertResultWireSignatureTest 1
 Certificates1XmlCodegenTest 1
 Config1PropertyKeyMirrorTest 2
-Config1Test 5
+Config1Test 6
 ConfigPathsTest 8
 CredentialsDbusTest 21
 CscaImportDbusTest 28
@@ -62,7 +62,7 @@ RequestSecretsXmlCodegenTest 2
 SandboxWritableDirsGuardTest 1
 SealedMemfdTest 1
 SecretMemfdReaderTest 5
-SessionLifecycleWatchTest 9
+SessionLifecycleWatchTest 14
 Sign1XmlCodegenTest 1
 SignBatch1XmlCodegenTest 1
 SignHwSmokeTest 7

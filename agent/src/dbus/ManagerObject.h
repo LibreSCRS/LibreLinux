@@ -5,6 +5,7 @@
 #include "org.librescrs.Agent.Config1_adaptor.h"
 #include "org.librescrs.Agent.Manager1_adaptor.h"
 #include "org.librescrs.Agent.Pkcs11_1_adaptor.h"
+#include <LibreSCRS/Agent/wire/QuiesceReason.h>
 #include <sdbus-c++/AdaptorInterfaces.h>
 #include <sdbus-c++/IConnection.h>
 #include <sdbus-c++/StandardInterfaces.h>
@@ -56,6 +57,12 @@ public:
     // (D-Bus or agent-internal) emits Config1.Changed. noexcept: a D-Bus emit
     // failure is logged, never propagated to the worker that triggered it.
     void emitConfigChanged(const std::string& key) noexcept;
+
+    // Manager1.Quiesced / Resumed: the agent stopped / resumed card access for
+    // @p reason. Wired by AgentService to the session lifecycle watch. noexcept
+    // for the same reason as emitConfigChanged.
+    void emitQuiesced(QuiesceReason reason) noexcept;
+    void emitResumed(QuiesceReason reason) noexcept;
 
 private:
     // Manager1

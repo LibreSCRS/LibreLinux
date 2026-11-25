@@ -228,6 +228,64 @@ TEST(BusExporter, PublishesPresenceTree)
     serverConn->leaveEventLoop();
 }
 
+// The frontend is the one object the agent's session lifecycle watch reaches:
+// emitQuiesced / emitResumed put Manager1.Quiesced / Resumed on the root object
+// it owns, with the reason as the wire's integer.
+TEST(BusExporter, TheFrontendEmitsQuiescedAndResumedOnTheRootObject)
+{
+    constexpr const char* kService = "org.librescrs.Agent.Test.FrontendQuiesce";
+    constexpr const char* kManagerIface = "org.librescrs.Agent.Manager1";
+
+    std::shared_ptr<sdbus::IConnection> serverConn = sdbus::createSessionBusConnection();
+    ASSERT_NE(serverConn, nullptr) << "run under dbus-run-session";
+    serverConn->requestName(sdbus::ServiceName{kService});
+
+    ObjectRegistry registry;
+    NopResolver resolver;
+    auto prompter = std::make_shared<NopPrompter>();
+    AllowAllAuthorizer authz;
+    LibreSCRS::Agent::AgentCore core =
+        LibreSCRS::Agent::Testing::makeTestCore("librescrs-test-frontend-quiesce", resolver, authz, prompter);
+    BusExporter exporter(*serverConn, registry);
+    AgentFrontend frontend(exporter, serverConn, core, "test");
+
+    serverConn->enterEventLoopAsync();
+    auto clientConn = sdbus::createSessionBusConnection();
+    clientConn->enterEventLoopAsync();
+    auto root =
+        sdbus::createProxy(*clientConn, sdbus::ServiceName{kService}, sdbus::ObjectPath{"/org/librescrs/Agent"});
+    std::mutex mutex;
+    std::vector<std::string> seen;
+    root->uponSignal("Quiesced").onInterface(sdbus::InterfaceName{kManagerIface}).call([&](std::uint32_t reason) {
+        const std::lock_guard lock{mutex};
+        seen.push_back("Q" + std::to_string(reason));
+    });
+    root->uponSignal("Resumed").onInterface(sdbus::InterfaceName{kManagerIface}).call([&](std::uint32_t reason) {
+        const std::lock_guard lock{mutex};
+        seen.push_back("R" + std::to_string(reason));
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(100)); // let the match rules propagate
+
+    frontend.emitQuiesced(LibreSCRS::Agent::QuiesceReason::SessionInactive);
+    frontend.emitResumed(LibreSCRS::Agent::QuiesceReason::SessionInactive);
+    for (int i = 0; i < 100; ++i) {
+        {
+            const std::lock_guard lock{mutex};
+            if (seen.size() >= 2) {
+                break;
+            }
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    {
+        const std::lock_guard lock{mutex};
+        EXPECT_EQ(seen, (std::vector<std::string>{"Q2", "R2"}));
+    }
+
+    clientConn->leaveEventLoop();
+    serverConn->leaveEventLoop();
+}
+
 // Reader1.Model / Reader1.Interface: the reader is published with the label the
 // agent library's registry decides over the whole roster, and a twin arriving
 // beside it relabels the reader already on the bus -- one PropertiesChanged

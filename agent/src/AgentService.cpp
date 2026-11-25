@@ -433,7 +433,23 @@ bool AgentService::registerOnBus()
     // nothing on those events, which the log says.
     try {
         m_systemBus = sdbus::createSystemBusConnection();
-        m_lifecycle = watchSessionLifecycle(*m_systemBus, *m_core, m_stateMutex);
+        // Guarded on m_frontend, like the config-changed hook above: a stray
+        // callback during teardown is a no-op.
+        m_lifecycle = watchSessionLifecycle(*m_systemBus, *m_core, m_stateMutex,
+                                            LifecycleNotifier{
+                                                .quiesced =
+                                                    [this](QuiesceReason reason) {
+                                                        if (m_frontend) {
+                                                            m_frontend->emitQuiesced(reason);
+                                                        }
+                                                    },
+                                                .resumed =
+                                                    [this](QuiesceReason reason) {
+                                                        if (m_frontend) {
+                                                            m_frontend->emitResumed(reason);
+                                                        }
+                                                    },
+                                            });
         m_systemBus->attachSdEventLoop(m_event);
     } catch (const std::exception& e) {
         log::warnf("no system bus for session lifecycle events ({}); sleep, screen lock and session switch "
