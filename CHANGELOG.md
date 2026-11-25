@@ -214,6 +214,11 @@ and its secure PIN/CAN entry prompter, plus a client PKCS#11 module.
 
 ### Fixed
 
+- **Card access recovers after the system wakes.** The agent now hears that the
+  system woke up and tells the core, which takes its card holds back on fresh
+  connections; before, a reader's hold opened before sleep stayed dead after
+  wake.
+
 - **Prompts keep working after the agent package is upgraded.** A running
   agent whose binary a package upgrade replaced was refused by the prompter,
   so every PIN, CAN and MRZ prompt failed until the next login. The prompter

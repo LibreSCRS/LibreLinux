@@ -182,13 +182,27 @@ struct Event
     std::optional<QuiesceReason> expected;
 };
 
+// The watch answers on the bus thread, so a test waits for what it
+// changed: true once @p done holds, false if it never does.
+bool waitUntil(const std::function<bool()>& done)
+{
+    const auto deadline = std::chrono::steady_clock::now() + 5s;
+    while (!done()) {
+        if (std::chrono::steady_clock::now() >= deadline) {
+            return false;
+        }
+        std::this_thread::sleep_for(10ms);
+    }
+    return true;
+}
+
 } // namespace
 
 TEST(SessionLifecycleWatch, EachLogindEventQuiescesForItsOwnReason)
 {
     LogindBus bus;
     Reasons reasons;
-    SessionLifecycleWatch watch(*bus.systemBus, [&reasons](QuiesceReason r) { reasons.add(r); });
+    SessionLifecycleWatch watch(*bus.systemBus, [&reasons](QuiesceReason r) { reasons.add(r); }, [] {});
     bus.systemBus->enterEventLoopAsync();
 
     ASSERT_EQ(bus.logind->asked(), "auto") << "the holder's session is the one logind resolves \"auto\" to";
@@ -254,13 +268,44 @@ TEST(SessionLifecycleWatch, WithoutASessionOnlySleepIsWatched)
     LogindBus bus;
     bus.logind->noSession = true;
     Reasons reasons;
-    SessionLifecycleWatch watch(*bus.systemBus, [&reasons](QuiesceReason r) { reasons.add(r); });
+    SessionLifecycleWatch watch(*bus.systemBus, [&reasons](QuiesceReason r) { reasons.add(r); }, [] {});
     bus.systemBus->enterEventLoopAsync();
 
     EXPECT_TRUE(watch.sessionPath().empty());
     FakeLogind::signal(*bus.logind->holder, "Lock");
     bus.logind->prepareForSleep(true);
     EXPECT_EQ(reasons.waitFor(1), std::vector<QuiesceReason>{QuiesceReason::SystemSleep});
+}
+
+TEST(SessionLifecycleWatch, WakeDeliversResume)
+{
+    LogindBus bus;
+    Reasons reasons;
+    std::atomic<int> resumes{0};
+    SessionLifecycleWatch watch(
+        *bus.systemBus, [&reasons](QuiesceReason r) { reasons.add(r); }, [&resumes] { ++resumes; });
+    bus.systemBus->enterEventLoopAsync();
+
+    bus.logind->prepareForSleep(false);
+    ASSERT_TRUE(waitUntil([&resumes] { return resumes.load() >= 1; }));
+    std::this_thread::sleep_for(100ms); // a second delivery would show up here
+    EXPECT_EQ(resumes.load(), 1);
+    EXPECT_TRUE(reasons.waitFor(1, 100ms).empty()) << "waking must not quiesce";
+}
+
+TEST(SessionLifecycleWatch, SleepDoesNotDeliverResume)
+{
+    LogindBus bus;
+    Reasons reasons;
+    std::atomic<int> resumes{0};
+    SessionLifecycleWatch watch(
+        *bus.systemBus, [&reasons](QuiesceReason r) { reasons.add(r); }, [&resumes] { ++resumes; });
+    bus.systemBus->enterEventLoopAsync();
+
+    bus.logind->prepareForSleep(true);
+    EXPECT_EQ(reasons.waitFor(1), std::vector<QuiesceReason>{QuiesceReason::SystemSleep});
+    std::this_thread::sleep_for(100ms);
+    EXPECT_EQ(resumes.load(), 0) << "going to sleep must not resume";
 }
 
 namespace {
@@ -329,22 +374,13 @@ struct Agent
         return core->leaseManager().isActive(Pkcs11::LeaseKey{.caller = kCaller, .card = card},
                                              std::chrono::steady_clock::now());
     }
+    bool holdsSuspended()
+    {
+        return core->operationManager().holdsSuspended();
+    }
     bool canCached()
     {
         return core->credentialCache().getCan(cardKey).has_value();
-    }
-    // The watch answers on the bus thread, so a test waits for what it
-    // changed: true once @p done holds, false if it never does.
-    static bool waitUntil(const std::function<bool()>& done)
-    {
-        const auto deadline = std::chrono::steady_clock::now() + 5s;
-        while (!done()) {
-            if (std::chrono::steady_clock::now() >= deadline) {
-                return false;
-            }
-            std::this_thread::sleep_for(10ms);
-        }
-        return true;
     }
 
     const fs::path dir = fs::temp_directory_path() / ("ll-lifecycle-" + std::to_string(::getpid()));
@@ -372,14 +408,14 @@ TEST(SessionLifecycleWatch, TheAgentForgetsWhatTheReasonCallsFor)
 
     // A screen lock: the PKCS#11 login goes, the card's secrets stay.
     FakeLogind::signal(*agent.bus.logind->holder, "Lock");
-    ASSERT_TRUE(Agent::waitUntil([&agent] { return !agent.leaseActive(); }));
+    ASSERT_TRUE(waitUntil([&agent] { return !agent.leaseActive(); }));
     EXPECT_FALSE(agent.leaseActive()) << "a screen lock revokes the PKCS#11 login";
     EXPECT_TRUE(agent.canCached()) << "a screen lock keeps the session and its secrets";
 
     // Sleep: everything goes.
     agent.grantLease();
     agent.bus.logind->prepareForSleep(true);
-    ASSERT_TRUE(Agent::waitUntil([&agent] { return !agent.canCached() && !agent.leaseActive(); }));
+    ASSERT_TRUE(waitUntil([&agent] { return !agent.canCached() && !agent.leaseActive(); }));
     EXPECT_FALSE(agent.leaseActive()) << "sleep revokes the PKCS#11 login";
     EXPECT_FALSE(agent.canCached()) << "sleep forgets the card's CAN";
 }
@@ -395,7 +431,33 @@ TEST(SessionLifecycleWatch, TheCoreForgetsOnlyUnderTheRegistryLock)
         EXPECT_TRUE(agent.canCached()) << "the core forgot while the registry lock was held elsewhere";
         EXPECT_TRUE(agent.leaseActive()) << "the core revoked while the registry lock was held elsewhere";
     }
-    ASSERT_TRUE(Agent::waitUntil([&agent] { return !agent.canCached() && !agent.leaseActive(); }));
+    ASSERT_TRUE(waitUntil([&agent] { return !agent.canCached() && !agent.leaseActive(); }));
     EXPECT_FALSE(agent.canCached());
     EXPECT_FALSE(agent.leaseActive());
+}
+
+// The production binding, not a stand-in lambda: logind's wake reaches the
+// core, so the hold suspension a sleep left is lifted again.
+TEST(SessionLifecycleWatch, WakeLiftsTheHoldSuspension)
+{
+    Agent agent;
+    agent.bus.logind->prepareForSleep(true);
+    ASSERT_TRUE(waitUntil([&agent] { return agent.holdsSuspended(); })) << "sleep suspends the card holds";
+    agent.bus.logind->prepareForSleep(false);
+    ASSERT_TRUE(waitUntil([&agent] { return !agent.holdsSuspended(); })) << "wake lifts the suspension";
+}
+
+TEST(SessionLifecycleWatch, TheCoreResumesOnlyUnderTheRegistryLock)
+{
+    Agent agent;
+    agent.bus.logind->prepareForSleep(true);
+    ASSERT_TRUE(waitUntil([&agent] { return agent.holdsSuspended(); }));
+    {
+        // resume() walks the registry too, so it waits for the monitor's lock.
+        const std::lock_guard held{agent.stateMutex};
+        agent.bus.logind->prepareForSleep(false);
+        std::this_thread::sleep_for(300ms);
+        EXPECT_TRUE(agent.holdsSuspended()) << "the core resumed while the registry lock was held elsewhere";
+    }
+    ASSERT_TRUE(waitUntil([&agent] { return !agent.holdsSuspended(); }));
 }

@@ -62,7 +62,7 @@ RequestSecretsXmlCodegenTest 2
 SandboxWritableDirsGuardTest 1
 SealedMemfdTest 1
 SecretMemfdReaderTest 5
-SessionLifecycleWatchTest 5
+SessionLifecycleWatchTest 9
 Sign1XmlCodegenTest 1
 SignBatch1XmlCodegenTest 1
 SignHwSmokeTest 7

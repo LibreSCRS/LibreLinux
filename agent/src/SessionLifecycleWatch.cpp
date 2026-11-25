@@ -40,10 +40,22 @@ void deliver(const SessionLifecycleWatch::OnQuiesce& onQuiesce, QuiesceReason re
         log::warnf("session lifecycle: quiesce for reason {} failed", static_cast<unsigned>(reason));
     }
 }
+
+// The same guard for the wake report.
+void deliver(const SessionLifecycleWatch::OnResume& onResume) noexcept
+{
+    try {
+        onResume();
+    } catch (const std::exception& e) {
+        log::warnf("session lifecycle: resume failed: {}", e.what());
+    } catch (...) {
+        log::warnf("session lifecycle: resume failed");
+    }
+}
 } // namespace
 
-SessionLifecycleWatch::SessionLifecycleWatch(sdbus::IConnection& systemBus, OnQuiesce onQuiesce)
-    : m_onQuiesce(std::move(onQuiesce))
+SessionLifecycleWatch::SessionLifecycleWatch(sdbus::IConnection& systemBus, OnQuiesce onQuiesce, OnResume onResume)
+    : m_onQuiesce(std::move(onQuiesce)), m_onResume(std::move(onResume))
 {
     m_manager = sdbus::createProxy(systemBus, sdbus::ServiceName{kLogindService}, sdbus::ObjectPath{kLogindPath});
     m_manager->uponSignal(sdbus::SignalName{"PrepareForSleep"})
@@ -51,6 +63,8 @@ SessionLifecycleWatch::SessionLifecycleWatch(sdbus::IConnection& systemBus, OnQu
         .call([this](bool start) {
             if (start) {
                 deliver(m_onQuiesce, QuiesceReason::SystemSleep);
+            } else {
+                deliver(m_onResume);
             }
         });
     watchSession(systemBus);
@@ -115,11 +129,21 @@ void quiesceUnderLock(AgentCore& core, std::mutex& stateMutex, QuiesceReason rea
     log::infof("session lifecycle: card access quiesced (reason {})", static_cast<unsigned>(reason));
 }
 
+void resumeUnderLock(AgentCore& core, std::mutex& stateMutex)
+{
+    {
+        const std::lock_guard lock(stateMutex);
+        core.resume();
+    }
+    log::infof("session lifecycle: card holds resumed after wake");
+}
+
 std::unique_ptr<SessionLifecycleWatch> watchSessionLifecycle(sdbus::IConnection& systemBus, AgentCore& core,
                                                              std::mutex& stateMutex)
 {
     return std::make_unique<SessionLifecycleWatch>(
-        systemBus, [&core, &stateMutex](QuiesceReason reason) { quiesceUnderLock(core, stateMutex, reason); });
+        systemBus, [&core, &stateMutex](QuiesceReason reason) { quiesceUnderLock(core, stateMutex, reason); },
+        [&core, &stateMutex] { resumeUnderLock(core, stateMutex); });
 }
 
 } // namespace LibreSCRS::Agent
