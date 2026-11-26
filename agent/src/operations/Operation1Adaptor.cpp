@@ -30,6 +30,50 @@ namespace LibreSCRS::Agent::Operations {
 // in the LibreSCRS::Agent namespace).
 using LibreLinux::AgentWire::kOperation1Iface;
 
+namespace {
+
+// Set on a thread while the agent emits PropertiesChanged: sd-bus then calls the
+// getters on that thread (a worker or the bus thread) with no client call behind
+// them, and the current message must not be read from there.
+thread_local bool tlAgentEmitting = false;
+
+struct AgentEmitScope
+{
+    AgentEmitScope() noexcept
+    {
+        tlAgentEmitting = true;
+    }
+    ~AgentEmitScope()
+    {
+        tlAgentEmitting = false;
+    }
+    AgentEmitScope(const AgentEmitScope&) = delete;
+    AgentEmitScope& operator=(const AgentEmitScope&) = delete;
+};
+
+constexpr const char* kPropertiesIface = "org.freedesktop.DBus.Properties";
+
+} // namespace
+
+template <typename ResultSubAdaptor>
+void Operation1Adaptor<ResultSubAdaptor>::noteObservedIfClientRead()
+{
+    if (tlAgentEmitting || !m_state || m_cancel.owner.empty()) {
+        return;
+    }
+    const auto msg = Base::getObject().getCurrentlyProcessedMessage();
+    const char* sender = msg.getSender();
+    const char* iface = msg.getInterfaceName();
+    const char* member = msg.getMemberName();
+    if (sender == nullptr || iface == nullptr || member == nullptr) {
+        return;
+    }
+    if (std::string_view{iface} == kPropertiesIface &&
+        (std::string_view{member} == "Get" || std::string_view{member} == "GetAll") && m_cancel.owner == sender) {
+        m_state->noteObserved();
+    }
+}
+
 template <typename ResultSubAdaptor>
 void Operation1Adaptor<ResultSubAdaptor>::emitFinishedNx(std::uint32_t status, std::uint32_t errorCode,
                                                          std::string_view msgKey, std::string_view msgFallback) noexcept
@@ -57,6 +101,7 @@ void Operation1Adaptor<ResultSubAdaptor>::emitPropertiesChangedForOperation1() n
                                                      sdbus::PropertyName{"Status"}, sdbus::PropertyName{"ErrorCode"}};
         // emitPropertiesChangedSignal is inherited from IObject (re-exposed
         // via the AdaptorInterfaces base).
+        const AgentEmitScope emitting;
         this->getObject().emitPropertiesChangedSignal(iface, props);
     } catch (const std::exception& e) {
         log::warnf("Operation1Adaptor: emitPropertiesChanged failed: {}", e.what());

@@ -4,9 +4,11 @@
 // Lifecycle + cancel-seam tests for Operation1Adaptor. Uses a private
 // session bus (dbus-run-session) so registerAdaptor / unregisterAdaptor
 // exercise the real codepath but no agent infrastructure is needed.
+#include "dbus/OperationAdaptorFactory.h"
 #include "operations/Operation1Adaptor.h"
 #include <LibreSCRS/Agent/KeyType.h>
 #include <LibreSCRS/Agent/OperationState.h> // relocated struct
+#include <LibreSCRS/Agent/value/CardReadSnapshot.h>
 #include <LibreSCRS/Agent/value/CertSnapshot.h>
 #include "org.librescrs.Agent.Operation.Identity1_adaptor.h"
 
@@ -16,10 +18,15 @@
 
 #include <gtest/gtest.h>
 #include <atomic>
+#include <chrono>
 #include <cstdint>
+#include <future>
+#include <map>
 #include <memory>
+#include <thread>
 #include <vector>
 
+using LibreSCRS::Agent::Operations::CancelRoute;
 using LibreSCRS::Agent::Operations::Operation1Adaptor;
 using LibreSCRS::Agent::Operations::OperationState;
 using IdentityAdaptor = org::librescrs::Agent::Operation::Identity1_adaptor;
@@ -33,9 +40,28 @@ class IdentityProbeAdaptor final : public Operation1Adaptor<IdentityAdaptor>
 public:
     using Operation1Adaptor<IdentityAdaptor>::Operation1Adaptor;
 
+    // When set, GetResult emits PropertiesChanged from inside its dispatch, i.e.
+    // from the bus thread, the way the agent does from enqueue.
+    std::atomic<bool> emitFromGetResult{false};
+    // When set, Status() (served for Properties.Get("Status")) emits
+    // PropertiesChanged from inside that dispatch. sd-bus then calls Phase() and
+    // Completed() on the bus thread while the current message is the owner's own
+    // Properties.Get: only the agent-emitting flag tells that from a client read.
+    std::atomic<bool> emitFromStatus{false};
+
 private:
+    std::uint32_t Status() override
+    {
+        if (emitFromStatus.exchange(false)) { // the emit itself reads Status again
+            emitPropertiesChangedForOperation1();
+        }
+        return terminalStatus();
+    }
     LibreSCRS::Agent::Operations::Identity1Wire GetResult() override
     {
+        if (emitFromGetResult.load()) {
+            emitPropertiesChangedForOperation1();
+        }
         throw sdbus::Error{sdbus::Error::Name{"org.librescrs.Agent.Error.NoResult"}, "probe has no store"};
     }
 };
@@ -163,4 +189,169 @@ TEST(Operation1Adaptor, CertificatesWireCarriesTheKeyFactsLast)
     EXPECT_EQ(wire[0].get<9>(), "EC");
     EXPECT_EQ(wire[0].get<10>(), 384u);
     EXPECT_TRUE(wire[0].get<11>());
+}
+
+namespace {
+constexpr const char* kObserveSvc = "org.librescrs.Agent.Test.OpObserve";
+constexpr const char* kPropsIface = "org.freedesktop.DBus.Properties";
+
+struct ObserveRig
+{
+    std::unique_ptr<sdbus::IConnection> conn = sdbus::createSessionBusConnection();
+    std::unique_ptr<sdbus::IConnection> owner = sdbus::createSessionBusConnection();
+    std::unique_ptr<sdbus::IConnection> other = sdbus::createSessionBusConnection();
+    std::shared_ptr<OperationState> state = std::make_shared<OperationState>();
+    std::atomic<int> observed{0};
+    sdbus::ObjectPath path;
+    std::unique_ptr<IdentityProbeAdaptor> adaptor;
+
+    explicit ObserveRig(const char* objectPath) : path(objectPath) {}
+    // False without a private session bus; the tests ASSERT on it, as the
+    // neighbouring ones do for createSessionBusConnection().
+    [[nodiscard]] bool start()
+    {
+        if (!conn || !owner || !other) {
+            return false;
+        }
+        conn->requestName(sdbus::ServiceName{kObserveSvc});
+        conn->enterEventLoopAsync();
+        state->onObserved([this] { ++observed; });
+        adaptor =
+            std::make_unique<IdentityProbeAdaptor>(*conn, path, state, CancelRoute{.owner = owner->getUniqueName()});
+        return true;
+    }
+    ~ObserveRig()
+    {
+        adaptor.reset();
+        if (conn) {
+            conn->leaveEventLoop();
+        }
+    }
+    void getAllFrom(sdbus::IConnection& bus) const
+    {
+        auto proxy = sdbus::createProxy(bus, sdbus::ServiceName{kObserveSvc}, path);
+        std::map<sdbus::PropertyName, sdbus::Variant> props;
+        proxy->callMethod("GetAll")
+            .onInterface(sdbus::InterfaceName{kPropsIface})
+            .withArguments(sdbus::InterfaceName{"org.librescrs.Agent.Operation1"})
+            .storeResultsTo(props);
+        EXPECT_FALSE(props.empty());
+    }
+};
+} // namespace
+
+TEST(Operation1Adaptor, AgentsOwnPropertiesChangedNeverCountsAsTheClientReading)
+{
+    ObserveRig rig{"/org/librescrs/Agent/op/3"};
+    ASSERT_TRUE(rig.start()) << "private session bus (run under dbus-run-session)";
+
+    // Both emits happen with no client Properties call behind them. This catches a
+    // trigger that fires on any getter call; the flag itself is proved by the
+    // test below, where the message check alone would pass.
+
+    // From another thread (a worker, e.g. enqueue).
+    std::thread worker([&rig] { rig.adaptor->emitPropertiesChangedForOperation1(); });
+    worker.join();
+    EXPECT_EQ(rig.observed.load(), 0) << "an emit from a worker thread was taken for a client read";
+
+    // From the bus thread, inside a method dispatch.
+    rig.adaptor->emitFromGetResult = true;
+    auto proxy = sdbus::createProxy(*rig.owner, sdbus::ServiceName{kObserveSvc}, rig.path);
+    try {
+        proxy->callMethod("GetResult").onInterface(sdbus::InterfaceName{"org.librescrs.Agent.Operation.Identity1"});
+    } catch (const sdbus::Error&) {
+        // NoResult is the probe's expected answer; the emit happened before it.
+    }
+    EXPECT_EQ(rig.observed.load(), 0) << "an emit from the bus thread was taken for a client read";
+}
+
+// The emit runs inside the owner's Properties.Get of Status, so the current
+// message is a Get from the owner: without the agent-emitting flag the nested
+// Phase()/Completed() calls would count it as the client reading them.
+TEST(Operation1Adaptor, EmitInsideTheOwnersPropertiesGetIsNotTheClientReadingPhase)
+{
+    ObserveRig rig{"/org/librescrs/Agent/op/6"};
+    ASSERT_TRUE(rig.start()) << "private session bus (run under dbus-run-session)";
+    rig.adaptor->emitFromStatus = true;
+    auto proxy = sdbus::createProxy(*rig.owner, sdbus::ServiceName{kObserveSvc}, rig.path);
+    sdbus::Variant status;
+    proxy->callMethod("Get")
+        .onInterface(sdbus::InterfaceName{kPropsIface})
+        .withArguments(sdbus::InterfaceName{"org.librescrs.Agent.Operation1"}, sdbus::PropertyName{"Status"})
+        .storeResultsTo(status);
+    EXPECT_EQ(rig.observed.load(), 0) << "the agent's own PropertiesChanged was taken for a client read";
+}
+
+TEST(Operation1Adaptor, OwnersGetAllCountsAsTheClientReadingExactlyOnce)
+{
+    ObserveRig rig{"/org/librescrs/Agent/op/4"};
+    ASSERT_TRUE(rig.start()) << "private session bus (run under dbus-run-session)";
+    rig.getAllFrom(*rig.owner);
+    EXPECT_EQ(rig.observed.load(), 1);
+    rig.getAllFrom(*rig.owner);
+    EXPECT_EQ(rig.observed.load(), 1) << "the observation must be one-shot";
+}
+
+TEST(Operation1Adaptor, AnotherCallersGetAllDoesNotCount)
+{
+    ObserveRig rig{"/org/librescrs/Agent/op/5"};
+    ASSERT_TRUE(rig.start()) << "private session bus (run under dbus-run-session)";
+    rig.getAllFrom(*rig.other);
+    EXPECT_EQ(rig.observed.load(), 0) << "a client that did not launch the operation observed it";
+    rig.getAllFrom(*rig.owner);
+    EXPECT_EQ(rig.observed.load(), 1);
+}
+
+// Production path: the Identity channel's own adaptor, a real OperationState
+// whose onObserved action emits a Group through the same channel (what the
+// core's relay release does). The owner's Properties.GetAll runs the getter on
+// the bus thread, which fires the action, so sdbus-c++ must emit a signal from
+// inside a getter of a method dispatch without deadlocking or losing it.
+TEST(Operation1Adaptor, GroupEmittedFromTheOwnersGetAllReachesTheSubscriber)
+{
+    auto conn = sdbus::createSessionBusConnection();
+    auto owner = sdbus::createSessionBusConnection();
+    ASSERT_NE(conn, nullptr) << "private session bus (run under dbus-run-session)";
+    ASSERT_NE(owner, nullptr);
+    conn->requestName(sdbus::ServiceName{kObserveSvc});
+    conn->enterEventLoopAsync();
+    owner->enterEventLoopAsync();
+
+    const sdbus::ObjectPath path{"/org/librescrs/Agent/op/7"};
+    auto state = std::make_shared<OperationState>();
+    auto channel =
+        LibreSCRS::Agent::makeIdentityChannel(*conn, path, state, CancelRoute{.owner = owner->getUniqueName()});
+    ASSERT_NE(channel, nullptr);
+
+    LibreSCRS::Agent::GroupSnapshot group;
+    group.groupKey = "document";
+    group.fields.push_back({.fieldKey = "docRegNo", .labelKey = "k", .labelFallback = "Doc", .textValue = "123"});
+    state->onObserved([&] { channel->emitGroup(group); });
+
+    std::promise<std::string> got;
+    auto proxy = sdbus::createProxy(*owner, sdbus::ServiceName{kObserveSvc}, path);
+    proxy->uponSignal("Group")
+        .onInterface(sdbus::InterfaceName{"org.librescrs.Agent.Operation.Identity1"})
+        .call([&got](const std::string& key, const LibreSCRS::Agent::Operations::Identity1GroupFieldsWire& fields) {
+            got.set_value(key + ":" + std::to_string(fields.size()));
+        });
+
+    std::map<sdbus::PropertyName, sdbus::Variant> props;
+    proxy->callMethod("GetAll")
+        .onInterface(sdbus::InterfaceName{kPropsIface})
+        .withArguments(sdbus::InterfaceName{"org.librescrs.Agent.Operation1"})
+        .withTimeout(std::chrono::seconds(5))
+        .storeResultsTo(props);
+    EXPECT_TRUE(props.contains(sdbus::PropertyName{"Phase"}));
+    EXPECT_TRUE(props.contains(sdbus::PropertyName{"Completed"}));
+
+    auto fut = got.get_future();
+    ASSERT_EQ(fut.wait_for(std::chrono::seconds(5)), std::future_status::ready)
+        << "the Group emitted from the getter never arrived";
+    EXPECT_EQ(fut.get(), "document:1");
+
+    proxy.reset();
+    channel.reset();
+    owner->leaveEventLoop();
+    conn->leaveEventLoop();
 }

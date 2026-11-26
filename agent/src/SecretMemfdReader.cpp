@@ -8,19 +8,12 @@
 #include <cerrno>
 #include <cstdint>
 #include <cstring>
-#include <span>
 #include <string>
 #include <utility>
 
 namespace LibreSCRS::Agent {
 
 namespace {
-
-// Zero a std::string's bytes in place with the agent's one zeroization routine.
-void scrubString(std::string& s) noexcept
-{
-    secureZero(std::span<std::uint8_t>{reinterpret_cast<std::uint8_t*>(s.data()), s.size()});
-}
 
 void setError(std::string* out, const char* message)
 {
@@ -104,14 +97,14 @@ std::optional<LibreSCRS::Secure::String> SecretMemfdReader::read(sdbus::UnixFd f
         }
         if (n == 0) {
             // Premature EOF — payload shorter than fstat said. Treat as error.
-            scrubString(buffer);
+            secureZero(buffer);
             setError(errorMessage, "short read from secret memfd");
             return std::nullopt;
         }
         if (errno == EINTR) {
             continue;
         }
-        scrubString(buffer);
+        secureZero(buffer);
         setError(errorMessage, std::strerror(errno));
         return std::nullopt;
     }
@@ -127,7 +120,7 @@ std::optional<LibreSCRS::Secure::String> SecretMemfdReader::read(sdbus::UnixFd f
         // the source, so no further action is needed here.
         return secret;
     } catch (...) {
-        scrubString(buffer);
+        secureZero(buffer);
         setError(errorMessage, "Secure::String construction failed");
         return std::nullopt;
     }

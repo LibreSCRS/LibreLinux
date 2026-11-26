@@ -32,7 +32,7 @@ Identity1XmlCodegenTest 1
 InputWidgetValidationTest 24
 Manager1XmlCodegenTest 1
 ModuleConfigTest 5
-Operation1AdaptorTest 7
+Operation1AdaptorTest 12
 Operation1ErrorCodeXmlGuardTest 1
 Operation1XmlCodegenTest 1
 OperationManagerNameOwnerChangedTest 2

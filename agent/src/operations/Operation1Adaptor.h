@@ -79,10 +79,12 @@ private:
     // Generated private-virtual surface — sdbus-c++ convention.
     std::uint32_t Phase() override
     {
+        noteObservedIfClientRead();
         return phase();
     }
     bool Completed() override
     {
+        noteObservedIfClientRead();
         return completed();
     }
     std::uint32_t Status() override
@@ -105,6 +107,12 @@ private:
             m_cancel.run();
         }
     }
+
+    // sd-bus also calls the getters while the agent itself emits PropertiesChanged,
+    // so a getter call alone proves nothing: only a Properties.Get/GetAll from the
+    // launching client means it has read the state (and so has its match rule in
+    // place). Defined in the .cpp, next to the emit flag it consults first.
+    void noteObservedIfClientRead();
 
     std::shared_ptr<OperationState> m_state;
     CancelRoute m_cancel;

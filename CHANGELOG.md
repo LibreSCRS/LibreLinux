@@ -223,6 +223,11 @@ and its secure PIN/CAN entry prompter, plus a client PKCS#11 module.
 
 ### Fixed
 
+- **A client that opens a card's identity while the agent is still reading it
+  in the background now sees the data as it arrives.** It receives the groups
+  read so far at once and the rest as they are read, instead of an empty screen
+  until the whole read has finished.
+
 - **Card access recovers after the system wakes.** The agent now hears that the
   system woke up and tells the core, which takes its card holds back on fresh
   connections; before, a reader's hold opened before sleep stayed dead after

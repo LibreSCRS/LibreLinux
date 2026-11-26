@@ -116,16 +116,19 @@ public:
         }
         return true;
     }
-    // Progressive delivery: called from the SAME worker thread, inside the
-    // SAME doWork() call, that will go on to call emitResult above once
-    // IdentityReadFlow::run() returns -- no new cross-thread hop, no new
-    // lifetime hazard versus the already-established emitResult contract.
-    // Never fails closed (a dropped Group signal is not fatal to the op: the
-    // eventual Result stays authoritative regardless), so this stays void
-    // rather than bool like emitResult.
+    // Progressive delivery. Called from this op's own worker, from another op's
+    // worker or from the bus thread (a background read attached to this op); the
+    // core's GroupRelay keeps the op alive and the calls serial. Never fails
+    // closed: a dropped Group signal is not fatal, the Result stays authoritative.
     void emitGroup(const GroupSnapshot& group) noexcept override
     {
         emitIdentity1Group(m_inner, group);
+    }
+    // A Group signal sent before the client's match rule is installed is lost;
+    // the op waits for the client's first Properties read of its state.
+    [[nodiscard]] bool groupsAwaitObserver() const noexcept override
+    {
+        return true;
     }
 
 private:
