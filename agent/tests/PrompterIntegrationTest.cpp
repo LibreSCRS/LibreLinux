@@ -772,6 +772,8 @@ TEST_F(PrompterIntegrationTest, ProductionReadOnEmrtdCandidateOffersMrzAlternati
         .artifact = "identity",
         .token = cancelSource.token(),
         .depositor = depositor,
+        .refusalGenerationAtPublish =
+            PublishedRefusalGeneration{credentials.refusalGenerationFor("/org/librescrs/Agent/card/1")},
     });
     reader.onRead = [&flow] {
         static_cast<void>(flow.credentialProvider()(LibreSCRS::Auth::AuthRequirement::forPaceSecret(

@@ -69,7 +69,7 @@ InputWidgetBase* widgetFor(PromptDialog::Kind kind, const PromptDialog::Options&
 // cross-binary vocabulary convention the option keys in PrompterWire.h
 // already use -- this file has no LM dependency to share the
 // constant with). The only source of a `last_error` today is the eMRTD read
-// flows' AuthFailed path (CredentialCache::markCredentialWrong).
+// flows' AuthFailed path (noteRejectedSecret on the agent core).
 constexpr const char* kErrorPreReadAuthFailed = "librescrs.error.preRead.authFailed";
 
 // The remaining entry time as M:SS. Language-neutral BY DESIGN and not an
